@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="0"
+                android:centerColor="#13305A"
+                android:endColor="#060C17"
+                android:startColor="#091525" />
+            <corners android:radius="18dp" />
+        </shape>
+    </item>
+    <item
+        android:bottom="20dp"
+        android:left="32dp"
+        android:right="32dp"
+        android:top="20dp"
+        android:drawable="@drawable/ic_crown_logo" />
+</layer-list>

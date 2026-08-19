@@ -1,0 +1,8 @@
+<resources>
+    <color name="crown_background">#08111F</color>
+    <color name="crown_navy">#0F213A</color>
+    <color name="crown_charcoal">#121822</color>
+    <color name="crown_cyan">#53E0FF</color>
+    <color name="crown_blue">#2F64FF</color>
+    <color name="crown_border">#28405E</color>
+</resources>
