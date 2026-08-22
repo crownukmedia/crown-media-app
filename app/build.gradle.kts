@@ -80,6 +80,9 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
+    testImplementation(libs.media3.exoplayer)
+    testImplementation(libs.media3.datasource.okhttp)
+    testImplementation(libs.okhttp.core)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso)
 }

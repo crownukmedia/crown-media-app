@@ -261,6 +261,7 @@ class XtreamClient(
             .url(streamUrl(credentials, "live", id, extension))
             .header("User-Agent", "CrownMedia/1.0")
             .header("Range", "bytes=0-563")
+            .header("Connection", "close")
             .build()
         val call = http.newCall(request)
         call.timeout().timeout(8, TimeUnit.SECONDS)

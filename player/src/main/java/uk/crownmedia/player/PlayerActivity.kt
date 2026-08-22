@@ -14,6 +14,7 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
+import androidx.lifecycle.Lifecycle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -23,12 +24,15 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.ui.PlayerView
 import androidx.media3.common.util.UnstableApi
+import okhttp3.Dispatcher
+import okhttp3.OkHttpClient
 import uk.crownmedia.core.design.StreamAvailability
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 
 @UnstableApi
 class PlayerActivity : AppCompatActivity() {
@@ -47,10 +51,18 @@ class PlayerActivity : AppCompatActivity() {
     private var failureRecorded = false
     private var successRecorded = false
     private var failureStage = "created"
+    private var automaticRetries = 0
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val startupTimeout = Runnable {
         logFailure("startup_timeout", null)
-        showUnavailable(getString(R.string.playback_timeout_detail))
+        if (automaticRetries < MAX_AUTOMATIC_RETRIES) retryAfterTransientFailure()
+        else showUnavailable(getString(R.string.playback_timeout_detail))
+    }
+    private val automaticRetry = Runnable {
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            release()
+            initialize()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,11 +104,9 @@ class PlayerActivity : AppCompatActivity() {
             "resilient" -> DefaultLoadControl.Builder().setBufferDurationsMs(15_000, 90_000, 2_500, 5_000).build()
             else -> DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 45_000, 1_500, 3_000).build()
         }
-        val httpDataSource = DefaultHttpDataSource.Factory()
+        val httpDataSource = OkHttpDataSource.Factory(PLAYBACK_HTTP_CLIENT)
             .setUserAgent(PLAYBACK_USER_AGENT)
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(45_000)
+            .setDefaultRequestProperties(mapOf("Accept" to "*/*", "Accept-Encoding" to "identity"))
         val dataSource = DefaultDataSource.Factory(this, httpDataSource)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSource)
         val instance = ExoPlayer.Builder(this)
@@ -120,7 +130,11 @@ class PlayerActivity : AppCompatActivity() {
         instance.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 logFailure("player_error", error)
-                showUnavailable(getString(R.string.playback_error_detail))
+                if (error.errorCode in 2000..2999 && automaticRetries < MAX_AUTOMATIC_RETRIES) {
+                    retryAfterTransientFailure()
+                } else {
+                    showUnavailable(getString(R.string.playback_error_detail))
+                }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) playerTitle.animate().alpha(0f).setStartDelay(1800).setDuration(300).start()
@@ -134,6 +148,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 if (playbackState == Player.STATE_READY) {
                     timeoutHandler.removeCallbacks(startupTimeout)
+                    timeoutHandler.removeCallbacks(automaticRetry)
                     playbackLoading.isVisible = false
                     playbackError.isVisible = false
                     recordSuccess()
@@ -148,6 +163,7 @@ class PlayerActivity : AppCompatActivity() {
             release()
             failureRecorded = false
             successRecorded = false
+            automaticRetries = 0
             initialize()
         }
         playbackBack.setOnClickListener { finish() }
@@ -157,6 +173,16 @@ class PlayerActivity : AppCompatActivity() {
         instance.playWhenReady = true
         timeoutHandler.removeCallbacks(startupTimeout)
         timeoutHandler.postDelayed(startupTimeout, STARTUP_TIMEOUT_MS)
+    }
+
+    private fun retryAfterTransientFailure() {
+        automaticRetries++
+        failureStage = "retry_wait"
+        timeoutHandler.removeCallbacks(startupTimeout)
+        player?.stop()
+        playbackError.isVisible = false
+        playbackLoading.isVisible = true
+        timeoutHandler.postDelayed(automaticRetry, AUTOMATIC_RETRY_DELAY_MS)
     }
 
     private fun showUnavailable(detail: String) {
@@ -226,6 +252,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun release() {
         timeoutHandler.removeCallbacks(startupTimeout)
+        timeoutHandler.removeCallbacks(automaticRetry)
         player?.let { current ->
             if (resumeEnabled && current.duration > 0) {
                 if (current.currentPosition < current.duration * .93) {
@@ -268,6 +295,20 @@ class PlayerActivity : AppCompatActivity() {
         private const val PLAYBACK_USER_AGENT = "CrownMedia/1.0"
         private const val TAG = "CrownPlayer"
         private const val STARTUP_TIMEOUT_MS = 25_000L
+        private const val MAX_AUTOMATIC_RETRIES = 1
+        private const val AUTOMATIC_RETRY_DELAY_MS = 1_000L
+        private val PLAYBACK_HTTP_CLIENT = OkHttpClient.Builder()
+            .dispatcher(Dispatcher().apply {
+                maxRequests = 8
+                maxRequestsPerHost = 4
+            })
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .retryOnConnectionFailure(true)
+            .build()
 
         fun internalIntent(
             context: Context,

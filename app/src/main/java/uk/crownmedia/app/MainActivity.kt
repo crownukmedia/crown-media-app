@@ -1436,6 +1436,10 @@ class MainActivity : AppCompatActivity() {
         categoryPool: List<CatalogCard> = visibleCards,
     ) {
         if (section != Section.LIVE || visibleCards.isEmpty()) return
+        // Playback is the strongest health signal and always has priority. Accounts with a single
+        // connection cannot safely run a sampler beside playback, so learn from player outcomes.
+        val maximumConnections = playlist.maximumConnections ?: 1
+        if (maximumConnections <= 1) return
         if (categoryPool.size > visibleCards.size) {
             if (healthJob?.isActive == true) return
             val now = System.currentTimeMillis()
@@ -1444,7 +1448,7 @@ class MainActivity : AppCompatActivity() {
         }
         healthJob?.cancel()
         val ranked = sort(visibleCards).filter { streamAvailability.shouldProbe(playlist.id, it.id) }
-        val connectionLimit = (playlist.maximumConnections ?: 1).coerceIn(1, 3)
+        val connectionLimit = (maximumConnections - 1).coerceIn(1, 2)
         val maximumProbes = if (connectionLimit == 1) 8 else 18
         val leading = ranked.take(if (connectionLimit == 1) 6 else 12)
         val leadingIds = leading.mapTo(mutableSetOf()) { it.id }
