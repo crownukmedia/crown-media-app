@@ -1,0 +1,3 @@
+plugins { alias(libs.plugins.android.library); alias(libs.plugins.kotlin.android) }
+android { namespace = "uk.crownmedia.player"; compileSdk = 34; defaultConfig { minSdk = 21 }; compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }; kotlinOptions { jvmTarget = "17" } }
+dependencies { implementation(project(":core:model")); implementation(project(":domain")); implementation(project(":core:design")); implementation(libs.androidx.core.ktx); implementation(libs.androidx.appcompat); implementation(libs.androidx.lifecycle.runtime); implementation(libs.media3.common); implementation(libs.media3.exoplayer); implementation(libs.media3.exoplayer.hls); implementation(libs.media3.ui) }

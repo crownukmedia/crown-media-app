@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#05070B"
+    tools:viewBindingIgnore="true">
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:keepScreenOn="true"
+        app:show_buffering="when_playing"
+        app:show_subtitle_button="true"
+        app:use_controller="true" />
+
+    <TextView
+        android:id="@+id/player_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="24dp"
+        android:background="#99000000"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="8dp"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:id="@+id/playback_loading"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#6605070B"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:importantForAccessibility="yes"
+        android:accessibilityLiveRegion="polite">
+
+        <ProgressBar
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:indeterminate="true" />
+
+        <TextView
+            android:id="@+id/playback_loading_message"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/opening_channel"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/playback_error"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#DD05070B"
+        android:focusable="true"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="32dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/playback_unavailable"
+            android:textColor="#FFFFFF"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/playback_error_message"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:textColor="#C7CBD6"
+            android:textSize="15sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/playback_retry"
+                android:layout_width="wrap_content"
+                android:layout_height="52dp"
+                android:minWidth="120dp"
+                android:nextFocusRight="@id/playback_back"
+                android:text="@string/retry_playback" />
+
+            <Button
+                android:id="@+id/playback_back"
+                android:layout_width="wrap_content"
+                android:layout_height="52dp"
+                android:layout_marginStart="12dp"
+                android:minWidth="120dp"
+                android:nextFocusLeft="@id/playback_retry"
+                android:text="@string/back_to_channels" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

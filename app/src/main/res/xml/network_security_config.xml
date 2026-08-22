@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <!--
+      Crown Premium serves its API from novixa.uk, then redirects media GETs to its
+      clear-text streaming CDN. Both origins are required for playback; keep the
+      exception scoped to the provider rather than enabling HTTP globally.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">novixa.uk</domain>
+        <domain includeSubdomains="true">223andyfire.uk</domain>
+    </domain-config>
+</network-security-config>

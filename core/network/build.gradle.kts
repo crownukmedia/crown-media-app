@@ -1,0 +1,3 @@
+plugins { alias(libs.plugins.android.library); alias(libs.plugins.kotlin.android) }
+android { namespace = "uk.crownmedia.core.network"; compileSdk = 34; defaultConfig { minSdk = 21 }; compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }; kotlinOptions { jvmTarget = "17" } }
+dependencies { implementation(libs.okhttp.core); implementation(libs.okhttp.logging); implementation(libs.retrofit.core); implementation(libs.retrofit.moshi); implementation(libs.moshi.kotlin); implementation(libs.kotlinx.coroutines.android); testImplementation(libs.junit) }
