@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/white" />
+        </shape>
+    </item>
+    <item
+        android:bottom="24dp"
+        android:drawable="@drawable/crown_media_logo_header"
+        android:left="64dp"
+        android:right="64dp"
+        android:top="24dp" />
+</layer-list>

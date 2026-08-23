@@ -1,0 +1,15 @@
+<resources>
+    <color name="crown_background">#07090D</color>
+    <color name="crown_surface">#111722</color>
+    <color name="crown_surface_raised">#20294A</color>
+    <color name="crown_primary">#8B63E8</color>
+    <color name="crown_primary_tv">#6840C7</color>
+    <color name="crown_primary_bright">#D36AF1</color>
+    <color name="crown_text">#F7F8FA</color>
+    <color name="crown_text_secondary">#AAB3C2</color>
+    <color name="crown_error">#FF6B6B</color>
+    <color name="crown_success">#59D499</color>
+    <color name="crown_gold">#9A6FEB</color>
+    <color name="crown_border">#3A4268</color>
+    <color name="white">#FFFFFF</color>
+</resources>

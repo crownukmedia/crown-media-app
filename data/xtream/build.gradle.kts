@@ -1,0 +1,3 @@
+plugins { alias(libs.plugins.android.library); alias(libs.plugins.kotlin.android) }
+android { namespace = "uk.crownmedia.data.xtream"; compileSdk = 34; defaultConfig { minSdk = 21 }; compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }; kotlinOptions { jvmTarget = "17" } }
+dependencies { implementation(project(":core:model")); implementation(project(":core:network")); implementation(project(":core:database")); implementation(project(":domain")); implementation(libs.moshi.kotlin); implementation(libs.retrofit.core); implementation(libs.okhttp.core); implementation(libs.kotlinx.coroutines.android); testImplementation(libs.junit) }
