@@ -6,7 +6,7 @@
     <LinearLayout android:id="@+id/side_nav" android:layout_width="120dp" android:layout_height="0dp"
         android:background="#E60A0D14" android:gravity="center_horizontal" android:orientation="vertical" android:paddingHorizontal="16dp" android:paddingVertical="12dp"
         app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent">
-        <ImageView android:id="@+id/brand_logo" android:layout_width="72dp" android:layout_height="54dp" android:layout_marginBottom="10dp" android:background="@drawable/bg_logo_surface" android:contentDescription="@string/app_name" android:adjustViewBounds="true" android:padding="3dp" android:scaleType="fitCenter" android:src="@drawable/crown_media_logo_header" />
+        <ImageView android:id="@+id/brand_logo" android:layout_width="72dp" android:layout_height="54dp" android:layout_marginBottom="10dp" android:background="@drawable/bg_logo_surface" android:contentDescription="@string/app_name" android:adjustViewBounds="true" android:padding="5dp" android:scaleType="fitCenter" android:src="@drawable/crown_media_logo_header" />
         <Button android:id="@+id/nav_home" style="@style/Widget.Crown.NavButton" android:text="@string/nav_home" />
         <Button android:id="@+id/nav_live" style="@style/Widget.Crown.NavButton" android:text="@string/nav_live" />
         <Button android:id="@+id/nav_movies" style="@style/Widget.Crown.NavButton" android:text="@string/nav_movies" />

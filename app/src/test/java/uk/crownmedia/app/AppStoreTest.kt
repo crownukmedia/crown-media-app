@@ -57,6 +57,24 @@ class AppStoreTest {
         assertEquals(1234L, restored.catalogRefreshAt("p", "movie", null))
     }
 
+    @Test
+    fun savedCredentialsAreIsolatedByCrownService() {
+        val secureStore = FakeSecureStore()
+        val store = AppStore(secureStore)
+        store.saveLoginDetails(
+            CrownService.PREMIUM,
+            SavedLoginDetails("Premium", CrownService.PREMIUM, "premium-user", "premium-pass"),
+        )
+        store.saveLoginDetails(
+            CrownService.PRO,
+            SavedLoginDetails("Pro", CrownService.PRO, "pro-user", "pro-pass"),
+        )
+
+        assertEquals("premium-user", store.savedLoginDetails(CrownService.PREMIUM)?.username)
+        assertEquals("pro-user", store.savedLoginDetails(CrownService.PRO)?.username)
+        assertNull(store.savedLoginDetails(CrownService.EIGHT_K))
+    }
+
     private class FakeSecureStore : CrownSecureStore {
         private val strings = mutableMapOf<String, String?>()
         private val sets = mutableMapOf<String, Set<String>>()

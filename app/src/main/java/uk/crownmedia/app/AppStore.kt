@@ -56,8 +56,10 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
             prefs.putString("installation_id", it)
         }
 
-    fun savedLoginDetails(): SavedLoginDetails? {
-        val stored = prefs.getString("saved_login", null) ?: return null
+    fun savedLoginDetails(service: CrownService): SavedLoginDetails? {
+        val stored = prefs.getString(savedLoginKey(service), null)
+            ?: (if (service == CrownService.PREMIUM) prefs.getString(LEGACY_SAVED_LOGIN_KEY, null) else null)
+            ?: return null
         return try {
             val value = JSONObject(stored)
             SavedLoginDetails(
@@ -65,12 +67,13 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
                 service = CrownService.fromStoredValue(value.optString("service")),
                 username = value.getString("username"),
                 password = value.getString("password"),
-            )
+            ).takeIf { it.service == service }
         } catch (_: Exception) { null }
     }
 
-    fun saveLoginDetails(value: SavedLoginDetails?) {
-        prefs.putString("saved_login", value?.let {
+    fun saveLoginDetails(service: CrownService, value: SavedLoginDetails?) {
+        require(value == null || value.service == service)
+        prefs.putString(savedLoginKey(service), value?.let {
             JSONObject().apply {
                 put("playlistName", it.playlistName)
                 put("service", it.service.name)
@@ -78,7 +81,10 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
                 put("password", it.password)
             }.toString()
         })
+        if (service == CrownService.PREMIUM) prefs.putString(LEGACY_SAVED_LOGIN_KEY, null)
     }
+
+    private fun savedLoginKey(service: CrownService) = "saved_login_${service.name}"
 
     private fun persistedPlaylists(): List<SavedPlaylist> = try {
         val array = JSONArray(prefs.getString("playlists", "[]"))
@@ -171,4 +177,8 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
             }.orEmpty(),
         )
     } catch (_: Exception) { null }
+
+    private companion object {
+        const val LEGACY_SAVED_LOGIN_KEY = "saved_login"
+    }
 }

@@ -89,6 +89,8 @@ class TvUiRegressionTest {
 
         assertEquals(dp(72), logo.layoutParams.width)
         assertEquals(dp(54), logo.layoutParams.height)
+        assertEquals(dp(5), logo.paddingTop)
+        assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals(dp(46), category.layoutParams.height)
     }
 
@@ -112,6 +114,7 @@ class TvUiRegressionTest {
         assertEquals(R.id.connect_button, save.nextFocusDownId)
         assertEquals(R.id.save_login, connect.nextFocusUpId)
         assertFalse(qr.isEnabled)
+        assertEquals(View.GONE, qr.visibility)
         assertEquals(View.NO_ID, connect.nextFocusDownId)
     }
 

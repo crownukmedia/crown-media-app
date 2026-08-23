@@ -21,7 +21,7 @@
             android:layout_height="100dp"
             android:background="@drawable/bg_logo_surface"
             android:contentDescription="@string/app_name"
-            android:padding="4dp"
+            android:padding="8dp"
             android:scaleType="fitCenter"
             android:src="@drawable/crown_media_logo_header" />
 
@@ -195,7 +195,8 @@
             style="@style/Widget.Crown.SecondaryButton.FullWidth"
             android:layout_marginTop="6dp"
             android:nextFocusUp="@id/connect_button"
-            android:text="@string/connect_via_qr_code" />
+            android:text="@string/connect_via_qr_code"
+            android:visibility="gone" />
 
         <Button
             android:id="@+id/login_cancel"
