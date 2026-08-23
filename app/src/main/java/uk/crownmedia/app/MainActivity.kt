@@ -84,13 +84,16 @@ class MainActivity : AppCompatActivity() {
     private var loadJob: Job? = null
     private var loginJob: Job? = null
     private var searchJob: Job? = null
+    private var scopedSearchJob: Job? = null
+    private var countJob: Job? = null
     private var healthJob: Job? = null
     private var liveRankingJob: Job? = null
     private var playlistRefreshJob: Job? = null
     private var detailJob: Job? = null
     private var searchWarmJob: Deferred<Result<Unit>>? = null
     private var searchWarmCompletedFor: String? = null
-    private var lastCategories = emptyList<XtreamCategory>()
+    private val catalogWarmJobs = mutableMapOf<String, Deferred<Result<Int>>>()
+    private val contentCounts = EnumMap<Section, ContentCountState>(Section::class.java)
     private val sectionStates = EnumMap<Section, SectionState>(Section::class.java)
     private val refreshJobs = EnumMap<Section, Job>(Section::class.java)
     private val catalogRefreshPermit = Semaphore(1)
@@ -104,6 +107,9 @@ class MainActivity : AppCompatActivity() {
     private var lastBroadHealthSampleAt = 0L
     private var pendingContentFocusKey: String? = null
     private var searchShouldFocusResults = false
+    private var masterSearchQuery = ""
+    private var updatingSearchBox = false
+    private var contentRequestGeneration = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -125,6 +131,9 @@ class MainActivity : AppCompatActivity() {
                     open(Section.HOME)
                 } else if (nestedSeries != null) {
                     closeSeriesDetails()
+                } else if (section in PAGED_SECTIONS && sectionState(section).searchQuery.isNotEmpty()) {
+                    binding.searchBox.text.clear()
+                    binding.searchBox.requestFocus()
                 } else if (section == Section.SEARCH) {
                     hideKeyboard()
                     open(Section.HOME)
@@ -186,7 +195,9 @@ class MainActivity : AppCompatActivity() {
         binding.actionPlaylist.setOnClickListener { showPlaylists() }
         binding.actionMore.setOnClickListener(::showMobileMenu)
         binding.actionSearchClear.setOnClickListener {
-            if (binding.searchBox.text.isNotEmpty()) binding.searchBox.text.clear() else open(Section.HOME)
+            if (binding.searchBox.text.isNotEmpty()) binding.searchBox.text.clear()
+            else if (section == Section.SEARCH) open(Section.HOME)
+            else binding.categoryList.requestFocus()
         }
         binding.stateAction.setOnClickListener {
             val retry = stateRetry
@@ -233,7 +244,7 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
                 searchJob?.cancel()
                 searchShouldFocusResults = true
-                search(binding.searchBox.text.toString())
+                runActiveSearch(binding.searchBox.text.toString())
                 hideKeyboard(clearFocus = false)
                 true
             } else false
@@ -241,12 +252,33 @@ class MainActivity : AppCompatActivity() {
         binding.searchBox.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (section != Section.SEARCH) return
+                if (updatingSearchBox || (section != Section.SEARCH && section !in PAGED_SECTIONS)) return
+                val query = s?.toString().orEmpty()
+                if (section == Section.SEARCH) masterSearchQuery = query else sectionState(section).searchQuery = query
                 searchJob?.cancel()
-                searchJob = lifecycleScope.launch { delay(350); search(s?.toString().orEmpty()) }
+                searchJob = lifecycleScope.launch { delay(350); runActiveSearch(query) }
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+    }
+
+    private fun runActiveSearch(query: String) {
+        if (section == Section.SEARCH) search(query)
+        else if (section in PAGED_SECTIONS) searchCategory(section, query)
+    }
+
+    private fun bindSearchBox(target: Section) {
+        val query = if (target == Section.SEARCH) masterSearchQuery else sectionState(target).searchQuery
+        updatingSearchBox = true
+        binding.searchBox.setText(query)
+        binding.searchBox.setSelection(query.length)
+        binding.searchBox.hint = when (target) {
+            Section.LIVE -> getString(R.string.search_live)
+            Section.MOVIES -> getString(R.string.search_movies)
+            Section.SERIES -> getString(R.string.search_series)
+            else -> getString(R.string.search_everything)
+        }
+        updatingSearchBox = false
     }
 
     private fun hideKeyboard(clearFocus: Boolean = true) {
@@ -261,12 +293,25 @@ class MainActivity : AppCompatActivity() {
             return
         }
         ensurePlaylistState()
+        val changingTopLevelSection = section != value
         captureSectionState()
         detailJob?.cancel()
         detailJob = null
         nestedSeries = null
         stateRetry = null
         loadJob?.cancel()
+        scopedSearchJob?.cancel()
+        searchJob?.cancel()
+        if (changingTopLevelSection) {
+            contentRequestGeneration++
+            searchShouldFocusResults = false
+            masterSearchQuery = ""
+            if (section in PAGED_SECTIONS) sectionState(section).searchQuery = ""
+            if (value in PAGED_SECTIONS) {
+                refreshJobs.remove(value)?.cancel()
+                sectionState(value).resetForTopLevelEntry()
+            }
+        }
         if (value != Section.LIVE) {
             healthJob?.cancel()
             liveRankingJob?.cancel()
@@ -278,10 +323,12 @@ class MainActivity : AppCompatActivity() {
         binding.pageProgress.isVisible = false
         val state = sectionState(value)
         currentCategory = state.categoryId
-        val searchVisible = value == Section.SEARCH
+        val searchVisible = value == Section.SEARCH || value in PAGED_SECTIONS
         binding.searchRow.isVisible = searchVisible
+        binding.actionSearchClear.isVisible = searchVisible
+        if (searchVisible) bindSearchBox(value)
         val television = deviceClass() == DeviceClass.TELEVISION
-        binding.actionMore.isVisible = !television && !searchVisible
+        binding.actionMore.isVisible = !television && value != Section.SEARCH
         binding.actionReload.isVisible = !television
         binding.actionPlaylist.isVisible = !television
         binding.categoryList.isVisible = value != Section.HOME && value != Section.SEARCH
@@ -309,7 +356,8 @@ class MainActivity : AppCompatActivity() {
         } else if (value == Section.HOME) {
             showHome()
         } else if (state.cards.isNotEmpty()) {
-            renderSectionState(state, restoreScroll = true)
+            if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) searchCategory(value, state.searchQuery)
+            else renderSectionState(state, restoreScroll = true)
             startCatalogRefresh(store.selected() ?: return, value, force = false, hadContent = true)
         } else {
             load()
@@ -327,6 +375,7 @@ class MainActivity : AppCompatActivity() {
         binding.navSeries.isSelected = value == Section.SERIES
         binding.navSearch.isSelected = value == Section.SEARCH
         binding.sideNav.contentDescription = getString(R.string.selected_destination, value.displayName)
+        updateCountNavigation()
     }
 
     private fun configureTvPresentation(value: Section) {
@@ -336,18 +385,18 @@ class MainActivity : AppCompatActivity() {
         val activeNav = navigationView(value)
         val primaryTarget = when (value) {
             Section.HOME -> binding.contentGrid
-            Section.SEARCH -> binding.searchBox
-            else -> binding.categoryList
+            else -> binding.searchBox
         }
         listOf(binding.navHome, binding.navLive, binding.navMovies, binding.navSeries, binding.navSearch).forEach {
             it.nextFocusRightId = primaryTarget.id
         }
         binding.categoryList.nextFocusLeftId = activeNav.id
+        binding.categoryList.nextFocusUpId = binding.searchBox.id
         binding.categoryList.nextFocusDownId = binding.contentGrid.id
         binding.contentGrid.nextFocusLeftId = activeNav.id
         binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.topBar.id
-        binding.searchBox.nextFocusLeftId = binding.navSearch.id
-        binding.searchBox.nextFocusDownId = binding.contentGrid.id
+        binding.searchBox.nextFocusLeftId = activeNav.id
+        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.contentGrid.id
         binding.actionSearchClear.nextFocusLeftId = binding.searchBox.id
         binding.actionSearchClear.nextFocusDownId = binding.contentGrid.id
         binding.stateAction.nextFocusLeftId = activeNav.id
@@ -373,32 +422,40 @@ class MainActivity : AppCompatActivity() {
             return
         }
         loadJob?.cancel()
+        val requestGeneration = contentRequestGeneration
+        val requestedCategory = state.categoryId
         if (state.cards.isEmpty()) showState("Loading", "", true, false)
         loadJob = lifecycleScope.launch {
             val cacheStarted = SystemClock.elapsedRealtime()
             val cachedResult = runCatching {
                 val categories = cache.categories(playlist.id, target.cardKind)
-                val page = cachedPage(playlist, target, state.categoryId, 0)
+                val page = cachedPage(playlist, target, requestedCategory, 0)
                 categories to page
             }
-            if (section != target) return@launch
+            if (section != target || requestGeneration != contentRequestGeneration || state.categoryId != requestedCategory) return@launch
             val (providerCategories, page) = cachedResult.getOrNull() ?: (emptyList<XtreamCategory>() to CatalogPage.EMPTY)
             state.categories = baseCategories(providerCategories, playlist.id)
             state.cards = page.cards
             state.nextOffset = page.consumed
             state.endReached = page.endReached
-            state.categoryId = currentCategory
-            lastCategories = state.categories
             if (state.cards.isNotEmpty()) {
-                renderSectionState(state, restoreScroll = false)
+                if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) searchCategory(target, state.searchQuery)
+                else renderSectionState(state, restoreScroll = false)
                 if (BuildConfig.DEBUG) Log.d("CrownPerformance", "${target.name.lowercase()}_cache_first_page_ms=${SystemClock.elapsedRealtime() - cacheStarted}")
                 binding.screenSubtitle.text = getString(R.string.updating_in_background, playlist.name)
                 if (target == Section.LIVE) {
                     scheduleLiveHealthRefresh(playlist, state.cards)
                     refreshLiveCategoryRanking(playlist)
                 }
+            } else if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) {
+                searchCategory(target, state.searchQuery)
             }
-            startCatalogRefresh(playlist, target, force, hadContent = state.cards.isNotEmpty())
+            startCatalogRefresh(
+                playlist,
+                target,
+                force = force || providerCategories.isEmpty(),
+                hadContent = state.cards.isNotEmpty(),
+            )
         }
     }
 
@@ -409,7 +466,11 @@ class MainActivity : AppCompatActivity() {
         }
         if (requiresPin(category.name)) { verifyPin { selectCategory(category) }; return }
         if (category.id == currentCategory) return
-        sectionState(section).apply {
+        contentRequestGeneration++
+        val state = sectionState(section)
+        state.searchQuery = ""
+        bindSearchBox(section)
+        state.apply {
             scrollState = null
             cards = emptyList()
             nextOffset = 0
@@ -417,7 +478,7 @@ class MainActivity : AppCompatActivity() {
             categoryId = category.id
         }
         currentCategory = category.id
-        categoriesAdapter.submit(lastCategories, currentCategory)
+        categoriesAdapter.submit(state.categories, currentCategory)
         load()
     }
 
@@ -430,8 +491,17 @@ class MainActivity : AppCompatActivity() {
         playlistRefreshJob?.cancel()
         healthJob?.cancel()
         liveRankingJob?.cancel()
+        scopedSearchJob?.cancel()
+        countJob?.cancel()
+        catalogWarmJobs.values.forEach { it.cancel() }
+        catalogWarmJobs.clear()
         sectionStates.clear()
+        contentCounts.clear()
+        searchWarmJob = null
+        searchWarmCompletedFor = null
+        masterSearchQuery = ""
         activePlaylistId = playlistId
+        updateCountNavigation()
     }
 
     private fun sectionState(value: Section): SectionState =
@@ -442,7 +512,6 @@ class MainActivity : AppCompatActivity() {
         if (section !in PAGED_SECTIONS && section != Section.HOME) return
         sectionState(section).apply {
             categoryId = currentCategory
-            cards = catalogAdapter.currentItems.toList()
             scrollState = binding.contentGrid.layoutManager?.onSaveInstanceState()
             categoryScrollState = binding.categoryList.layoutManager?.onSaveInstanceState()
             focusedCardKey = focusedCardKey()
@@ -450,7 +519,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderSectionState(state: SectionState, restoreScroll: Boolean) {
-        lastCategories = state.categories
+        if (section in PAGED_SECTIONS && sectionStates[section] !== state) return
         categoriesAdapter.submit(state.categories, state.categoryId) {
             if (restoreScroll) state.categoryScrollState?.let { binding.categoryList.layoutManager?.onRestoreInstanceState(it) }
         }
@@ -533,6 +602,7 @@ class MainActivity : AppCompatActivity() {
         val target = section
         if (target !in PAGED_SECTIONS) return
         val state = sectionState(target)
+        if (state.searchQuery.isNotBlank()) return
         if (state.loadingPage || state.endReached) return
         val playlist = store.selected() ?: return
         val categoryId = state.categoryId
@@ -582,8 +652,8 @@ class MainActivity : AppCompatActivity() {
             } catch (_: CancellationException) {
                 return@launch
             } catch (error: Throwable) {
-                if (section == target && state.cards.isEmpty()) showFailure(error)
-                else if (section == target) binding.screenSubtitle.text = getString(R.string.offline_catalog, playlist.name)
+                if (section == target && state.categoryId == refreshCategory && state.cards.isEmpty()) showFailure(error)
+                else if (section == target && state.categoryId == refreshCategory) binding.screenSubtitle.text = getString(R.string.offline_catalog, playlist.name)
             }
         }
         refreshJobs[target] = job
@@ -601,6 +671,9 @@ class MainActivity : AppCompatActivity() {
         cache.saveCategories(playlist.id, target.cardKind, providerCategories)
         val state = sectionState(target)
         state.categories = baseCategories(providerCategories, playlist.id)
+        if (section == target && state.categoryId == refreshCategory) {
+            categoriesAdapter.submit(state.categories, state.categoryId)
+        }
         val actualCategory = refreshCategory.takeUnless { it == "all" || it == "favorites" }
         val refreshMarker = System.currentTimeMillis()
         val favorites = store.favorites(playlist.id)
@@ -628,8 +701,7 @@ class MainActivity : AppCompatActivity() {
                     state.nextOffset = if (refreshCategory == "favorites") firstCards.size else received
                     state.endReached = false
                     if (section == target && currentCategory == refreshCategory) {
-                        lastCategories = state.categories
-                        renderSectionState(state, restoreScroll = false)
+                        if (state.searchQuery.isBlank()) renderSectionState(state, restoreScroll = false)
                         binding.screenSubtitle.text = getString(R.string.updating_in_background, playlist.name)
                     }
                     if (BuildConfig.DEBUG) Log.d("CrownPerformance", "${target.name.lowercase()}_network_first_page_ms=${SystemClock.elapsedRealtime() - refreshStarted}")
@@ -640,6 +712,9 @@ class MainActivity : AppCompatActivity() {
         cache.finishItemRefresh(playlist.id, target.cardKind, actualCategory, refreshMarker, received)
         state.lastRefreshAt = System.currentTimeMillis()
         if (received > 0) store.markCatalogRefreshed(playlist.id, target.cardKind, actualCategory, state.lastRefreshAt)
+        if (actualCategory == null || store.catalogComplete(playlist.id, target.cardKind, null)) {
+            updateContentCount(target, ContentCountState.Ready(cache.count(playlist.id, target.cardKind)))
+        }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "${target.name.lowercase()}_refresh_total_ms=${SystemClock.elapsedRealtime() - refreshStarted};items=$received")
         if (state.categoryId == refreshCategory) {
             val visibleCount = state.cards.size.coerceAtLeast(PAGE_SIZE)
@@ -648,10 +723,12 @@ class MainActivity : AppCompatActivity() {
             state.nextOffset = refreshed.consumed
             state.endReached = refreshed.endReached
         }
-        if (section == target) {
+        if (section == target && state.categoryId == refreshCategory) {
             currentCategory = state.categoryId
-            lastCategories = state.categories
-            if (state.cards.isEmpty()) {
+            if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) {
+                searchCategory(target, state.searchQuery)
+                binding.screenSubtitle.text = playlist.name
+            } else if (state.cards.isEmpty()) {
                 stateRetry = { binding.categoryList.requestFocus() }
                 showState(
                     "Nothing here",
@@ -679,10 +756,9 @@ class MainActivity : AppCompatActivity() {
         playlistRefreshJob = lifecycleScope.launch {
             var failures = 0
             for (target in PAGED_SECTIONS) {
-                val state = sectionState(target)
                 try {
                     catalogRefreshPermit.withPermit {
-                        refreshCatalog(playlist, target, state.categoryId, hadContent = true)
+                        refreshCatalog(playlist, target, "all", hadContent = true)
                     }
                 } catch (_: CancellationException) {
                     return@launch
@@ -720,11 +796,16 @@ class MainActivity : AppCompatActivity() {
         hideState()
         categoriesAdapter.submit(emptyList())
         val p = store.selected() ?: return
+        renderHome(p)
+        loadContentCounts(p)
+    }
+
+    private fun renderHome(p: SavedPlaylist) {
         val expiry = p.expiresAt?.let { DateFormat.getDateInstance().format(Date(it * 1000)) } ?: "No expiry reported"
         val cards = listOf(
-            CatalogCard("live", "home", "Live TV", null, "Channels, EPG & catch-up", "WATCH", localArtwork = R.drawable.home_live),
-            CatalogCard("movies", "home", "Movies", null, "Details, trailers & resume", "EXPLORE", localArtwork = R.drawable.home_movies),
-            CatalogCard("series", "home", "Series", null, "Seasons, episodes & tracks", "BINGE", localArtwork = R.drawable.home_series),
+            CatalogCard("live", "home", "Live TV", null, "${countState(Section.LIVE).homeDescription("channels")} • EPG & catch-up", "WATCH", localArtwork = R.drawable.home_live),
+            CatalogCard("movies", "home", "Movies", null, "${countState(Section.MOVIES).homeDescription("movies")} • Details & resume", "EXPLORE", localArtwork = R.drawable.home_movies),
+            CatalogCard("series", "home", "Series", null, "${countState(Section.SERIES).homeDescription("series")} • Seasons & episodes", "BINGE", localArtwork = R.drawable.home_series),
             CatalogCard("account", "home", "${p.name} account", null, "${p.status} • $expiry", "ACTIVE", localArtwork = R.drawable.home_account),
             CatalogCard("reload", "home", "Reload content", null, "Refresh provider catalogs", "SYNC", localArtwork = R.drawable.home_reload),
             CatalogCard("playlist", "home", "Change playlist", null, "${store.playlists().size} playlist(s)", "SWITCH", localArtwork = R.drawable.home_playlist),
@@ -732,6 +813,50 @@ class MainActivity : AppCompatActivity() {
         val state = sectionState(Section.HOME).apply { this.cards = cards; categories = emptyList() }
         catalogAdapter.submit(cards) {
             state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
+        }
+    }
+
+    private fun countState(target: Section): ContentCountState =
+        contentCounts[target] ?: ContentCountState.Loading
+
+    private fun updateCountNavigation() {
+        if (!::binding.isInitialized) return
+        binding.navLive.text = countState(Section.LIVE).navigationLabel(getString(R.string.nav_live))
+        binding.navMovies.text = countState(Section.MOVIES).navigationLabel(getString(R.string.nav_movies))
+        binding.navSeries.text = countState(Section.SERIES).navigationLabel(getString(R.string.nav_series))
+    }
+
+    private fun updateContentCount(target: Section, value: ContentCountState) {
+        if (contentCounts[target] == value) return
+        contentCounts[target] = value
+        updateCountNavigation()
+        if (section == Section.HOME) store.selected()?.let(::renderHome)
+    }
+
+    private fun loadContentCounts(playlist: SavedPlaylist) {
+        countJob?.cancel()
+        countJob = lifecycleScope.launch {
+            coroutineScope {
+                PAGED_SECTIONS.map { target ->
+                    async {
+                        val cachedCount = runCatching { cache.count(playlist.id, target.cardKind) }.getOrDefault(0)
+                        if (store.catalogComplete(playlist.id, target.cardKind, null)) {
+                            updateContentCount(target, ContentCountState.Ready(cachedCount))
+                            return@async
+                        }
+                        updateContentCount(target, ContentCountState.Loading)
+                        val result = warmCatalogKind(playlist, target.cardKind).await()
+                        if (activePlaylistId != playlist.id) return@async
+                        updateContentCount(
+                            target,
+                            result.fold(
+                                onSuccess = { ContentCountState.Ready(it) },
+                                onFailure = { ContentCountState.Unavailable },
+                            ),
+                        )
+                    }
+                }.awaitAll()
+            }
         }
     }
 
@@ -971,7 +1096,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun search(query: String) {
-        if (query.trim().length < 2) {
+        if (query.trim().length < MIN_SEARCH_LENGTH) {
             searchShouldFocusResults = false
             showState("Type at least 2 characters", "Results will include live TV, movies, and series.", false, false)
             binding.searchBox.requestFocus()
@@ -1039,23 +1164,136 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun searchCategory(target: Section, query: String) {
+        if (target !in PAGED_SECTIONS || section != target) return
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isEmpty()) {
+            scopedSearchJob?.cancel()
+            searchShouldFocusResults = false
+            renderSectionState(sectionState(target), restoreScroll = true)
+            return
+        }
+        if (normalizedQuery.length < MIN_SEARCH_LENGTH) {
+            scopedSearchJob?.cancel()
+            searchShouldFocusResults = false
+            showState(
+                "Type at least $MIN_SEARCH_LENGTH characters",
+                "Search is limited to ${target.displayName.lowercase()}.",
+                false,
+                false,
+                keepCategories = true,
+            )
+            binding.searchBox.requestFocus()
+            return
+        }
+        val playlist = store.selected() ?: return
+        scopedSearchJob?.cancel()
+        scopedSearchJob = lifecycleScope.launch {
+            suspend fun cachedResults(): List<CatalogCard> = cache.search(
+                playlist.id,
+                normalizedQuery,
+                kind = target.cardKind,
+                limit = SEARCH_RESULT_LIMIT,
+            ).map { (_, item) -> item.toCard(target.cardKind, store.favorites(playlist.id)) }
+                .filterNot { it.isAdult && store.parentalPin != null && !adultSessionUnlocked() }
+
+            var cards = runCatching { cachedResults() }.getOrDefault(emptyList())
+            if (!isCurrentCategorySearch(target, normalizedQuery)) return@launch
+            if (cards.isNotEmpty()) {
+                hideState()
+                submitScopedSearchResults(target, cards)
+                binding.screenSubtitle.text = getString(R.string.saved_results, playlist.name)
+            } else {
+                showState("Searching ${target.displayName}", "Looking through your saved ${target.displayName.lowercase()} catalog…", true, false, keepCategories = true)
+            }
+
+            if (!store.catalogComplete(playlist.id, target.cardKind, null)) {
+                val warmResult = warmCatalogKind(playlist, target.cardKind).await()
+                if (!isCurrentCategorySearch(target, normalizedQuery)) return@launch
+                if (warmResult.isFailure && cards.isEmpty()) {
+                    showState("Search unavailable", "Couldn’t finish loading ${target.displayName.lowercase()}. Try again when the provider is reachable.", false, true, keepCategories = true)
+                    return@launch
+                }
+                cards = runCatching { cachedResults() }.getOrDefault(cards)
+            }
+
+            if (!isCurrentCategorySearch(target, normalizedQuery)) return@launch
+            hideState()
+            submitScopedSearchResults(target, cards)
+            binding.screenSubtitle.text = playlist.name
+            if (cards.isEmpty()) {
+                searchShouldFocusResults = false
+                stateRetry = { binding.searchBox.text.clear(); binding.searchBox.requestFocus() }
+                showState(
+                    "No ${target.displayName} results",
+                    "No titles match “$normalizedQuery” in ${target.displayName.lowercase()}.",
+                    false,
+                    true,
+                    "CLEAR SEARCH",
+                    keepCategories = true,
+                )
+            }
+        }
+    }
+
+    private fun isCurrentCategorySearch(target: Section, query: String): Boolean =
+        section == target && sectionState(target).searchQuery.trim() == query
+
+    private fun submitScopedSearchResults(target: Section, cards: List<CatalogCard>) {
+        catalogAdapter.submit(sort(cards, target)) {
+            if (searchShouldFocusResults && cards.isNotEmpty() && section == target) {
+                searchShouldFocusResults = false
+                binding.searchBox.clearFocus()
+                restoreCardFocus(null)
+            }
+        }
+    }
+
     private suspend fun warmSearchCatalogs(
         playlist: SavedPlaylist,
         missingKinds: List<String>,
         onKindComplete: suspend () -> Unit = {},
     ): Result<Unit> = runCatching {
         for (kind in missingKinds) {
-            val refreshMarker = System.currentTimeMillis()
-            var received = 0
-            api.catalogBatches(playlist.credentials, kind, batchSize = NETWORK_BATCH_SIZE).collect { batch ->
-                cache.saveItemBatch(playlist.id, kind, refreshMarker, batch, received)
-                received += batch.size
-            }
-            cache.finishItemRefresh(playlist.id, kind, null, refreshMarker, received)
-            if (received > 0) store.markCatalogRefreshed(playlist.id, kind, null)
+            warmCatalogKind(playlist, kind).await().getOrThrow()
             onKindComplete()
         }
         Unit
+    }
+
+    private fun warmCatalogKind(playlist: SavedPlaylist, kind: String): Deferred<Result<Int>> {
+        val key = "${playlist.id}:$kind"
+        catalogWarmJobs[key]?.takeIf { it.isActive }?.let { return it }
+        val job = lifecycleScope.async {
+            val result = catalogRefreshPermit.withPermit {
+                runCatching {
+                    val target = PAGED_SECTIONS.firstOrNull { it.cardKind == kind }
+                        ?: error("Unsupported catalog kind: $kind")
+                    if (cache.categories(playlist.id, kind).isEmpty()) {
+                        runCatching { api.categories(playlist.credentials, target.apiKind) }
+                            .getOrNull()
+                            ?.let { cache.saveCategories(playlist.id, kind, it) }
+                    }
+                    if (store.catalogComplete(playlist.id, kind, null)) return@runCatching cache.count(playlist.id, kind)
+                    val refreshMarker = System.currentTimeMillis()
+                    var received = 0
+                    api.catalogBatches(playlist.credentials, kind, batchSize = NETWORK_BATCH_SIZE).collect { batch ->
+                        cache.saveItemBatch(playlist.id, kind, refreshMarker, batch, received)
+                        received += batch.size
+                    }
+                    cache.finishItemRefresh(playlist.id, kind, null, refreshMarker, received)
+                    if (received > 0) store.markCatalogRefreshed(playlist.id, kind, null)
+                    cache.count(playlist.id, kind)
+                }
+            }
+            result.onSuccess { count ->
+                PAGED_SECTIONS.firstOrNull { it.cardKind == kind }?.let { updateContentCount(it, ContentCountState.Ready(count)) }
+            }
+            result
+        }
+        catalogWarmJobs[key] = job
+        job.invokeOnCompletion { if (catalogWarmJobs[key] === job) catalogWarmJobs.remove(key) }
+        return job
     }
 
     private fun configureLogin() = with(binding.loginPanel) {
@@ -1549,7 +1787,6 @@ class MainActivity : AppCompatActivity() {
             if (state.categories.none { it.id == state.categoryId }) state.categoryId = "all"
             if (section == Section.LIVE) {
                 currentCategory = state.categoryId
-                lastCategories = ranked
                 categoriesAdapter.submit(ranked, currentCategory)
                 scheduleLiveHealthRefresh(playlist, state.cards, allCards)
             }
@@ -1740,13 +1977,30 @@ class MainActivity : AppCompatActivity() {
         var categoryScrollState: Parcelable? = null,
         var focusedCardKey: String? = null,
         var lastRefreshAt: Long = 0L,
-    )
+        var searchQuery: String = "",
+    ) {
+        fun resetForTopLevelEntry() {
+            searchQuery = ""
+            if (categoryId != "all") {
+                categoryId = "all"
+                cards = emptyList()
+                nextOffset = 0
+                endReached = false
+            }
+            loadingPage = false
+            scrollState = null
+            categoryScrollState = null
+            focusedCardKey = null
+        }
+    }
 
     companion object {
         private const val PAGE_SIZE = 60
         private const val NETWORK_BATCH_SIZE = 240
         private const val PREFETCH_DISTANCE = 12
         private const val REFRESH_TTL_MS = 15L * 60 * 1000
+        private const val MIN_SEARCH_LENGTH = 2
+        private const val SEARCH_RESULT_LIMIT = 500
         private const val QR_CONNECT_UI_ENABLED = false
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore

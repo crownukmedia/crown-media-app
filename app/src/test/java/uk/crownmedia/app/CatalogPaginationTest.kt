@@ -12,6 +12,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import uk.crownmedia.core.database.CrownDatabase
+import uk.crownmedia.data.xtream.XtreamCategory
 import uk.crownmedia.data.xtream.XtreamItem
 
 @RunWith(RobolectricTestRunner::class)
@@ -78,6 +79,34 @@ class CatalogPaginationTest {
         val results = cache.search("playlist", "crow sto")
 
         assertEquals(listOf("a"), results.map { it.second.id })
+    }
+
+    @Test
+    fun scopedSearchNeverReturnsAnotherContentKind() = runBlocking {
+        cache.saveItems("playlist", "live", null, listOf(items(1).first().copy(id = "live", name = "Sky Sports")))
+        cache.saveItems("playlist", "movie", null, listOf(items(1).first().copy(id = "movie", name = "Sports Story")))
+        cache.saveItems("playlist", "series", null, listOf(items(1).first().copy(id = "series", name = "Sports Network")))
+
+        val live = cache.search("playlist", "SPORT", kind = "live")
+        val movies = cache.search("playlist", "sport", kind = "movie")
+
+        assertEquals(listOf("live"), live.map { it.second.id })
+        assertEquals(listOf("movie"), movies.map { it.second.id })
+        assertTrue(live.all { it.first == "live" })
+        assertTrue(movies.all { it.first == "movie" })
+    }
+
+    @Test
+    fun providerCategoriesRemainAvailableAlongsideWarmCatalogItems() = runBlocking {
+        val categories = listOf(
+            XtreamCategory("10", "Just Released"),
+            XtreamCategory("20", "Drama"),
+        )
+
+        cache.saveCategories("playlist", "movie", categories)
+        cache.saveItems("playlist", "movie", null, items(20))
+
+        assertEquals(categories, cache.categories("playlist", "movie"))
     }
 
     @Test
