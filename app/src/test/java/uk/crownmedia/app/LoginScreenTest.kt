@@ -1,6 +1,7 @@
 package uk.crownmedia.app
 
 import android.view.View
+import android.widget.ImageView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -39,6 +40,19 @@ class LoginScreenTest {
         assertEquals(View.GONE, screen.findViewById<View>(R.id.action_more).visibility)
         assertTrue(screen.findViewById<View>(R.id.connect_button).isShown)
         assertEquals(View.GONE, screen.findViewById<View>(R.id.qr_button).visibility)
+    }
+
+    @Test
+    fun mobileLoginLogoUsesContainedCenteredArtworkWithSafePadding() {
+        val screen = requireNotNull(activity)
+        val logo = screen.findViewById<ImageView>(R.id.login_logo)
+        val expectedPadding = (8 * screen.resources.displayMetrics.density).toInt()
+
+        assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
+        assertEquals(expectedPadding, logo.paddingLeft)
+        assertEquals(expectedPadding, logo.paddingTop)
+        assertEquals(expectedPadding, logo.paddingRight)
+        assertEquals(expectedPadding, logo.paddingBottom)
     }
 
     @Test

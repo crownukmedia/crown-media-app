@@ -6,10 +6,5 @@
             <corners android:radius="12dp" />
         </shape>
     </item>
-    <item
-        android:bottom="8dp"
-        android:drawable="@drawable/crown_media_logo_header"
-        android:left="8dp"
-        android:right="8dp"
-        android:top="8dp" />
+    <item android:drawable="@drawable/crown_media_logo" />
 </layer-list>

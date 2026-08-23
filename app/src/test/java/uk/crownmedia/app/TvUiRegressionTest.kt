@@ -118,6 +118,22 @@ class TvUiRegressionTest {
         assertEquals(View.NO_ID, connect.nextFocusDownId)
     }
 
+    @Test
+    fun tvLoginLogoUsesContainedCenteredArtworkWithSafePadding() {
+        activity.finish()
+        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        setTelevisionMode()
+        activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+
+        val logo = activity.findViewById<ImageView>(R.id.login_logo)
+
+        assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
+        assertEquals(dp(8), logo.paddingLeft)
+        assertEquals(dp(8), logo.paddingTop)
+        assertEquals(dp(8), logo.paddingRight)
+        assertEquals(dp(8), logo.paddingBottom)
+    }
+
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
 
     private fun setTelevisionMode() {

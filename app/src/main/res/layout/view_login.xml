@@ -21,8 +21,10 @@
         android:paddingBottom="28dp">
 
         <ImageView
+            android:id="@+id/login_logo"
             android:layout_width="152dp"
             android:layout_height="112dp"
+            android:adjustViewBounds="true"
             android:background="@drawable/bg_logo_surface"
             android:contentDescription="@string/app_name"
             android:padding="8dp"

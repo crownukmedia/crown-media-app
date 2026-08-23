@@ -27,6 +27,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.isVisible
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.doOnLayout
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
@@ -105,6 +106,7 @@ class MainActivity : AppCompatActivity() {
     private var searchShouldFocusResults = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
