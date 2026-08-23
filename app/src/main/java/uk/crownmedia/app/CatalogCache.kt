@@ -38,12 +38,17 @@ class CatalogCache(private val dao: CatalogDao) {
     suspend fun itemCount(playlistId: String, kind: String, categoryId: String?): Int =
         dao.categoryItemCount(playlistId, kind, categoryId)
 
-    suspend fun search(playlistId: String, query: String, limit: Int = 240): List<Pair<String, XtreamItem>> = withContext(Dispatchers.Default) {
+    suspend fun search(playlistId: String, query: String, kind: String? = null, limit: Int = 240): List<Pair<String, XtreamItem>> = withContext(Dispatchers.Default) {
         val normalized = normalize(query)
         val tokens = tokens(normalized)
         if (tokens.isEmpty()) return@withContext emptyList()
         val anchor = tokens.maxBy(String::length)
-        dao.searchCandidates(playlistId, anchor, "$anchor\uFFFF", limit * 5)
+        val candidates = if (kind == null) {
+            dao.searchCandidates(playlistId, anchor, "$anchor\uFFFF", limit * 5)
+        } else {
+            dao.searchCandidatesForKind(playlistId, kind, anchor, "$anchor\uFFFF", limit * 5)
+        }
+        candidates
             .asSequence()
             .filter { item -> tokens.all { token -> item.normalizedTitle.split(' ').any { it.startsWith(token) } } }
             .take(limit)

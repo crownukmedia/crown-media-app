@@ -99,6 +99,9 @@ interface CatalogDao {
     @Query("SELECT DISTINCT i.* FROM catalog_items i INNER JOIN catalog_search_tokens s ON i.playlistId = s.playlistId AND i.kind = s.kind AND i.contentId = s.contentId WHERE i.playlistId = :playlistId AND s.token >= :tokenStart AND s.token < :tokenEnd ORDER BY i.title COLLATE NOCASE LIMIT :limit")
     suspend fun searchCandidates(playlistId: String, tokenStart: String, tokenEnd: String, limit: Int): List<CachedCatalogItem>
 
+    @Query("SELECT DISTINCT i.* FROM catalog_items i INNER JOIN catalog_search_tokens s ON i.playlistId = s.playlistId AND i.kind = s.kind AND i.contentId = s.contentId WHERE i.playlistId = :playlistId AND i.kind = :kind AND s.token >= :tokenStart AND s.token < :tokenEnd ORDER BY i.title COLLATE NOCASE LIMIT :limit")
+    suspend fun searchCandidatesForKind(playlistId: String, kind: String, tokenStart: String, tokenEnd: String, limit: Int): List<CachedCatalogItem>
+
     @Query("SELECT COUNT(*) FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind")
     suspend fun itemCount(playlistId: String, kind: String): Int
 

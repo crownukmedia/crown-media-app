@@ -6,6 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.EditText
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -83,6 +84,26 @@ class PostLoginMobileUiTest {
         assertEquals((48 * density).toInt(), categoryAction.layoutParams.width)
         assertEquals((48 * density).toInt(), categoryAction.layoutParams.height)
         assertTrue(activity.findViewById<View>(R.id.side_nav).isShown)
+    }
+
+    @Test
+    fun contentSectionsExposeScopedSearchWithoutReplacingMasterSearch() {
+        activity.findViewById<View>(R.id.nav_live).performClick()
+
+        val search = activity.findViewById<EditText>(R.id.search_box)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.search_row).visibility)
+        assertEquals("Search live channels", search.hint.toString())
+
+        activity.findViewById<View>(R.id.nav_search).performClick()
+
+        assertEquals("Search live TV, movies and series", search.hint.toString())
+    }
+
+    @Test
+    fun mobileNavigationReservesCountLineForEachContentType() {
+        assertTrue(activity.findViewById<TextView>(R.id.nav_live).text.startsWith("Live\n("))
+        assertTrue(activity.findViewById<TextView>(R.id.nav_movies).text.startsWith("Movies\n("))
+        assertTrue(activity.findViewById<TextView>(R.id.nav_series).text.startsWith("Series\n("))
     }
 
     @Test

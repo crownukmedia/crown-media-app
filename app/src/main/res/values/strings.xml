@@ -10,6 +10,9 @@
     <string name="more_options">More options</string>
     <string name="clear_search">Clear search</string>
     <string name="search_everything">Search live TV, movies and series</string>
+    <string name="search_live">Search live channels</string>
+    <string name="search_movies">Search movies</string>
+    <string name="search_series">Search series</string>
     <string name="try_again">Try again</string>
     <string name="nav_home">Home</string>
     <string name="nav_live">Live</string>
