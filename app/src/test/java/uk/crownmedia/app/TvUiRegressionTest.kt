@@ -4,10 +4,12 @@ import android.app.UiModeManager
 import android.content.Context
 import android.content.res.Configuration
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.EditText
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
@@ -97,6 +99,15 @@ class TvUiRegressionTest {
         assertEquals(dp(5), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals(dp(46), category.layoutParams.height)
+    }
+
+    @Test
+    fun tvSearchCategoriesAndStateUseNonOverlappingVerticalAnchors() {
+        val categories = activity.findViewById<View>(R.id.category_list)
+        val state = activity.findViewById<View>(R.id.state_panel)
+
+        assertEquals(dp(8), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
+        assertEquals(R.id.category_list, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
     }
 
     @Test

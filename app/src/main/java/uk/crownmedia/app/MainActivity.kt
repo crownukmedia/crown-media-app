@@ -94,7 +94,6 @@ class MainActivity : AppCompatActivity() {
     private var searchWarmCompletedFor: String? = null
     private val catalogWarmJobs = mutableMapOf<String, Deferred<Result<Int>>>()
     private val contentCounts = EnumMap<Section, ContentCountState>(Section::class.java)
-    private var lastCategories = emptyList<XtreamCategory>()
     private val sectionStates = EnumMap<Section, SectionState>(Section::class.java)
     private val refreshJobs = EnumMap<Section, Job>(Section::class.java)
     private val catalogRefreshPermit = Semaphore(1)
@@ -110,6 +109,7 @@ class MainActivity : AppCompatActivity() {
     private var searchShouldFocusResults = false
     private var masterSearchQuery = ""
     private var updatingSearchBox = false
+    private var contentRequestGeneration = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -293,12 +293,25 @@ class MainActivity : AppCompatActivity() {
             return
         }
         ensurePlaylistState()
+        val changingTopLevelSection = section != value
         captureSectionState()
         detailJob?.cancel()
         detailJob = null
         nestedSeries = null
         stateRetry = null
         loadJob?.cancel()
+        scopedSearchJob?.cancel()
+        searchJob?.cancel()
+        if (changingTopLevelSection) {
+            contentRequestGeneration++
+            searchShouldFocusResults = false
+            masterSearchQuery = ""
+            if (section in PAGED_SECTIONS) sectionState(section).searchQuery = ""
+            if (value in PAGED_SECTIONS) {
+                refreshJobs.remove(value)?.cancel()
+                sectionState(value).resetForTopLevelEntry()
+            }
+        }
         if (value != Section.LIVE) {
             healthJob?.cancel()
             liveRankingJob?.cancel()
@@ -409,22 +422,22 @@ class MainActivity : AppCompatActivity() {
             return
         }
         loadJob?.cancel()
+        val requestGeneration = contentRequestGeneration
+        val requestedCategory = state.categoryId
         if (state.cards.isEmpty()) showState("Loading", "", true, false)
         loadJob = lifecycleScope.launch {
             val cacheStarted = SystemClock.elapsedRealtime()
             val cachedResult = runCatching {
                 val categories = cache.categories(playlist.id, target.cardKind)
-                val page = cachedPage(playlist, target, state.categoryId, 0)
+                val page = cachedPage(playlist, target, requestedCategory, 0)
                 categories to page
             }
-            if (section != target) return@launch
+            if (section != target || requestGeneration != contentRequestGeneration || state.categoryId != requestedCategory) return@launch
             val (providerCategories, page) = cachedResult.getOrNull() ?: (emptyList<XtreamCategory>() to CatalogPage.EMPTY)
             state.categories = baseCategories(providerCategories, playlist.id)
             state.cards = page.cards
             state.nextOffset = page.consumed
             state.endReached = page.endReached
-            state.categoryId = currentCategory
-            lastCategories = state.categories
             if (state.cards.isNotEmpty()) {
                 if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) searchCategory(target, state.searchQuery)
                 else renderSectionState(state, restoreScroll = false)
@@ -437,7 +450,12 @@ class MainActivity : AppCompatActivity() {
             } else if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) {
                 searchCategory(target, state.searchQuery)
             }
-            startCatalogRefresh(playlist, target, force, hadContent = state.cards.isNotEmpty())
+            startCatalogRefresh(
+                playlist,
+                target,
+                force = force || providerCategories.isEmpty(),
+                hadContent = state.cards.isNotEmpty(),
+            )
         }
     }
 
@@ -448,9 +466,11 @@ class MainActivity : AppCompatActivity() {
         }
         if (requiresPin(category.name)) { verifyPin { selectCategory(category) }; return }
         if (category.id == currentCategory) return
-        sectionState(section).searchQuery = ""
+        contentRequestGeneration++
+        val state = sectionState(section)
+        state.searchQuery = ""
         bindSearchBox(section)
-        sectionState(section).apply {
+        state.apply {
             scrollState = null
             cards = emptyList()
             nextOffset = 0
@@ -458,7 +478,7 @@ class MainActivity : AppCompatActivity() {
             categoryId = category.id
         }
         currentCategory = category.id
-        categoriesAdapter.submit(lastCategories, currentCategory)
+        categoriesAdapter.submit(state.categories, currentCategory)
         load()
     }
 
@@ -492,7 +512,6 @@ class MainActivity : AppCompatActivity() {
         if (section !in PAGED_SECTIONS && section != Section.HOME) return
         sectionState(section).apply {
             categoryId = currentCategory
-            if (searchQuery.isBlank()) cards = catalogAdapter.currentItems.toList()
             scrollState = binding.contentGrid.layoutManager?.onSaveInstanceState()
             categoryScrollState = binding.categoryList.layoutManager?.onSaveInstanceState()
             focusedCardKey = focusedCardKey()
@@ -500,7 +519,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderSectionState(state: SectionState, restoreScroll: Boolean) {
-        lastCategories = state.categories
+        if (section in PAGED_SECTIONS && sectionStates[section] !== state) return
         categoriesAdapter.submit(state.categories, state.categoryId) {
             if (restoreScroll) state.categoryScrollState?.let { binding.categoryList.layoutManager?.onRestoreInstanceState(it) }
         }
@@ -633,8 +652,8 @@ class MainActivity : AppCompatActivity() {
             } catch (_: CancellationException) {
                 return@launch
             } catch (error: Throwable) {
-                if (section == target && state.cards.isEmpty()) showFailure(error)
-                else if (section == target) binding.screenSubtitle.text = getString(R.string.offline_catalog, playlist.name)
+                if (section == target && state.categoryId == refreshCategory && state.cards.isEmpty()) showFailure(error)
+                else if (section == target && state.categoryId == refreshCategory) binding.screenSubtitle.text = getString(R.string.offline_catalog, playlist.name)
             }
         }
         refreshJobs[target] = job
@@ -652,6 +671,9 @@ class MainActivity : AppCompatActivity() {
         cache.saveCategories(playlist.id, target.cardKind, providerCategories)
         val state = sectionState(target)
         state.categories = baseCategories(providerCategories, playlist.id)
+        if (section == target && state.categoryId == refreshCategory) {
+            categoriesAdapter.submit(state.categories, state.categoryId)
+        }
         val actualCategory = refreshCategory.takeUnless { it == "all" || it == "favorites" }
         val refreshMarker = System.currentTimeMillis()
         val favorites = store.favorites(playlist.id)
@@ -679,7 +701,6 @@ class MainActivity : AppCompatActivity() {
                     state.nextOffset = if (refreshCategory == "favorites") firstCards.size else received
                     state.endReached = false
                     if (section == target && currentCategory == refreshCategory) {
-                        lastCategories = state.categories
                         if (state.searchQuery.isBlank()) renderSectionState(state, restoreScroll = false)
                         binding.screenSubtitle.text = getString(R.string.updating_in_background, playlist.name)
                     }
@@ -702,9 +723,8 @@ class MainActivity : AppCompatActivity() {
             state.nextOffset = refreshed.consumed
             state.endReached = refreshed.endReached
         }
-        if (section == target) {
+        if (section == target && state.categoryId == refreshCategory) {
             currentCategory = state.categoryId
-            lastCategories = state.categories
             if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) {
                 searchCategory(target, state.searchQuery)
                 binding.screenSubtitle.text = playlist.name
@@ -1247,6 +1267,13 @@ class MainActivity : AppCompatActivity() {
         val job = lifecycleScope.async {
             val result = catalogRefreshPermit.withPermit {
                 runCatching {
+                    val target = PAGED_SECTIONS.firstOrNull { it.cardKind == kind }
+                        ?: error("Unsupported catalog kind: $kind")
+                    if (cache.categories(playlist.id, kind).isEmpty()) {
+                        runCatching { api.categories(playlist.credentials, target.apiKind) }
+                            .getOrNull()
+                            ?.let { cache.saveCategories(playlist.id, kind, it) }
+                    }
                     if (store.catalogComplete(playlist.id, kind, null)) return@runCatching cache.count(playlist.id, kind)
                     val refreshMarker = System.currentTimeMillis()
                     var received = 0
@@ -1760,7 +1787,6 @@ class MainActivity : AppCompatActivity() {
             if (state.categories.none { it.id == state.categoryId }) state.categoryId = "all"
             if (section == Section.LIVE) {
                 currentCategory = state.categoryId
-                lastCategories = ranked
                 categoriesAdapter.submit(ranked, currentCategory)
                 scheduleLiveHealthRefresh(playlist, state.cards, allCards)
             }
@@ -1952,7 +1978,21 @@ class MainActivity : AppCompatActivity() {
         var focusedCardKey: String? = null,
         var lastRefreshAt: Long = 0L,
         var searchQuery: String = "",
-    )
+    ) {
+        fun resetForTopLevelEntry() {
+            searchQuery = ""
+            if (categoryId != "all") {
+                categoryId = "all"
+                cards = emptyList()
+                nextOffset = 0
+                endReached = false
+            }
+            loadingPage = false
+            scrollState = null
+            categoryScrollState = null
+            focusedCardKey = null
+        }
+    }
 
     companion object {
         private const val PAGE_SIZE = 60

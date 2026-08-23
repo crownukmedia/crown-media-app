@@ -71,7 +71,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="12dp"
-        android:layout_marginBottom="8dp"
+        android:layout_marginTop="4dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:visibility="gone"
@@ -106,6 +106,7 @@
         android:id="@+id/category_list"
         android:layout_width="0dp"
         android:layout_height="56dp"
+        android:layout_marginTop="8dp"
         android:clipToPadding="false"
         android:paddingStart="12dp"
         android:paddingEnd="4dp"
@@ -146,7 +147,7 @@
         app:layout_constraintBottom_toTopOf="@id/side_nav"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/search_row">
+        app:layout_constraintTop_toBottomOf="@id/category_list">
 
         <TextView
             android:id="@+id/state_title"

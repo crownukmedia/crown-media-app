@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.EditText
+import androidx.constraintlayout.widget.ConstraintLayout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -16,7 +17,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import kotlinx.coroutines.runBlocking
+import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
 
 @RunWith(RobolectricTestRunner::class)
@@ -36,6 +40,10 @@ class PostLoginMobileUiTest {
                 1,
                 allowedFormats = listOf("ts", "m3u8"),
             )
+        }
+        runBlocking {
+            CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+                .deletePlaylist(store.selected()!!.id)
         }
         MainActivity.storeFactory = { store }
         activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
@@ -97,6 +105,32 @@ class PostLoginMobileUiTest {
         activity.findViewById<View>(R.id.nav_search).performClick()
 
         assertEquals("Search live TV, movies and series", search.hint.toString())
+    }
+
+    @Test
+    fun sectionChangesResetDedicatedSearchAndActiveFilterState() {
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        val search = activity.findViewById<EditText>(R.id.search_box)
+        search.setText("sport")
+
+        activity.findViewById<View>(R.id.nav_movies).performClick()
+        assertEquals("", search.text.toString())
+        assertEquals("Search movies", search.hint.toString())
+
+        search.setText("drama")
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        assertEquals("", search.text.toString())
+        assertEquals("Search live channels", search.hint.toString())
+    }
+
+    @Test
+    fun searchAndCategoryRowsHaveIndependentVerticalSpace() {
+        val density = activity.resources.displayMetrics.density
+        val categories = activity.findViewById<View>(R.id.category_list)
+        val state = activity.findViewById<View>(R.id.state_panel)
+
+        assertEquals((8 * density).toInt(), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
+        assertEquals(R.id.category_list, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
     }
 
     @Test

@@ -12,6 +12,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import uk.crownmedia.core.database.CrownDatabase
+import uk.crownmedia.data.xtream.XtreamCategory
 import uk.crownmedia.data.xtream.XtreamItem
 
 @RunWith(RobolectricTestRunner::class)
@@ -93,6 +94,19 @@ class CatalogPaginationTest {
         assertEquals(listOf("movie"), movies.map { it.second.id })
         assertTrue(live.all { it.first == "live" })
         assertTrue(movies.all { it.first == "movie" })
+    }
+
+    @Test
+    fun providerCategoriesRemainAvailableAlongsideWarmCatalogItems() = runBlocking {
+        val categories = listOf(
+            XtreamCategory("10", "Just Released"),
+            XtreamCategory("20", "Drama"),
+        )
+
+        cache.saveCategories("playlist", "movie", categories)
+        cache.saveItems("playlist", "movie", null, items(20))
+
+        assertEquals(categories, cache.categories("playlist", "movie"))
     }
 
     @Test
