@@ -1,6 +1,7 @@
 package uk.crownmedia.app
 
 import android.view.View
+import android.widget.ImageView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -38,7 +39,20 @@ class LoginScreenTest {
         assertEquals(View.GONE, screen.findViewById<View>(R.id.side_nav).visibility)
         assertEquals(View.GONE, screen.findViewById<View>(R.id.action_more).visibility)
         assertTrue(screen.findViewById<View>(R.id.connect_button).isShown)
-        assertTrue(screen.findViewById<View>(R.id.qr_button).isShown)
+        assertEquals(View.GONE, screen.findViewById<View>(R.id.qr_button).visibility)
+    }
+
+    @Test
+    fun mobileLoginLogoUsesContainedCenteredArtworkWithSafePadding() {
+        val screen = requireNotNull(activity)
+        val logo = screen.findViewById<ImageView>(R.id.login_logo)
+        val expectedPadding = (8 * screen.resources.displayMetrics.density).toInt()
+
+        assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
+        assertEquals(expectedPadding, logo.paddingLeft)
+        assertEquals(expectedPadding, logo.paddingTop)
+        assertEquals(expectedPadding, logo.paddingRight)
+        assertEquals(expectedPadding, logo.paddingBottom)
     }
 
     @Test
@@ -51,10 +65,29 @@ class LoginScreenTest {
     }
 
     @Test
-    fun unavailableQrServiceIsHonestlyDisabled() {
+    fun everyCrownServiceUsesTheSharedLoginFlowWithoutReusingTypedCredentials() {
+        val screen = requireNotNull(activity)
+        val service = screen.findViewById<com.google.android.material.textfield.MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        val username = screen.findViewById<android.widget.EditText>(R.id.username)
+        username.setText("premium-user")
+
+        service.setText(CrownService.PRO.displayName, false)
+        service.onItemClickListener?.onItemClick(null, service, 1, 1L)
+
+        assertEquals("", username.text.toString())
+        assertTrue(screen.findViewById<View>(R.id.connect_button).isEnabled)
+
+        service.setText(CrownService.EIGHT_K.displayName, false)
+        service.onItemClickListener?.onItemClick(null, service, 2, 2L)
+        assertTrue(screen.findViewById<View>(R.id.connect_button).isEnabled)
+    }
+
+    @Test
+    fun qrConnectionCodeRemainsPresentButHidden() {
         val button = requireNotNull(activity).findViewById<android.widget.Button>(R.id.qr_button)
         assertTrue(button.text.contains("Coming soon"))
         assertTrue(!button.isEnabled)
+        assertEquals(View.GONE, button.visibility)
     }
 
     @Test

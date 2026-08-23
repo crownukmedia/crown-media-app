@@ -27,6 +27,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.isVisible
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.doOnLayout
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
@@ -97,12 +98,15 @@ class MainActivity : AppCompatActivity() {
     private var nestedSeries: SeriesDetailState? = null
     private var stateRetry: (() -> Unit)? = null
     private var loginGeneration = 0L
+    private var loginService = CrownService.default
+    private var updatingLoginForm = false
     private var adultUnlockedUntil = 0L
     private var lastBroadHealthSampleAt = 0L
     private var pendingContentFocusKey: String? = null
     private var searchShouldFocusResults = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -940,10 +944,28 @@ class MainActivity : AppCompatActivity() {
     private fun contentDetailsView(card: CatalogCard, body: String): View {
         val view = layoutInflater.inflate(R.layout.dialog_content_details, FrameLayout(this), false)
         view.findViewById<TextView>(R.id.detail_body).text = body.ifBlank { "No metadata supplied." }
-        view.findViewById<ImageView>(R.id.detail_artwork).load(card.imageUrl ?: card.localArtwork ?: R.drawable.crown_media_logo_header) {
+        val artwork = view.findViewById<ImageView>(R.id.detail_artwork)
+        val source = card.preferredArtworkSource()
+        val inset = (12 * resources.displayMetrics.density).toInt()
+        val showBrand = {
+            artwork.scaleType = ImageView.ScaleType.FIT_CENTER
+            artwork.setPadding(inset, inset, inset, inset)
+        }
+        showBrand()
+        artwork.load(source) {
             placeholder(R.drawable.crown_media_logo_header)
             error(R.drawable.crown_media_logo_header)
             crossfade(false)
+            listener(
+                onSuccess = { _, _ ->
+                    if (source == R.drawable.crown_media_logo_header) showBrand()
+                    else {
+                        artwork.scaleType = if (card.kind == "live") ImageView.ScaleType.CENTER_INSIDE else ImageView.ScaleType.CENTER_CROP
+                        artwork.setPadding(0, 0, 0, 0)
+                    }
+                },
+                onError = { _, _ -> showBrand() },
+            )
         }
         return view
     }
@@ -1039,11 +1061,20 @@ class MainActivity : AppCompatActivity() {
     private fun configureLogin() = with(binding.loginPanel) {
         serviceDropdown.setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, CrownService.displayNames))
         serviceDropdown.setText(CrownService.default.displayName, false)
-        serviceDropdown.setOnItemClickListener { _, _, _, _ -> updateSelectedService() }
+        loginService = CrownService.default
+        serviceDropdown.setOnItemClickListener { _, _, _, _ ->
+            val selected = CrownService.fromDisplayName(serviceDropdown.text.toString())
+            if (selected != loginService) {
+                loginService = selected
+                restoreSavedLoginDetails(selected)
+            }
+            updateSelectedService()
+        }
         connectButton.setOnClickListener { connectPlaylist() }
         qrButton.setOnClickListener { showDeviceActivation() }
-        qrButton.isEnabled = BuildConfig.ACTIVATION_BASE_URL.isNotBlank()
-        connectButton.nextFocusDownId = if (BuildConfig.ACTIVATION_BASE_URL.isNotBlank()) qrButton.id else View.NO_ID
+        qrButton.isVisible = QR_CONNECT_UI_ENABLED
+        qrButton.isEnabled = QR_CONNECT_UI_ENABLED && BuildConfig.ACTIVATION_BASE_URL.isNotBlank()
+        connectButton.nextFocusDownId = if (QR_CONNECT_UI_ENABLED && BuildConfig.ACTIVATION_BASE_URL.isNotBlank()) qrButton.id else View.NO_ID
         if (BuildConfig.ACTIVATION_BASE_URL.isBlank()) qrButton.text = getString(R.string.connect_via_qr_unavailable)
         loginCancel.setOnClickListener { cancelLogin(); open(Section.HOME) }
         password.setOnEditorActionListener { _, actionId, _ ->
@@ -1053,16 +1084,20 @@ class MainActivity : AppCompatActivity() {
             } else false
         }
         saveLogin.setOnCheckedChangeListener { _, checked ->
-            if (!checked) store.saveLoginDetails(null)
+            if (!updatingLoginForm && !checked) store.saveLoginDetails(loginService, null)
         }
-        store.savedLoginDetails()?.let { saved ->
-            playlistName.setText(saved.playlistName)
-            serviceDropdown.setText(saved.service.displayName, false)
-            username.setText(saved.username)
-            password.setText(saved.password)
-            saveLogin.isChecked = true
-        }
+        restoreSavedLoginDetails(loginService)
         updateSelectedService()
+    }
+
+    private fun restoreSavedLoginDetails(service: CrownService) = with(binding.loginPanel) {
+        val saved = store.savedLoginDetails(service)
+        updatingLoginForm = true
+        playlistName.setText(saved?.playlistName.orEmpty())
+        username.setText(saved?.username.orEmpty())
+        password.setText(saved?.password.orEmpty())
+        saveLogin.isChecked = saved != null
+        updatingLoginForm = false
     }
 
     private fun showWelcome() {
@@ -1099,6 +1134,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateSelectedService() = with(binding.loginPanel) {
         val service = CrownService.fromDisplayName(serviceDropdown.text.toString())
+        loginService = service
         serviceLayout.error = if (service.isAvailable) null else getString(R.string.service_coming_soon)
         connectButton.isEnabled = service.isAvailable && loginJob?.isActive != true
         if (service.isAvailable && formError.text == getString(R.string.service_coming_soon)) formError.isVisible = false
@@ -1140,9 +1176,12 @@ class MainActivity : AppCompatActivity() {
                     formError.isVisible = true
                 } else {
                     if (saveLogin.isChecked) {
-                        store.saveLoginDetails(SavedLoginDetails(playlistName.text?.toString().orEmpty().trim(), service, usernameValue, passwordValue))
+                        store.saveLoginDetails(
+                            service,
+                            SavedLoginDetails(playlistName.text?.toString().orEmpty().trim(), service, usernameValue, passwordValue),
+                        )
                     } else {
-                        store.saveLoginDetails(null)
+                        store.saveLoginDetails(service, null)
                     }
                     store.save(
                         name, credentials, account.expiresAtEpochSeconds, account.status.name,
@@ -1183,7 +1222,7 @@ class MainActivity : AppCompatActivity() {
         usernameLayout.isEnabled = !loading
         passwordLayout.isEnabled = !loading
         saveLogin.isEnabled = !loading
-        qrButton.isEnabled = !loading && BuildConfig.ACTIVATION_BASE_URL.isNotBlank()
+        qrButton.isEnabled = QR_CONNECT_UI_ENABLED && !loading && BuildConfig.ACTIVATION_BASE_URL.isNotBlank()
         loginCancel.isEnabled = !loading && loginCancel.isVisible
         loginProgress.isVisible = loading
         connectStatus.isVisible = loading
@@ -1197,7 +1236,7 @@ class MainActivity : AppCompatActivity() {
                 store.selectedId = values[index].id; open(Section.HOME)
             }.setPositiveButton("Add manually") { _, _ -> showManualPlaylist() }
             .setNegativeButton("Close", null)
-        if (BuildConfig.ACTIVATION_BASE_URL.isNotBlank()) {
+        if (QR_CONNECT_UI_ENABLED && BuildConfig.ACTIVATION_BASE_URL.isNotBlank()) {
             builder.setNeutralButton("Device activation") { _, _ -> showDeviceActivation() }
         }
         builder.showCrown(preferredButton = null)
@@ -1649,7 +1688,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun friendly(error: Throwable): String = when (error) {
         is SecurityException -> "The server rejected the username or password."
-        is java.net.UnknownHostException -> "Crown Premium could not be reached. Check your internet connection and try again."
+        is java.net.UnknownHostException -> "The selected Crown service could not be reached. Check your internet connection and try again."
         is java.net.SocketTimeoutException -> "The server took too long to respond. Try again."
         is java.io.IOException -> when {
             error.message.orEmpty().startsWith("Server returned HTTP ") -> error.message.orEmpty().take(80)
@@ -1708,6 +1747,7 @@ class MainActivity : AppCompatActivity() {
         private const val NETWORK_BATCH_SIZE = 240
         private const val PREFETCH_DISTANCE = 12
         private const val REFRESH_TTL_MS = 15L * 60 * 1000
+        private const val QR_CONNECT_UI_ENABLED = false
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
     }

@@ -5,6 +5,8 @@ plugins {
 
 val crownActivationBaseUrl = providers.gradleProperty("crownActivationBaseUrl").orElse("").get()
 val crownPremiumUrl = providers.gradleProperty("crownPremiumUrl").orElse("http://novixa.uk:8880").get()
+val crownProUrl = providers.gradleProperty("crownProUrl").orElse("http://slytv.uk").get()
+val crown8kUrl = providers.gradleProperty("crown8kUrl").orElse("http://pro.ultrastreamtvpro.uk").get()
 fun quotedBuildConfig(value: String) = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
@@ -21,6 +23,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "ACTIVATION_BASE_URL", quotedBuildConfig(crownActivationBaseUrl))
         buildConfigField("String", "CROWN_PREMIUM_URL", quotedBuildConfig(crownPremiumUrl))
+        buildConfigField("String", "CROWN_PRO_URL", quotedBuildConfig(crownProUrl))
+        buildConfigField("String", "CROWN_8K_URL", quotedBuildConfig(crown8kUrl))
     }
 
     buildTypes {
@@ -64,6 +68,7 @@ dependencies {
     implementation(project(":features:account"))
     implementation(project(":features:settings"))
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.material)
     implementation(libs.androidx.activity)

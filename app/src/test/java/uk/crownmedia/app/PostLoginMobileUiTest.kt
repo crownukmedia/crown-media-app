@@ -47,14 +47,15 @@ class PostLoginMobileUiTest {
     }
 
     @Test
-    fun authenticatedHeaderUsesCompactCroppedLogo() {
+    fun authenticatedHeaderUsesCompactProportionalLogo() {
         val density = activity.resources.displayMetrics.density
         val logo = activity.findViewById<ImageView>(R.id.brand_logo)
         val topBar = activity.findViewById<View>(R.id.top_bar)
 
         assertEquals((58 * density).toInt(), logo.layoutParams.width)
         assertEquals((44 * density).toInt(), logo.layoutParams.height)
-        assertEquals((2 * density).toInt(), logo.paddingTop)
+        assertEquals((4 * density).toInt(), logo.paddingTop)
+        assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals((54 * density).toInt(), topBar.minimumHeight)
     }
 

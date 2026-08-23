@@ -21,11 +21,15 @@
         android:paddingBottom="28dp">
 
         <ImageView
-            android:layout_width="160dp"
-            android:layout_height="92dp"
+            android:id="@+id/login_logo"
+            android:layout_width="152dp"
+            android:layout_height="112dp"
+            android:adjustViewBounds="true"
+            android:background="@drawable/bg_logo_surface"
             android:contentDescription="@string/app_name"
+            android:padding="8dp"
             android:scaleType="fitCenter"
-            android:src="@drawable/crown_media_brand" />
+            android:src="@drawable/crown_media_logo_header" />
 
         <TextView
             android:layout_width="match_parent"
@@ -167,7 +171,8 @@
             style="@style/Widget.Crown.SecondaryButton.FullWidth"
             android:layout_marginTop="10dp"
             android:nextFocusUp="@id/connect_button"
-            android:text="@string/connect_via_qr_code" />
+            android:text="@string/connect_via_qr_code"
+            android:visibility="gone" />
 
         <Button
             android:id="@+id/login_cancel"

@@ -1,8 +1,6 @@
 package uk.crownmedia.app
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,11 +12,12 @@ class CrownServiceTest {
     }
 
     @Test
-    fun futureServicesRemainVisibleButUnavailable() {
+    fun allCrownServicesMapToTheirProviderEndpoints() {
         assertEquals(listOf("Crown Premium", "Crown Pro", "Crown 8K"), CrownService.displayNames)
-        assertFalse(CrownService.PRO.isAvailable)
-        assertFalse(CrownService.EIGHT_K.isAvailable)
-        assertNull(CrownService.PRO.serverUrl)
+        assertEquals("http://slytv.uk", CrownService.PRO.serverUrl)
+        assertEquals("http://pro.ultrastreamtvpro.uk", CrownService.EIGHT_K.serverUrl)
+        assertTrue(CrownService.PRO.isAvailable)
+        assertTrue(CrownService.EIGHT_K.isAvailable)
     }
 
     @Test

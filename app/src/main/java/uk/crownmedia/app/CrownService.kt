@@ -6,11 +6,11 @@ enum class CrownService(
     val serverUrl: String?,
 ) {
     PREMIUM("Crown Premium", BuildConfig.CROWN_PREMIUM_URL),
-    PRO("Crown Pro", null),
-    EIGHT_K("Crown 8K", null),
+    PRO("Crown Pro", BuildConfig.CROWN_PRO_URL),
+    EIGHT_K("Crown 8K", BuildConfig.CROWN_8K_URL),
     ;
 
-    val isAvailable: Boolean get() = serverUrl != null
+    val isAvailable: Boolean get() = !serverUrl.isNullOrBlank()
 
     companion object {
         val default = PREMIUM

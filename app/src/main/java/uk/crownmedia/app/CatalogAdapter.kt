@@ -17,6 +17,7 @@ import coil.size.Precision
 import uk.crownmedia.app.databinding.ItemCategoryBinding
 import uk.crownmedia.app.databinding.ItemContentBinding
 import uk.crownmedia.data.xtream.XtreamCategory
+import java.net.URI
 
 data class CatalogCard(
     val id: String,
@@ -31,6 +32,20 @@ data class CatalogCard(
     val healthHint: Int = 0,
     val isAdult: Boolean = false,
 )
+
+internal fun CatalogCard.preferredArtworkSource(): Any {
+    val remote = imageUrl?.trim()?.takeIf { value ->
+        runCatching { URI(value) }.getOrNull()?.let { uri ->
+            uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrBlank()
+        } == true
+    }
+    return when {
+        kind == "live" && remote != null -> remote
+        localArtwork != null -> localArtwork
+        remote != null -> remote
+        else -> R.drawable.crown_media_logo_header
+    }
+}
 
 class CategoryAdapter(
     private val onClick: (XtreamCategory) -> Unit,
@@ -104,10 +119,17 @@ class CatalogAdapter(
             val artworkHeight = (artworkHeightDp * binding.root.resources.displayMetrics.density).toInt()
             val artworkContainer = binding.artwork.parent as View
             artworkContainer.layoutParams = artworkContainer.layoutParams.apply { height = artworkHeight }
-            binding.artwork.scaleType = ImageView.ScaleType.FIT_CENTER
-            binding.artwork.setPadding(0, 0, 0, 0)
-            binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, R.color.white))
-            binding.artwork.load(value.localArtwork ?: value.imageUrl) {
+            val artworkDensity = binding.root.resources.displayMetrics.density
+            val brandInset = (12 * artworkDensity).toInt()
+            val source = value.preferredArtworkSource()
+            val brandFallback = source == R.drawable.crown_media_logo_header
+            fun showBrandArtwork() {
+                binding.artwork.scaleType = ImageView.ScaleType.FIT_CENTER
+                binding.artwork.setPadding(brandInset, brandInset, brandInset, brandInset)
+                binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, R.color.white))
+            }
+            showBrandArtwork()
+            binding.artwork.load(source) {
                 size(if (poster) 360 else 480, if (poster) 540 else 270)
                 precision(Precision.INEXACT)
                 memoryCachePolicy(CachePolicy.ENABLED)
@@ -119,20 +141,19 @@ class CatalogAdapter(
                 error(uk.crownmedia.app.R.drawable.crown_media_logo_header)
                 listener(
                     onSuccess = { _, _ ->
-                        binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, if (value.kind == "live") R.color.white else R.color.crown_surface))
-                        binding.artwork.scaleType = when (value.kind) {
-                            "live" -> ImageView.ScaleType.CENTER_INSIDE
-                            else -> ImageView.ScaleType.CENTER_CROP
+                        if (brandFallback) {
+                            showBrandArtwork()
+                        } else {
+                            binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, if (value.kind == "live") R.color.white else R.color.crown_surface))
+                            binding.artwork.scaleType = when (value.kind) {
+                                "live" -> ImageView.ScaleType.CENTER_INSIDE
+                                else -> ImageView.ScaleType.CENTER_CROP
+                            }
+                            val inset = if (value.kind == "live") (10 * artworkDensity).toInt() else 0
+                            binding.artwork.setPadding(inset, inset, inset, inset)
                         }
-                        val inset = if (value.kind == "live") (10 * binding.root.resources.displayMetrics.density).toInt() else 0
-                        binding.artwork.setPadding(inset, inset, inset, inset)
                     },
-                    onError = { _, _ ->
-                        binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, R.color.white))
-                        binding.artwork.scaleType = ImageView.ScaleType.FIT_CENTER
-                        val inset = (12 * binding.root.resources.displayMetrics.density).toInt()
-                        binding.artwork.setPadding(inset, inset, inset, inset)
-                    },
+                    onError = { _, _ -> showBrandArtwork() },
                 )
             }
             binding.root.contentDescription = listOf(value.title, value.meta, value.badge).filter { it.isNotBlank() }.joinToString(", ")

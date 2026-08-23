@@ -1,4 +1,11 @@
 <resources>
+    <style name="Theme.CrownMedia.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/white</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/crown_media_logo</item>
+        <item name="windowSplashScreenAnimationDuration">150</item>
+        <item name="postSplashScreenTheme">@style/Theme.CrownMedia</item>
+    </style>
+
     <style name="Theme.CrownMedia" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/crown_primary</item>
         <item name="colorOnPrimary">@color/crown_background</item>
