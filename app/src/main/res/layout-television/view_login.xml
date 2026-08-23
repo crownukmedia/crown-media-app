@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/login_panel"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipToPadding="false"
+    android:fillViewport="true"
+    android:focusable="false">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <ImageView
+            android:id="@+id/login_logo"
+            android:layout_width="132dp"
+            android:layout_height="100dp"
+            android:adjustViewBounds="true"
+            android:background="@drawable/bg_logo_surface"
+            android:contentDescription="@string/app_name"
+            android:padding="8dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/crown_media_logo_header" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="@string/connect_your_service"
+            android:textColor="@color/white"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:layout_marginBottom="10dp"
+            android:gravity="center"
+            android:text="@string/connect_service_description"
+            android:textColor="@color/crown_text_secondary"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:orientation="horizontal">
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/playlist_name_layout"
+                style="@style/Widget.Crown.TextInputLayout"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:hint="@string/playlist_name_optional">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/playlist_name"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints="name"
+                    android:imeOptions="actionNext"
+                    android:inputType="textCapWords"
+                    android:maxLines="1"
+                    android:nextFocusRight="@id/service_dropdown"
+                    android:nextFocusDown="@id/username" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <Space android:layout_width="10dp" android:layout_height="1dp" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/service_layout"
+                style="@style/Widget.Crown.TextInputLayout.ExposedDropdown"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:hint="@string/service">
+
+                <com.google.android.material.textfield.MaterialAutoCompleteTextView
+                    android:id="@+id/service_dropdown"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:contentDescription="@string/service"
+                    android:focusable="true"
+                    android:inputType="none"
+                    android:nextFocusLeft="@id/playlist_name"
+                    android:nextFocusDown="@id/username"
+                    android:singleLine="true" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:orientation="horizontal">
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/username_layout"
+                style="@style/Widget.Crown.TextInputLayout"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:hint="@string/username">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/username"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints="username"
+                    android:imeOptions="actionNext"
+                    android:inputType="textNoSuggestions"
+                    android:maxLines="1"
+                    android:nextFocusRight="@id/password"
+                    android:nextFocusUp="@id/service_dropdown"
+                    android:nextFocusDown="@id/password" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <Space android:layout_width="10dp" android:layout_height="1dp" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/password_layout"
+                style="@style/Widget.Crown.TextInputLayout"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:hint="@string/password"
+                app:endIconMode="password_toggle">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/password"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints="password"
+                    android:imeOptions="actionDone"
+                    android:inputType="textPassword"
+                    android:maxLines="1"
+                    android:nextFocusLeft="@id/username"
+                    android:nextFocusUp="@id/username"
+                    android:nextFocusDown="@id/save_login" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/save_login"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:nextFocusUp="@id/password"
+            android:nextFocusDown="@id/connect_button"
+            android:text="@string/save_login_details"
+            android:textColor="@color/white"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/form_error"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:accessibilityLiveRegion="assertive"
+            android:gravity="center"
+            android:textColor="@color/crown_error"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+        <ProgressBar
+            android:id="@+id/login_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="6dp"
+            android:layout_marginTop="4dp"
+            android:indeterminate="true"
+            android:indeterminateTint="@color/crown_primary_bright"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/connect_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:accessibilityLiveRegion="polite"
+            android:gravity="center"
+            android:text="@string/connecting_playlist"
+            android:textColor="@color/crown_text_secondary"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/connect_button"
+            style="@style/Widget.Crown.PrimaryButton.FullWidth"
+            android:layout_marginTop="8dp"
+            android:nextFocusUp="@id/save_login"
+            android:text="@string/connect_playlist" />
+
+        <Button
+            android:id="@+id/qr_button"
+            style="@style/Widget.Crown.SecondaryButton.FullWidth"
+            android:layout_marginTop="6dp"
+            android:nextFocusUp="@id/connect_button"
+            android:text="@string/connect_via_qr_code"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/login_cancel"
+            style="@style/Widget.Crown.TextButton.FullWidth"
+            android:text="@string/back"
+            android:visibility="gone" />
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

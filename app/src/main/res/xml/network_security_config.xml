@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Xtream-compatible providers may redirect an HTTP media request to a rotating CDN hostname
+      or a literal IP address. Android cannot express that dynamic redirect set as a safe static
+      domain allowlist, so clear-text must remain enabled for provider-selected media origins.
+      Only system trust anchors are accepted for HTTPS traffic.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

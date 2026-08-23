@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#05070B">
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:keepScreenOn="true"
+        app:show_buffering="when_playing"
+        app:show_subtitle_button="true"
+        app:use_controller="true" />
+
+    <TextView
+        android:id="@+id/player_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="48dp"
+        android:layout_marginTop="32dp"
+        android:background="#B305070B"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="10dp"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:id="@+id/playback_loading"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:accessibilityLiveRegion="polite"
+        android:background="#6605070B"
+        android:gravity="center"
+        android:importantForAccessibility="yes"
+        android:orientation="vertical">
+        <ProgressBar android:layout_width="56dp" android:layout_height="56dp" android:indeterminate="true" />
+        <TextView android:id="@+id/playback_loading_message" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="@string/opening_channel" android:textColor="#FFFFFF" android:textSize="20sp" android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/playback_error"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#EE05070B"
+        android:focusable="true"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingHorizontal="64dp"
+        android:paddingVertical="36dp"
+        android:visibility="gone">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/playback_unavailable" android:textColor="#FFFFFF" android:textSize="28sp" android:textStyle="bold" />
+        <TextView android:id="@+id/playback_error_message" android:layout_width="640dp" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:gravity="center" android:textColor="#C7CBD6" android:textSize="17sp" />
+        <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="24dp" android:orientation="horizontal">
+            <Button android:id="@+id/playback_retry" style="@style/Widget.Crown.PlayerTvButton" android:nextFocusRight="@id/playback_back" android:text="@string/retry_playback" />
+            <Button android:id="@+id/playback_back" style="@style/Widget.Crown.PlayerTvButton" android:layout_marginStart="16dp" android:nextFocusLeft="@id/playback_retry" android:text="@string/back_to_channels" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>
