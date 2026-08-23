@@ -3,12 +3,14 @@ package uk.crownmedia.app
 import android.view.View
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.shadows.ShadowAlertDialog
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -53,6 +55,17 @@ class LoginScreenTest {
         val button = requireNotNull(activity).findViewById<android.widget.Button>(R.id.qr_button)
         assertTrue(button.text.contains("Coming soon"))
         assertTrue(!button.isEnabled)
+    }
+
+    @Test
+    fun connectingToPremiumDoesNotShowAnHttpWarningDialog() {
+        val screen = requireNotNull(activity)
+        screen.findViewById<android.widget.EditText>(R.id.username).setText("test-user")
+        screen.findViewById<android.widget.EditText>(R.id.password).setText("test-password")
+
+        screen.findViewById<View>(R.id.connect_button).performClick()
+
+        assertNull(ShadowAlertDialog.getLatestAlertDialog())
     }
 
     private class FakeSecureStore : CrownSecureStore {

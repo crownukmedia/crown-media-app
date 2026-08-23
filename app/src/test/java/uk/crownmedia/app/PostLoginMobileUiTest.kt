@@ -26,7 +26,6 @@ class PostLoginMobileUiTest {
     @Before
     fun setUp() {
         val store = AppStore(FakeSecureStore()).apply {
-            cleartextWarningAccepted = true
             save(
                 "Mobile test",
                 ProviderCredentials("http://example.invalid", "user", "password"),

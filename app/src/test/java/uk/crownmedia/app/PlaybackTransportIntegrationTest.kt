@@ -22,8 +22,10 @@ class PlaybackTransportIntegrationTest {
         assumeTrue(server.isNotBlank() && username.isNotBlank() && password.isNotBlank())
 
         listOf(
-            "$server/live/$username/$password/4916534.ts",
-            "$server/live/$username/$password/4555001.ts",
+            "$server/live/$username/$password/4916534.m3u8",
+            "$server/live/$username/$password/4555001.m3u8",
+            // This provider item currently rejects HLS but remains playable over TS,
+            // exercising the same automatic fallback used by the application.
             "$server/live/$username/$password/4544652.ts",
             "$server/movie/$username/$password/4939141.mkv",
             "$server/movie/$username/$password/4939140.mkv",

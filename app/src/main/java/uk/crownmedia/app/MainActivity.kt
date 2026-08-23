@@ -132,10 +132,7 @@ class MainActivity : AppCompatActivity() {
         })
         if (store.selected() == null) showWelcome() else {
             refreshPlaybackCapabilitiesIfNeeded()
-            val selected = requireNotNull(store.selected())
-            if (requiresCleartextWarning(selected.credentials) && !store.cleartextWarningAccepted) {
-                showCleartextWarning { open(Section.HOME) }
-            } else open(Section.HOME)
+            open(Section.HOME)
         }
     }
 
@@ -777,8 +774,17 @@ class MainActivity : AppCompatActivity() {
         refreshJobs.values.forEach { it.cancel() }
         playlistRefreshJob?.cancel()
         searchWarmJob?.cancel()
-        val extension = if (live) card.extension ?: preferredLiveExtension(playlist.allowedFormats) else card.extension
+        val extension = if (live) preferredLiveExtension(playlist.allowedFormats) else card.extension
         val url = api.streamUrl(playlist.credentials, card.kind, card.id, extension)
+        val fallbackUrl = if (live) {
+            val allowed = playlist.allowedFormats.map { it.trim().trimStart('.').lowercase() }
+            val fallbackExtension = when (extension?.lowercase()) {
+                "m3u8" -> "ts".takeIf { it in allowed }
+                "ts" -> "m3u8".takeIf { it in allowed }
+                else -> null
+            }
+            fallbackExtension?.let { api.streamUrl(playlist.credentials, card.kind, card.id, it) }
+        } else null
         when (store.player) {
             "vlc" -> external(url, card.title, "org.videolan.vlc")
             "mx" -> if (!PlayerActivity.launchExternal(this, url, card.title, "com.mxtech.videoplayer.ad")) external(url, card.title, "com.mxtech.videoplayer.pro")
@@ -793,6 +799,7 @@ class MainActivity : AppCompatActivity() {
                     playlist.id,
                     card.id,
                     card.kind,
+                    fallbackUrl,
                 ),
             )
         }
@@ -1097,7 +1104,7 @@ class MainActivity : AppCompatActivity() {
         if (service.isAvailable && formError.text == getString(R.string.service_coming_soon)) formError.isVisible = false
     }
 
-    private fun connectPlaylist(cleartextAcceptedForAttempt: Boolean = false): Unit = with(binding.loginPanel) {
+    private fun connectPlaylist(): Unit = with(binding.loginPanel) {
         if (loginJob?.isActive == true) return
         clearLoginErrors()
         val service = CrownService.fromDisplayName(serviceDropdown.text.toString())
@@ -1122,10 +1129,6 @@ class MainActivity : AppCompatActivity() {
 
         val name = playlistName.text?.toString().orEmpty().trim().ifBlank { service.displayName }
         val credentials = ProviderCredentials(requireNotNull(service.serverUrl), usernameValue, passwordValue)
-        if (requiresCleartextWarning(credentials) && !store.cleartextWarningAccepted && !cleartextAcceptedForAttempt) {
-            showCleartextWarning { connectPlaylist(cleartextAcceptedForAttempt = true) }
-            return
-        }
         setLoginLoading(true)
         val generation = ++loginGeneration
         loginJob = lifecycleScope.launch {
@@ -1164,21 +1167,6 @@ class MainActivity : AppCompatActivity() {
         loginJob?.cancel()
         loginJob = null
         if (::binding.isInitialized) setLoginLoading(false)
-    }
-
-    private fun requiresCleartextWarning(credentials: ProviderCredentials): Boolean =
-        credentials.serverUrl.startsWith("http://", true)
-
-    private fun showCleartextWarning(onAccepted: () -> Unit) {
-        AlertDialog.Builder(this)
-            .setTitle("Connection is not encrypted")
-            .setMessage("Crown Premium currently uses an HTTP provider connection. Your provider username and password may be visible to the network. Continue only on a trusted network.")
-            .setPositiveButton("Continue") { _, _ ->
-                store.cleartextWarningAccepted = true
-                onAccepted()
-            }
-            .setNegativeButton("Cancel", null)
-            .showCrown()
     }
 
     private fun clearLoginErrors() = with(binding.loginPanel) {

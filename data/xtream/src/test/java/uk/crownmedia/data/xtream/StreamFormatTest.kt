@@ -7,8 +7,8 @@ import uk.crownmedia.core.model.ProviderCredentials
 
 class StreamFormatTest {
     @Test
-    fun `prefers direct transport stream when provider allows both formats`() {
-        assertEquals("ts", preferredLiveExtension(listOf("ts", "m3u8")))
+    fun `prefers adaptive HLS when provider allows both formats`() {
+        assertEquals("m3u8", preferredLiveExtension(listOf("ts", "m3u8")))
     }
 
     @Test

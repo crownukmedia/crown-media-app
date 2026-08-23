@@ -21,6 +21,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.DefaultDataSource
@@ -52,10 +53,13 @@ class PlayerActivity : AppCompatActivity() {
     private var successRecorded = false
     private var failureStage = "created"
     private var automaticRetries = 0
+    private var fallbackAttempted = false
+    private var currentUrl = ""
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val startupTimeout = Runnable {
         logFailure("startup_timeout", null)
-        if (automaticRetries < MAX_AUTOMATIC_RETRIES) retryAfterTransientFailure()
+        if (switchToFallbackUrl()) retryAfterTransientFailure(countAttempt = false)
+        else if (automaticRetries < MAX_AUTOMATIC_RETRIES) retryAfterTransientFailure()
         else showUnavailable(getString(R.string.playback_timeout_detail))
     }
     private val automaticRetry = Runnable {
@@ -85,6 +89,7 @@ class PlayerActivity : AppCompatActivity() {
         availability = StreamAvailability(this)
         playerTitle.text = intent.getStringExtra(EXTRA_TITLE).orEmpty()
         resumeEnabled = intent.getBooleanExtra(EXTRA_RESUME, false)
+        currentUrl = intent.getStringExtra(EXTRA_URL).orEmpty()
         val live = intent.getBooleanExtra(EXTRA_LIVE, false)
         playbackLoadingMessage.setText(if (live) R.string.opening_channel else R.string.opening_video)
         playbackBack.setText(if (live) R.string.back_to_channels else R.string.back_to_content)
@@ -96,7 +101,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun initialize() {
         if (player != null) return
-        val url = intent.getStringExtra(EXTRA_URL) ?: run { finish(); return }
+        val url = currentUrl.takeIf(String::isNotBlank) ?: run { finish(); return }
         failureStage = "initializing"
         val buffer = intent.getStringExtra(EXTRA_BUFFER) ?: "normal"
         val loadControl = when (buffer) {
@@ -109,7 +114,8 @@ class PlayerActivity : AppCompatActivity() {
             .setDefaultRequestProperties(mapOf("Accept" to "*/*", "Accept-Encoding" to "identity"))
         val dataSource = DefaultDataSource.Factory(this, httpDataSource)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSource)
-        val instance = ExoPlayer.Builder(this)
+        val renderersFactory = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
+        val instance = ExoPlayer.Builder(this, renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
@@ -130,7 +136,9 @@ class PlayerActivity : AppCompatActivity() {
         instance.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 logFailure("player_error", error)
-                if (error.errorCode in 2000..2999 && automaticRetries < MAX_AUTOMATIC_RETRIES) {
+                if (switchToFallbackUrl()) {
+                    retryAfterTransientFailure(countAttempt = false)
+                } else if (error.errorCode in 2000..3999 && automaticRetries < MAX_AUTOMATIC_RETRIES) {
                     retryAfterTransientFailure()
                 } else {
                     showUnavailable(getString(R.string.playback_error_detail))
@@ -164,6 +172,8 @@ class PlayerActivity : AppCompatActivity() {
             failureRecorded = false
             successRecorded = false
             automaticRetries = 0
+            fallbackAttempted = false
+            currentUrl = intent.getStringExtra(EXTRA_URL).orEmpty()
             initialize()
         }
         playbackBack.setOnClickListener { finish() }
@@ -175,14 +185,23 @@ class PlayerActivity : AppCompatActivity() {
         timeoutHandler.postDelayed(startupTimeout, STARTUP_TIMEOUT_MS)
     }
 
-    private fun retryAfterTransientFailure() {
-        automaticRetries++
+    private fun retryAfterTransientFailure(countAttempt: Boolean = true) {
+        if (countAttempt) automaticRetries++
         failureStage = "retry_wait"
         timeoutHandler.removeCallbacks(startupTimeout)
         player?.stop()
         playbackError.isVisible = false
         playbackLoading.isVisible = true
         timeoutHandler.postDelayed(automaticRetry, AUTOMATIC_RETRY_DELAY_MS)
+    }
+
+    private fun switchToFallbackUrl(): Boolean {
+        if (fallbackAttempted) return false
+        val fallback = intent.getStringExtra(EXTRA_FALLBACK_URL).orEmpty()
+        if (fallback.isBlank() || fallback == currentUrl) return false
+        fallbackAttempted = true
+        currentUrl = fallback
+        return true
     }
 
     private fun showUnavailable(detail: String) {
@@ -292,6 +311,7 @@ class PlayerActivity : AppCompatActivity() {
         private const val EXTRA_PLAYLIST_ID = "playlist_id"
         private const val EXTRA_STREAM_ID = "stream_id"
         private const val EXTRA_KIND = "content_kind"
+        private const val EXTRA_FALLBACK_URL = "fallback_url"
         private const val PLAYBACK_USER_AGENT = "CrownMedia/1.0"
         private const val TAG = "CrownPlayer"
         private const val STARTUP_TIMEOUT_MS = 25_000L
@@ -319,12 +339,14 @@ class PlayerActivity : AppCompatActivity() {
             playlistId: String = "",
             streamId: String = "",
             contentKind: String = if (live) "live" else "video",
+            fallbackUrl: String? = null,
         ) =
             Intent(context, PlayerActivity::class.java)
                 .putExtra(EXTRA_URL, url).putExtra(EXTRA_TITLE, title).putExtra(EXTRA_LIVE, live)
                 .putExtra(EXTRA_RESUME, !live).putExtra(EXTRA_BUFFER, buffer)
                 .putExtra(EXTRA_PLAYLIST_ID, playlistId).putExtra(EXTRA_STREAM_ID, streamId)
                 .putExtra(EXTRA_KIND, contentKind)
+                .putExtra(EXTRA_FALLBACK_URL, fallbackUrl)
 
         fun launchExternal(context: Context, url: String, title: String, packageName: String?): Boolean {
             val intent = Intent(Intent.ACTION_VIEW).apply {

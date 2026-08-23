@@ -33,7 +33,6 @@ class TvUiRegressionTest {
     fun setUp() {
         setTelevisionMode()
         val store = AppStore(FakeSecureStore()).apply {
-            cleartextWarningAccepted = true
             save(
                 "TV test",
                 ProviderCredentials("http://example.invalid", "user", "password"),

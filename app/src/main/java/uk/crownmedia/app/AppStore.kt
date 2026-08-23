@@ -51,10 +51,6 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
         get() = prefs.getString("parental_pin", null)
         set(value) { prefs.putString("parental_pin", value) }
 
-    var cleartextWarningAccepted: Boolean
-        get() = prefs.getString("cleartext_warning_accepted", "false") == "true"
-        set(value) { prefs.putString("cleartext_warning_accepted", value.toString()) }
-
     val installationId: String
         get() = prefs.getString("installation_id", null) ?: UUID.randomUUID().toString().also {
             prefs.putString("installation_id", it)
