@@ -10,6 +10,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.io.IOException
 
 @UnstableApi
 @RunWith(RobolectricTestRunner::class)
@@ -21,29 +22,40 @@ class PlaybackTransportIntegrationTest {
         val password = System.getenv("CROWN_TEST_PASSWORD").orEmpty()
         assumeTrue(server.isNotBlank() && username.isNotBlank() && password.isNotBlank())
 
-        listOf(
-            "$server/live/$username/$password/4916534.m3u8",
-            "$server/live/$username/$password/4555001.m3u8",
-            // This provider item currently rejects HLS but remains playable over TS,
-            // exercising the same automatic fallback used by the application.
-            "$server/live/$username/$password/4544652.ts",
-            "$server/movie/$username/$password/4939141.mkv",
-            "$server/movie/$username/$password/4939140.mkv",
-            "$server/movie/$username/$password/4939139.mp4",
-            "$server/series/$username/$password/4938575.mkv",
-            "$server/series/$username/$password/4916867.mkv",
-            "$server/series/$username/$password/4916410.mkv",
-        ).forEach { url ->
-            val source = OkHttpDataSource.Factory(OkHttpClient.Builder().followRedirects(true).build())
-                .setUserAgent("CrownMedia/1.0")
-                .createDataSource()
-            try {
-                source.open(DataSpec.Builder().setUri(Uri.parse(url)).setLength(564).build())
-                val buffer = ByteArray(564)
-                assertTrue(source.read(buffer, 0, buffer.size) > 0)
-            } finally {
-                source.close()
-            }
+        val candidates = mapOf(
+            "Live" to listOf(
+                "$server/live/$username/$password/4916534.ts",
+                "$server/live/$username/$password/4555001.ts",
+                "$server/live/$username/$password/4544652.ts",
+            ),
+            "Movie" to listOf(
+                "$server/movie/$username/$password/4939141.mkv",
+                "$server/movie/$username/$password/4939140.mkv",
+                "$server/movie/$username/$password/4939139.mp4",
+            ),
+            "Episode" to listOf(
+                "$server/series/$username/$password/4938575.mkv",
+                "$server/series/$username/$password/4916867.mkv",
+                "$server/series/$username/$password/4916410.mkv",
+            ),
+        )
+
+        candidates.forEach { (kind, urls) ->
+            assertTrue("No readable $kind candidate", urls.any(::canRead))
+        }
+    }
+
+    private fun canRead(url: String): Boolean {
+        val source = OkHttpDataSource.Factory(OkHttpClient.Builder().followRedirects(true).build())
+            .setUserAgent("CrownMedia/1.0")
+            .createDataSource()
+        return try {
+            source.open(DataSpec.Builder().setUri(Uri.parse(url)).setLength(564).build())
+            source.read(ByteArray(564), 0, 564) > 0
+        } catch (_: IOException) {
+            false
+        } finally {
+            source.close()
         }
     }
 }

@@ -406,8 +406,8 @@ fun normalizeServerUrl(value: String): String {
 fun preferredLiveExtension(allowedFormats: List<String>): String {
     val normalized = allowedFormats.map { it.trim().trimStart('.').lowercase() }
     return when {
-        "m3u8" in normalized -> "m3u8"
         "ts" in normalized -> "ts"
+        "m3u8" in normalized -> "m3u8"
         else -> "ts"
     }
 }
