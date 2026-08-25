@@ -70,6 +70,23 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun homeUsesDedicatedCategoryIconsInExistingTileOrder() {
+        val adapter = activity.findViewById<RecyclerView>(R.id.content_grid).adapter as CatalogAdapter
+
+        assertEquals(
+            listOf(
+                R.drawable.home_live_icon,
+                R.drawable.home_movies_icon,
+                R.drawable.home_series_icon,
+                R.drawable.home_account_icon,
+                R.drawable.home_reload_icon,
+                R.drawable.home_playlist_icon,
+            ),
+            adapter.currentItems.map { it.localArtwork },
+        )
+    }
+
+    @Test
     fun catalogShellUsesExplicitCrossRegionFocusAndReadableTvSizing() {
         activity.findViewById<View>(R.id.nav_live).performClick()
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
