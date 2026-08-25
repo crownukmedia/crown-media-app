@@ -803,12 +803,12 @@ class MainActivity : AppCompatActivity() {
     private fun renderHome(p: SavedPlaylist) {
         val expiry = p.expiresAt?.let { DateFormat.getDateInstance().format(Date(it * 1000)) } ?: "No expiry reported"
         val cards = listOf(
-            CatalogCard("live", "home", "Live TV", null, "${countState(Section.LIVE).homeDescription("channels")} • EPG & catch-up", "WATCH", localArtwork = R.drawable.home_live),
-            CatalogCard("movies", "home", "Movies", null, "${countState(Section.MOVIES).homeDescription("movies")} • Details & resume", "EXPLORE", localArtwork = R.drawable.home_movies),
-            CatalogCard("series", "home", "Series", null, "${countState(Section.SERIES).homeDescription("series")} • Seasons & episodes", "BINGE", localArtwork = R.drawable.home_series),
-            CatalogCard("account", "home", "${p.name} account", null, "${p.status} • $expiry", "ACTIVE", localArtwork = R.drawable.home_account),
-            CatalogCard("reload", "home", "Reload content", null, "Refresh provider catalogs", "SYNC", localArtwork = R.drawable.home_reload),
-            CatalogCard("playlist", "home", "Change playlist", null, "${store.playlists().size} playlist(s)", "SWITCH", localArtwork = R.drawable.home_playlist),
+            CatalogCard("live", "home", "Live TV", null, "${countState(Section.LIVE).homeDescription("channels")} • EPG & catch-up", "WATCH", localArtwork = R.drawable.home_live_icon),
+            CatalogCard("movies", "home", "Movies", null, "${countState(Section.MOVIES).homeDescription("movies")} • Details & resume", "EXPLORE", localArtwork = R.drawable.home_movies_icon),
+            CatalogCard("series", "home", "Series", null, "${countState(Section.SERIES).homeDescription("series")} • Seasons & episodes", "BINGE", localArtwork = R.drawable.home_series_icon),
+            CatalogCard("account", "home", "${p.name} account", null, "${p.status} • $expiry", "ACTIVE", localArtwork = R.drawable.home_account_icon),
+            CatalogCard("reload", "home", "Reload content", null, "Refresh provider catalogs", "SYNC", localArtwork = R.drawable.home_reload_icon),
+            CatalogCard("playlist", "home", "Change playlist", null, "${store.playlists().size} playlist(s)", "SWITCH", localArtwork = R.drawable.home_playlist_icon),
         )
         val state = sectionState(Section.HOME).apply { this.cards = cards; categories = emptyList() }
         catalogAdapter.submit(cards) {
