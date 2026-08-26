@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var store: AppStore
     private lateinit var cache: CatalogCache
     private lateinit var streamAvailability: StreamAvailability
+    private lateinit var analytics: UsageAnalytics
     private val api = XtreamClient()
     private lateinit var categoriesAdapter: CategoryAdapter
     private lateinit var catalogAdapter: CatalogAdapter
@@ -110,12 +111,15 @@ class MainActivity : AppCompatActivity() {
     private var masterSearchQuery = ""
     private var updatingSearchBox = false
     private var contentRequestGeneration = 0L
+    private var lastTrackedSearch: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        analytics = (application as CrownMediaApplication).usageAnalytics
+        analytics.setDeviceClass(deviceClass())
         store = storeFactory(this)
         cache = CatalogCache(CrownDatabase.get(this).catalogDao())
         streamAvailability = StreamAvailability(this)
@@ -147,6 +151,7 @@ class MainActivity : AppCompatActivity() {
             refreshPlaybackCapabilitiesIfNeeded()
             open(Section.HOME)
         }
+        binding.root.post(::showAnalyticsConsentIfNeeded)
     }
 
     private fun configureLists() {
@@ -263,6 +268,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun runActiveSearch(query: String) {
+        val normalized = query.trim()
+        if (normalized.length >= MIN_SEARCH_LENGTH) {
+            val signature = 31 * section.hashCode() + normalized.hashCode()
+            if (signature != lastTrackedSearch) {
+                lastTrackedSearch = signature
+                analytics.trackSearch(section.name.lowercase())
+            }
+        }
         if (section == Section.SEARCH) search(query)
         else if (section in PAGED_SECTIONS) searchCategory(section, query)
     }
@@ -366,6 +379,7 @@ class MainActivity : AppCompatActivity() {
         if (enteringAuthenticatedShell && deviceClass() == DeviceClass.TELEVISION) {
             navigationView(value).post { navigationView(value).requestFocus() }
         }
+        analytics.trackScreen(value.name.lowercase())
     }
 
     private fun updateSelectedNavigation(value: Section) {
@@ -479,6 +493,7 @@ class MainActivity : AppCompatActivity() {
         }
         currentCategory = category.id
         categoriesAdapter.submit(state.categories, currentCategory)
+        analytics.trackCategorySelected(section.name.lowercase())
         load()
     }
 
@@ -875,6 +890,7 @@ class MainActivity : AppCompatActivity() {
                 "account" -> showAccount(); "reload" -> refreshAllCatalogs(); "playlist" -> showPlaylists()
             }; return
         }
+        analytics.trackContentOpened(card.kind)
         when (card.kind) {
             "live" -> play(card, live = true)
             "movie" -> showMovie(card)
@@ -914,6 +930,7 @@ class MainActivity : AppCompatActivity() {
             }
             fallbackExtension?.let { api.streamUrl(playlist.credentials, card.kind, card.id, it) }
         } else null
+        analytics.trackPlaybackRequested(card.kind, store.player, live)
         when (store.player) {
             "vlc" -> external(url, card.title, "org.videolan.vlc")
             "mx" -> if (!PlayerActivity.launchExternal(this, url, card.title, "com.mxtech.videoplayer.ad")) external(url, card.title, "com.mxtech.videoplayer.pro")
@@ -1341,6 +1358,7 @@ class MainActivity : AppCompatActivity() {
     private fun showWelcome() {
         catalogAdapter.submit(emptyList())
         showLogin(canGoBack = false)
+        analytics.trackScreen("login")
     }
 
     private fun showManualPlaylist() {
@@ -1409,10 +1427,12 @@ class MainActivity : AppCompatActivity() {
             runCatching { api.authenticate(credentials) }.onSuccess { account ->
                 if (generation != loginGeneration || !binding.loginPanel.root.isVisible) return@onSuccess
                 if (account.status.name != "ACTIVE") {
+                    analytics.trackLogin("inactive", service)
                     setLoginLoading(false)
                     formError.text = getString(R.string.inactive_account, account.status.name.lowercase())
                     formError.isVisible = true
                 } else {
+                    analytics.trackLogin("success", service)
                     if (saveLogin.isChecked) {
                         store.saveLoginDetails(
                             service,
@@ -1432,6 +1452,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 if (error is CancellationException || generation != loginGeneration) return@onFailure
+                analytics.trackLogin("failure", service)
                 setLoginLoading(false)
                 formError.text = friendly(error)
                 formError.isVisible = true
@@ -1507,6 +1528,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAccount() {
         val p = store.selected() ?: run { showWelcome(); return }
+        analytics.trackScreen("account")
         val expiry = p.expiresAt?.let { DateFormat.getDateTimeInstance().format(Date(it * 1000)) } ?: "Not supplied"
         val dialog = AlertDialog.Builder(this).setTitle(p.name).setMessage(
             "STATUS\n${p.status}\n\nEXPIRY\n$expiry\n\nCONNECTIONS\n${p.activeConnections ?: "Not supplied"} active of ${p.maximumConnections ?: "Not supplied"} maximum\n\nSERVER\n${Uri.parse(p.credentials.serverUrl).host ?: "Configured"}\n\nUSERNAME\nSaved securely"
@@ -1557,6 +1579,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSettings() {
+        analytics.trackScreen("settings")
         val playerLabel = when (store.player) { "vlc" -> "VLC"; "mx" -> "MX Player"; "chooser" -> "System chooser"; else -> "Internal Crown Player" }
         val bufferLabel = when (store.buffer) { "low" -> "Low latency"; "resilient" -> "Resilient"; else -> "Normal" }
         val sortLabel = when (store.sort) { "asc" -> "Name A–Z"; "desc" -> "Name Z–A"; else -> "Provider order" }
@@ -1566,6 +1589,7 @@ class MainActivity : AppCompatActivity() {
             "Content sorting  •  $sortLabel",
             "Parental controls  •  ${if (store.parentalPin == null) "Off" else "On"}",
             "Restore hidden categories",
+            "Share anonymous usage  •  ${when { !analytics.isConfigured -> "Unavailable"; analytics.isEnabled -> "On"; else -> "Off" }}",
         )
         AlertDialog.Builder(this).setTitle("Settings").setItems(labels) { _, which ->
             when (which) {
@@ -1578,8 +1602,46 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, getString(R.string.settings_updated), Toast.LENGTH_SHORT).show()
                     showSettings()
                 }
+                5 -> showUsageAnalyticsChoice()
             }
         }.setNegativeButton("Close", null).showCrown(preferredButton = null)
+    }
+
+    private fun showAnalyticsConsentIfNeeded() {
+        if (!analytics.isConfigured || analytics.consentDecision != null || isFinishing) return
+        AlertDialog.Builder(this)
+            .setTitle("Help improve Crown Media")
+            .setMessage(
+                "Allow anonymous usage analytics? We collect screen visits, feature usage, login outcomes, " +
+                    "and playback requests. We never collect credentials, provider URLs, playlist IDs, " +
+                    "content titles, or search text. You can change this later in Settings.",
+            )
+            .setPositiveButton("Allow") { _, _ ->
+                analytics.updateConsent(true)
+                analytics.setDeviceClass(deviceClass())
+                analytics.trackScreen(if (binding.loginPanel.root.isVisible) "login" else section.name.lowercase())
+            }
+            .setNegativeButton("No thanks") { _, _ -> analytics.updateConsent(false) }
+            .setCancelable(false)
+            .showCrown()
+    }
+
+    private fun showUsageAnalyticsChoice() {
+        if (!analytics.isConfigured) {
+            Toast.makeText(this, "Usage analytics is not configured in this build", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val options = arrayOf("On", "Off")
+        AlertDialog.Builder(this)
+            .setTitle("Share anonymous usage")
+            .setSingleChoiceItems(options, if (analytics.isEnabled) 0 else 1) { dialog, which ->
+                analytics.updateConsent(which == 0)
+                if (which == 0) analytics.setDeviceClass(deviceClass())
+                dialog.dismiss()
+                showSettings()
+            }
+            .setNegativeButton("Back", null)
+            .showCrown(preferredButton = null)
     }
 
     private fun showPlayerChoice() {

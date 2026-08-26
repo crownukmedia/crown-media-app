@@ -30,3 +30,19 @@ still requires the Crown Media activation service base URL and API contract.
 
 Brand surfaces consistently present the Crown Media mark on a white background. The
 exact replacement artwork can be dropped into `crown_media_logo.png` without layout changes.
+
+## Anonymous usage analytics
+
+Firebase Analytics integration is optional at build time and safely remains disabled when no
+Firebase configuration is present. To enable it:
+
+1. Create or select a Firebase project with Google Analytics enabled.
+2. Register Android apps `uk.crownmedia.app` and `uk.crownmedia.app.debug` in the same project so
+   release and debug variants are both represented in the downloaded configuration.
+3. Place its `google-services.json` at `app/google-services.json` before building the release.
+
+The configuration file is intentionally ignored by Git. Supply it to release builds through the
+local build environment or CI secrets. Users are asked to opt in before collection starts and can
+change their choice under Settings. Collected events cover screens, content types, search usage,
+login outcomes, category selection, and playback requests. Credentials, provider URLs, playlist
+or content identifiers, titles, and search terms are never added to analytics events.

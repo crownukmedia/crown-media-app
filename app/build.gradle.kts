@@ -3,6 +3,10 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 val crownActivationBaseUrl = providers.gradleProperty("crownActivationBaseUrl").orElse("").get()
 val crownPremiumUrl = providers.gradleProperty("crownPremiumUrl").orElse("http://novixa.uk:8880").get()
 val crownProUrl = providers.gradleProperty("crownProUrl").orElse("http://slytv.uk").get()
@@ -82,6 +86,8 @@ dependencies {
     implementation(libs.androidx.navigation.fragment)
     implementation(libs.androidx.navigation.ui)
     implementation(libs.androidx.work.runtime)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.analytics)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
