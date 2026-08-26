@@ -19,7 +19,7 @@ class UsageAnalytics private constructor(
         get() = firebase != null
 
     val consentDecision: Boolean?
-        get() = if (preferences.contains(CONSENT_KEY)) preferences.getBoolean(CONSENT_KEY, false) else null
+        get() = preferences.getBoolean(CONSENT_KEY, true)
 
     val isEnabled: Boolean
         get() = isConfigured && consentDecision == true

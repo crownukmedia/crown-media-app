@@ -31,7 +31,7 @@
         android:theme="@style/Theme.CrownMedia"
         android:usesCleartextTraffic="true">
 
-        <!-- Collection remains off until the user explicitly opts in. -->
+        <!-- Boot collection stays off until the saved preference is applied; no saved choice defaults on. -->
         <meta-data
             android:name="firebase_analytics_collection_enabled"
             android:value="false" />

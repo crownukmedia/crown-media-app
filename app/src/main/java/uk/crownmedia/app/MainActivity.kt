@@ -151,7 +151,6 @@ class MainActivity : AppCompatActivity() {
             refreshPlaybackCapabilitiesIfNeeded()
             open(Section.HOME)
         }
-        binding.root.post(::showAnalyticsConsentIfNeeded)
     }
 
     private fun configureLists() {
@@ -1589,7 +1588,7 @@ class MainActivity : AppCompatActivity() {
             "Content sorting  •  $sortLabel",
             "Parental controls  •  ${if (store.parentalPin == null) "Off" else "On"}",
             "Restore hidden categories",
-            "Share anonymous usage  •  ${when { !analytics.isConfigured -> "Unavailable"; analytics.isEnabled -> "On"; else -> "Off" }}",
+            "Share usage and playback error  •  ${when { !analytics.isConfigured -> "Unavailable"; analytics.isEnabled -> "On"; else -> "Off" }}",
         )
         AlertDialog.Builder(this).setTitle("Settings").setItems(labels) { _, which ->
             when (which) {
@@ -1607,25 +1606,6 @@ class MainActivity : AppCompatActivity() {
         }.setNegativeButton("Close", null).showCrown(preferredButton = null)
     }
 
-    private fun showAnalyticsConsentIfNeeded() {
-        if (!analytics.isConfigured || analytics.consentDecision != null || isFinishing) return
-        AlertDialog.Builder(this)
-            .setTitle("Help improve Crown Media")
-            .setMessage(
-                "Allow anonymous usage analytics? We collect screen visits, feature usage, login outcomes, " +
-                    "and playback requests. We never collect credentials, provider URLs, playlist IDs, " +
-                    "content titles, or search text. You can change this later in Settings.",
-            )
-            .setPositiveButton("Allow") { _, _ ->
-                analytics.updateConsent(true)
-                analytics.setDeviceClass(deviceClass())
-                analytics.trackScreen(if (binding.loginPanel.root.isVisible) "login" else section.name.lowercase())
-            }
-            .setNegativeButton("No thanks") { _, _ -> analytics.updateConsent(false) }
-            .setCancelable(false)
-            .showCrown()
-    }
-
     private fun showUsageAnalyticsChoice() {
         if (!analytics.isConfigured) {
             Toast.makeText(this, "Usage analytics is not configured in this build", Toast.LENGTH_SHORT).show()
@@ -1633,7 +1613,7 @@ class MainActivity : AppCompatActivity() {
         }
         val options = arrayOf("On", "Off")
         AlertDialog.Builder(this)
-            .setTitle("Share anonymous usage")
+            .setTitle("Share usage and playback error")
             .setSingleChoiceItems(options, if (analytics.isEnabled) 0 else 1) { dialog, which ->
                 analytics.updateConsent(which == 0)
                 if (which == 0) analytics.setDeviceClass(deviceClass())

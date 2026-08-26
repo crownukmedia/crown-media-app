@@ -2,7 +2,7 @@ package uk.crownmedia.app
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,17 +22,32 @@ class UsageAnalyticsTest {
     }
 
     @Test
-    fun missingFirebaseConfigurationIsSafeAndCollectsNothing() {
+    fun analyticsCollectionFollowsFirebaseAvailabilityAndPreference() {
         val analytics = UsageAnalytics.create(context)
 
-        assertFalse(analytics.isConfigured)
-        assertFalse(analytics.isEnabled)
-        assertNull(analytics.consentDecision)
+        assertEquals(true, analytics.consentDecision)
+        assertEquals(analytics.isConfigured, analytics.isEnabled)
 
-        analytics.updateConsent(true)
+        analytics.updateConsent(false)
         analytics.trackScreen("home")
 
         assertFalse(analytics.isEnabled)
+        assertEquals(false, analytics.consentDecision)
+    }
+
+    @Test
+    fun analyticsDefaultsOnAndPersistsUserOptOut() {
+        val analytics = UsageAnalytics.create(context)
+
         assertEquals(true, analytics.consentDecision)
+
+        analytics.updateConsent(false)
+
+        assertEquals(false, UsageAnalytics.create(context).consentDecision)
+        assertFalse(UsageAnalytics.create(context).isEnabled)
+
+        analytics.updateConsent(true)
+
+        assertTrue(UsageAnalytics.create(context).consentDecision == true)
     }
 }
