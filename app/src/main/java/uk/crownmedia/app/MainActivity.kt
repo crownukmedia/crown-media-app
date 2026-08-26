@@ -32,7 +32,6 @@ import androidx.core.view.doOnLayout
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
-import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import com.google.zxing.BarcodeFormat
@@ -112,6 +111,7 @@ class MainActivity : AppCompatActivity() {
     private var updatingSearchBox = false
     private var contentRequestGeneration = 0L
     private var lastTrackedSearch: Int? = null
+    private var categoryMenuDialog: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -155,7 +155,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun configureLists() {
         categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory)
-        binding.categoryList.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        binding.categoryList.layoutManager = GridLayoutManager(this, 2, GridLayoutManager.HORIZONTAL, false).apply {
+            initialPrefetchItemCount = 12
+        }
         binding.categoryList.adapter = categoriesAdapter
         catalogAdapter = CatalogAdapter(::openCard, ::cardOptions)
         val television = deviceClass() == DeviceClass.TELEVISION
@@ -473,6 +475,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectCategory(category: XtreamCategory) {
+        if (category.id == CATEGORY_MENU_ID) {
+            showCategoryMenu()
+            return
+        }
         if (category.id.startsWith("season:")) {
             selectSeriesSeason(category.id.substringAfter(':').toIntOrNull() ?: return)
             return
@@ -491,9 +497,36 @@ class MainActivity : AppCompatActivity() {
             categoryId = category.id
         }
         currentCategory = category.id
-        categoriesAdapter.submit(state.categories, currentCategory)
+        categoriesAdapter.submit(state.categories, currentCategory) {
+            state.categories.indexOfFirst { it.id == currentCategory }.takeIf { it >= 0 }?.let {
+                binding.categoryList.smoothScrollToPosition(it)
+            }
+        }
         analytics.trackCategorySelected(section.name.lowercase())
         load()
+    }
+
+    private fun showCategoryMenu() {
+        if (section !in PAGED_SECTIONS || nestedSeries != null || isFinishing) return
+        val choices = sectionState(section).categories.filterNot { it.id == CATEGORY_MENU_ID }
+        if (choices.isEmpty()) {
+            Toast.makeText(this, "No categories available", Toast.LENGTH_SHORT).show()
+            return
+        }
+        categoryMenuDialog?.dismiss()
+        val selected = choices.indexOfFirst { it.id == currentCategory }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.all_categories)
+            .setSingleChoiceItems(choices.map { it.name }.toTypedArray(), selected) { activeDialog, which ->
+                val chosen = choices.getOrNull(which) ?: return@setSingleChoiceItems
+                activeDialog.dismiss()
+                selectCategory(chosen)
+            }
+            .setNegativeButton("Close", null)
+            .showCrown(preferredButton = null)
+        categoryMenuDialog = dialog
+        if (selected >= 0) dialog.listView.setSelection(selected)
+        dialog.setOnDismissListener { if (categoryMenuDialog === dialog) categoryMenuDialog = null }
     }
 
     private fun ensurePlaylistState() {
@@ -570,9 +603,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun baseCategories(providerCategories: List<XtreamCategory>, playlistId: String): List<XtreamCategory> {
-        val hidden = store.hiddenCategories(playlistId)
-        return listOf(XtreamCategory("all", "All"), XtreamCategory("favorites", "Favorites")) +
-            providerCategories.filterNot { it.id in hidden }
+        return displayedCategoryList(providerCategories, store.hiddenCategories(playlistId))
     }
 
     private suspend fun cachedPage(
@@ -631,7 +662,8 @@ class MainActivity : AppCompatActivity() {
             state.endReached = page.endReached
             if (page.cards.isNotEmpty()) {
                 val known = state.cards.asSequence().mapTo(HashSet()) { "${it.kind}:${it.id}" }
-                state.cards = state.cards + page.cards.filter { known.add("${it.kind}:${it.id}") }
+                val combined = state.cards + page.cards.filter { known.add("${it.kind}:${it.id}") }
+                state.cards = if (target == Section.LIVE) sort(combined, Section.LIVE) else combined
                 if (section == target && currentCategory == categoryId) catalogAdapter.submit(state.cards)
             }
         }
@@ -792,7 +824,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hideCategory(category: XtreamCategory) {
-        if (category.id == "all" || category.id == "favorites") return
+        if (category.id == "all" || category.id == "favorites" || category.id == CATEGORY_MENU_ID) return
         val playlist = store.selected() ?: return
         AlertDialog.Builder(this).setTitle("Hide ${category.name}?")
             .setMessage("You can restore hidden categories from Settings.")
@@ -1730,10 +1762,7 @@ class MainActivity : AppCompatActivity() {
         }
         val playlistId = store.selected()?.id
         return if (target == Section.LIVE && playlistId != null) {
-            val statuses = ordered.associate { it.id to streamAvailability.status(playlistId, it.id) }
-            ordered.sortedWith(
-                compareBy<CatalogCard> { statuses.getValue(it.id).rank }
-            )
+            prioritizeLiveCards(ordered) { streamAvailability.status(playlistId, it.id) }
         } else ordered
     }
 
@@ -1816,7 +1845,6 @@ class MainActivity : AppCompatActivity() {
             }
             val ranked = withContext(Dispatchers.Default) {
                 displayedCategories(
-                    playlist.id,
                     providerCategories,
                     store.hiddenCategories(playlist.id),
                     allCards,
@@ -1836,7 +1864,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun displayedCategories(
-        playlistId: String,
         providerCategories: List<XtreamCategory>,
         manuallyHidden: Set<String>,
         allLiveCards: List<CatalogCard>,
@@ -1844,43 +1871,13 @@ class MainActivity : AppCompatActivity() {
         forSection: Section = section,
     ): List<XtreamCategory> {
         val liveCardsByCategory = if (forSection == Section.LIVE) allLiveCards.groupBy { it.categoryId } else emptyMap()
-        val visibleProviderCategories = providerCategories.filterNot { it.id in manuallyHidden }.filter { category ->
+        val visibleProviderCategories = providerCategories.filter { category ->
             // Only hide categories that are genuinely empty in a complete catalog. Health signals
-            // rank categories; they never erase a category or block the user from retrying content.
+            // never erase a category or block the user from retrying content.
             if (forSection != Section.LIVE || !catalogComplete) true
             else liveCardsByCategory[category.id].orEmpty().isNotEmpty()
-        }.let { visible ->
-            if (forSection != Section.LIVE) visible else {
-                val quality = liveCardsByCategory.mapValues { (_, cards) -> categoryQuality(playlistId, cards) }
-                visible.withIndex().sortedWith(
-                compareBy<IndexedValue<XtreamCategory>> { indexed ->
-                    quality[indexed.value.id]?.healthRank ?: 3
-                }.thenBy { indexed ->
-                    quality[indexed.value.id]?.failureWeight ?: Int.MAX_VALUE
-                }.thenBy { it.index }
-                ).map { it.value }
-            }
         }
-        return listOf(XtreamCategory("all", "All"), XtreamCategory("favorites", "Favorites")) + visibleProviderCategories
-    }
-
-    private fun categoryQuality(playlistId: String, cards: List<CatalogCard>): CategoryQuality {
-        val statuses = cards.map { streamAvailability.status(playlistId, it.id) }
-        val healthRank = when {
-            StreamAvailability.Status.HEALTHY in statuses -> 0
-            StreamAvailability.Status.UNKNOWN in statuses -> 1
-            StreamAvailability.Status.TEMPORARILY_FAILED in statuses -> 2
-            else -> 3
-        }
-        val weight = statuses.fold(0) { total, status -> total +
-            when (status) {
-                StreamAvailability.Status.REPEATEDLY_FAILED -> 2
-                StreamAvailability.Status.TEMPORARILY_FAILED -> 1
-                else -> 0
-            }
-        }
-        val failureWeight = if (statuses.isEmpty()) Int.MAX_VALUE else weight * 100 / (statuses.size * 2)
-        return CategoryQuality(healthRank, failureWeight)
+        return displayedCategoryList(visibleProviderCategories, manuallyHidden)
     }
 
     private fun XtreamItem.toCard(kind: String, favorites: Set<String>): CatalogCard {
@@ -1991,8 +1988,6 @@ class MainActivity : AppCompatActivity() {
     private enum class Section(val apiKind: String, val cardKind: String, val displayName: String) {
         HOME("", "", "Home"), LIVE("live", "live", "Live TV"), MOVIES("vod", "movie", "Movies"), SERIES("series", "series", "Series"), SEARCH("", "", "Search")
     }
-
-    private data class CategoryQuality(val healthRank: Int, val failureWeight: Int)
 
     private data class SeriesDetailState(
         val card: CatalogCard,

@@ -17,6 +17,8 @@ Clean-room native Android IPTV client for phones, tablets, Android TV, and Fire 
 - Media3 internal player plus VLC, MX Player, and system chooser handoff
 - Room-backed cached-first catalogs and local cross-catalog search
 - Playlist-scoped favorites, hidden categories, sorting, and parental PIN
+- Live-only reconnect handling for temporary stalls and unexpected stream endings
+- Two-row category navigation, full category menu, and UK/Ireland category priority
 - Phone/tablet responsive grid and Android TV/Fire TV launcher + D-pad focus
 
 Device-code activation UI is available directly from login. Production provisioning
@@ -42,7 +44,7 @@ Firebase configuration is present. To enable it:
 3. Place its `google-services.json` at `app/google-services.json` before building the release.
 
 The configuration file is intentionally ignored by Git. Supply it to release builds through the
-local build environment or CI secrets. Users are asked to opt in before collection starts and can
-change their choice under Settings. Collected events cover screens, content types, search usage,
+local build environment or CI secrets. Collection defaults on when Firebase is configured and users
+can disable it under Settings. Collected events cover screens, content types, search usage,
 login outcomes, category selection, and playback requests. Credentials, provider URLs, playlist
 or content identifiers, titles, and search terms are never added to analytics events.

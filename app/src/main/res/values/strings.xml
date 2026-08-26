@@ -49,4 +49,6 @@
     <string name="activation_waiting">Keep this screen open while your provider completes setup.</string>
     <string name="activation_unavailable">Remote provisioning is awaiting the Crown activation service connection. Your device key and QR code are ready to share.</string>
     <string name="options_for">Options for %1$s</string>
+    <string name="open_all_categories">Open all categories</string>
+    <string name="all_categories">All categories</string>
 </resources>

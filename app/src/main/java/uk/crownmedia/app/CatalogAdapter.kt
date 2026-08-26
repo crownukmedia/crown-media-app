@@ -5,6 +5,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.text.TextUtils
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.AsyncListDiffer
@@ -68,15 +69,30 @@ class CategoryAdapter(
     inner class Holder(private val binding: ItemCategoryBinding) : RecyclerView.ViewHolder(binding.root) {
         fun bind(row: Row) {
             val value = row.category
-            binding.categoryName.text = value.name
+            val isMenu = value.id == CATEGORY_MENU_ID
+            binding.categoryName.text = if (isMenu) "" else value.name
+            binding.categoryName.ellipsize = TextUtils.TruncateAt.END
+            binding.categoryName.maxLines = 1
+            binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
+            binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(
+                if (isMenu) R.drawable.ic_categories_menu else 0,
+                0,
+                0,
+                0,
+            )
             binding.root.isSelected = row.selected
-            binding.categoryActions.isVisible = binding.root.context.deviceClass() != DeviceClass.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
+            binding.root.contentDescription = if (isMenu) {
+                binding.root.context.getString(R.string.open_all_categories)
+            } else {
+                value.name
+            }
+            binding.categoryActions.isVisible = binding.root.context.deviceClass() != DeviceClass.TELEVISION && value.id != "all" && value.id != "favorites" && !isMenu && !value.id.startsWith("season:")
             binding.categoryActions.contentDescription = binding.root.context.getString(R.string.options_for, value.name)
             binding.categoryActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
             binding.root.setOnLongClickListener { onLongClick(value); true }
             binding.root.setOnKeyListener { _, keyCode, event ->
-                if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
+                if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.id !in setOf("all", "favorites", CATEGORY_MENU_ID) && !value.id.startsWith("season:")) {
                     onLongClick(value)
                     true
                 } else false

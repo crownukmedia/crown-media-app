@@ -102,6 +102,9 @@ class TvUiRegressionTest {
         assertEquals("Search live channels", search.hint.toString())
         assertEquals(R.id.category_list, search.nextFocusDownId)
         assertEquals(R.id.search_box, categories.nextFocusUpId)
+        assertEquals(2, (categories.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as GridLayoutManager).orientation)
+        assertEquals(dp(116), categories.layoutParams.height)
         val scaledDensity = activity.resources.displayMetrics.density * activity.resources.configuration.fontScale
         assertEquals(14f, navHome.textSize / scaledDensity, 0.1f)
     }

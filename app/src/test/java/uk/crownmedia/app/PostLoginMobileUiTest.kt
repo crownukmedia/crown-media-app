@@ -8,6 +8,8 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.EditText
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -126,10 +128,13 @@ class PostLoginMobileUiTest {
     @Test
     fun searchAndCategoryRowsHaveIndependentVerticalSpace() {
         val density = activity.resources.displayMetrics.density
-        val categories = activity.findViewById<View>(R.id.category_list)
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
         val state = activity.findViewById<View>(R.id.state_panel)
 
         assertEquals((8 * density).toInt(), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
+        assertEquals((112 * density).toInt(), categories.layoutParams.height)
+        assertEquals(2, (categories.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as GridLayoutManager).orientation)
         assertEquals(R.id.category_list, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
     }
 

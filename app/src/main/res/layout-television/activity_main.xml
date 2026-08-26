@@ -34,7 +34,7 @@
         <ImageButton android:id="@+id/action_more" style="@style/Widget.Crown.IconButton" android:contentDescription="@string/more_options" android:src="@drawable/ic_more_vert" android:visibility="gone" />
     </LinearLayout>
 
-    <androidx.recyclerview.widget.RecyclerView android:id="@+id/category_list" android:layout_width="0dp" android:layout_height="56dp" android:layout_marginTop="8dp" android:clipToPadding="false" android:paddingHorizontal="24dp" android:paddingVertical="5dp"
+    <androidx.recyclerview.widget.RecyclerView android:id="@+id/category_list" android:layout_width="0dp" android:layout_height="116dp" android:layout_marginTop="8dp" android:clipToPadding="false" android:paddingHorizontal="24dp" android:paddingVertical="4dp"
         app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toEndOf="@id/side_nav" app:layout_constraintTop_toBottomOf="@id/top_bar" />
     <androidx.recyclerview.widget.RecyclerView android:id="@+id/content_grid" android:layout_width="0dp" android:layout_height="0dp" android:clipToPadding="false" android:paddingStart="24dp" android:paddingTop="16dp" android:paddingEnd="40dp" android:paddingBottom="28dp"
         app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toEndOf="@id/side_nav" app:layout_constraintTop_toBottomOf="@id/category_list" />
