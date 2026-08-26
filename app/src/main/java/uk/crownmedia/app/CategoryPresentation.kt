@@ -4,12 +4,9 @@ import uk.crownmedia.data.xtream.XtreamCategory
 import uk.crownmedia.core.design.StreamAvailability
 import java.util.Locale
 
-internal const val CATEGORY_MENU_ID = "__category_menu__"
-
 internal fun displayedCategoryList(
     providerCategories: List<XtreamCategory>,
     hiddenIds: Set<String> = emptySet(),
-    includeMenu: Boolean = true,
     includeFavorites: Boolean = true,
 ): List<XtreamCategory> {
     val seenIds = mutableSetOf<String>()
@@ -32,7 +29,6 @@ internal fun displayedCategoryList(
         .toList()
 
     return buildList {
-        if (includeMenu) add(XtreamCategory(CATEGORY_MENU_ID, "Categories"))
         add(XtreamCategory("all", "All"))
         if (includeFavorites) add(XtreamCategory("favorites", "Favorites"))
         addAll(provider)

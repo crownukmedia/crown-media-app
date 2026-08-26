@@ -9,8 +9,10 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.EditText
+import android.widget.TextView
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import org.junit.After
@@ -91,20 +93,22 @@ class TvUiRegressionTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        val menu = activity.findViewById<View>(R.id.category_menu_button)
         val navHome = activity.findViewById<Button>(R.id.nav_home)
 
         assertEquals(5, (grid.layoutManager as GridLayoutManager).spanCount)
         assertEquals(R.id.nav_live, grid.nextFocusLeftId)
-        assertEquals(R.id.nav_live, categories.nextFocusLeftId)
+        assertEquals(R.id.category_menu_button, categories.nextFocusLeftId)
+        assertEquals(R.id.nav_live, menu.nextFocusLeftId)
+        assertEquals(R.id.category_list, menu.nextFocusRightId)
         assertEquals(R.id.content_grid, categories.nextFocusDownId)
         assertEquals(R.id.search_box, navHome.nextFocusRightId)
         val search = activity.findViewById<EditText>(R.id.search_box)
         assertEquals("Search live channels", search.hint.toString())
-        assertEquals(R.id.category_list, search.nextFocusDownId)
+        assertEquals(R.id.category_menu_button, search.nextFocusDownId)
         assertEquals(R.id.search_box, categories.nextFocusUpId)
-        assertEquals(2, (categories.layoutManager as GridLayoutManager).spanCount)
-        assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as GridLayoutManager).orientation)
-        assertEquals(dp(116), categories.layoutParams.height)
+        assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as LinearLayoutManager).orientation)
+        assertEquals(dp(62), activity.findViewById<View>(R.id.category_bar).layoutParams.height)
         val scaledDensity = activity.resources.displayMetrics.density * activity.resources.configuration.fontScale
         assertEquals(14f, navHome.textSize / scaledDensity, 0.1f)
     }
@@ -119,15 +123,20 @@ class TvUiRegressionTest {
         assertEquals(dp(5), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals(dp(46), category.layoutParams.height)
+        assertEquals(ViewGroup.LayoutParams.WRAP_CONTENT, category.layoutParams.width)
+        assertEquals(0, category.minimumWidth)
+        assertEquals(dp(14), category.findViewById<TextView>(R.id.category_name).paddingStart)
+        assertEquals(dp(14), category.findViewById<TextView>(R.id.category_name).paddingEnd)
+        assertEquals(dp(48), activity.findViewById<View>(R.id.category_menu_button).layoutParams.width)
     }
 
     @Test
     fun tvSearchCategoriesAndStateUseNonOverlappingVerticalAnchors() {
-        val categories = activity.findViewById<View>(R.id.category_list)
+        val categories = activity.findViewById<View>(R.id.category_bar)
         val state = activity.findViewById<View>(R.id.state_panel)
 
-        assertEquals(dp(8), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
-        assertEquals(R.id.category_list, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
+        assertEquals(dp(4), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
+        assertEquals(R.id.category_bar, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
     }
 
     @Test

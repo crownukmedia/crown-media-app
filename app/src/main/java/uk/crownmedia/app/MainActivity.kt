@@ -32,6 +32,7 @@ import androidx.core.view.doOnLayout
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import com.google.zxing.BarcodeFormat
@@ -155,10 +156,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun configureLists() {
         categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory)
-        binding.categoryList.layoutManager = GridLayoutManager(this, 2, GridLayoutManager.HORIZONTAL, false).apply {
+        binding.categoryList.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false).apply {
             initialPrefetchItemCount = 12
         }
         binding.categoryList.adapter = categoriesAdapter
+        binding.categoryMenuButton.setOnClickListener { showCategoryMenu() }
         catalogAdapter = CatalogAdapter(::openCard, ::cardOptions)
         val television = deviceClass() == DeviceClass.TELEVISION
         val initialColumns = when {
@@ -345,7 +347,7 @@ class MainActivity : AppCompatActivity() {
         binding.actionMore.isVisible = !television && value != Section.SEARCH
         binding.actionReload.isVisible = !television
         binding.actionPlaylist.isVisible = !television
-        binding.categoryList.isVisible = value != Section.HOME && value != Section.SEARCH
+        setCategoryNavigationVisible(value != Section.HOME && value != Section.SEARCH)
         binding.screenTitle.text = when (value) {
             Section.HOME -> "Welcome to Crown Media"
             Section.LIVE -> "Live TV"
@@ -405,13 +407,17 @@ class MainActivity : AppCompatActivity() {
         listOf(binding.navHome, binding.navLive, binding.navMovies, binding.navSeries, binding.navSearch).forEach {
             it.nextFocusRightId = primaryTarget.id
         }
-        binding.categoryList.nextFocusLeftId = activeNav.id
+        binding.categoryMenuButton.nextFocusLeftId = activeNav.id
+        binding.categoryMenuButton.nextFocusRightId = binding.categoryList.id
+        binding.categoryMenuButton.nextFocusUpId = binding.searchBox.id
+        binding.categoryMenuButton.nextFocusDownId = binding.contentGrid.id
+        binding.categoryList.nextFocusLeftId = binding.categoryMenuButton.id
         binding.categoryList.nextFocusUpId = binding.searchBox.id
         binding.categoryList.nextFocusDownId = binding.contentGrid.id
         binding.contentGrid.nextFocusLeftId = activeNav.id
         binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.topBar.id
         binding.searchBox.nextFocusLeftId = activeNav.id
-        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.contentGrid.id
+        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryMenuButton.id else binding.contentGrid.id
         binding.actionSearchClear.nextFocusLeftId = binding.searchBox.id
         binding.actionSearchClear.nextFocusDownId = binding.contentGrid.id
         binding.stateAction.nextFocusLeftId = activeNav.id
@@ -475,16 +481,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectCategory(category: XtreamCategory) {
-        if (category.id == CATEGORY_MENU_ID) {
-            showCategoryMenu()
-            return
-        }
         if (category.id.startsWith("season:")) {
             selectSeriesSeason(category.id.substringAfter(':').toIntOrNull() ?: return)
             return
         }
         if (requiresPin(category.name)) { verifyPin { selectCategory(category) }; return }
-        if (category.id == currentCategory) return
+        if (category.id == currentCategory) {
+            scrollCategoryIntoView(category.id)
+            return
+        }
         contentRequestGeneration++
         val state = sectionState(section)
         state.searchQuery = ""
@@ -498,17 +503,21 @@ class MainActivity : AppCompatActivity() {
         }
         currentCategory = category.id
         categoriesAdapter.submit(state.categories, currentCategory) {
-            state.categories.indexOfFirst { it.id == currentCategory }.takeIf { it >= 0 }?.let {
-                binding.categoryList.smoothScrollToPosition(it)
-            }
+            scrollCategoryIntoView(currentCategory)
         }
         analytics.trackCategorySelected(section.name.lowercase())
         load()
     }
 
+    private fun scrollCategoryIntoView(categoryId: String) {
+        sectionState(section).categories.indexOfFirst { it.id == categoryId }
+            .takeIf { it >= 0 }
+            ?.let(binding.categoryList::smoothScrollToPosition)
+    }
+
     private fun showCategoryMenu() {
         if (section !in PAGED_SECTIONS || nestedSeries != null || isFinishing) return
-        val choices = sectionState(section).categories.filterNot { it.id == CATEGORY_MENU_ID }
+        val choices = sectionState(section).categories
         if (choices.isEmpty()) {
             Toast.makeText(this, "No categories available", Toast.LENGTH_SHORT).show()
             return
@@ -824,7 +833,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hideCategory(category: XtreamCategory) {
-        if (category.id == "all" || category.id == "favorites" || category.id == CATEGORY_MENU_ID) return
+        if (category.id == "all" || category.id == "favorites") return
         val playlist = store.selected() ?: return
         AlertDialog.Builder(this).setTitle("Hide ${category.name}?")
             .setMessage("You can restore hidden categories from Settings.")
@@ -1057,7 +1066,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.screenTitle.text = nested.details.name
         binding.screenSubtitle.text = listOfNotNull(nested.details.genre, "Season ${nested.season}", "Back returns to Series").joinToString("  •  ")
-        binding.categoryList.isVisible = true
+        setCategoryNavigationVisible(true)
         categoriesAdapter.submit(seasons, "season:${nested.season}")
         hideState()
         catalogAdapter.submit(episodes) { if (deviceClass() == DeviceClass.TELEVISION && episodes.isNotEmpty()) restoreCardFocus(null) }
@@ -1404,7 +1413,7 @@ class MainActivity : AppCompatActivity() {
         binding.actionMore.isVisible = false
         binding.sideNav.isVisible = false
         binding.searchRow.isVisible = false
-        binding.categoryList.isVisible = false
+        setCategoryNavigationVisible(false)
         binding.contentGrid.isVisible = false
         binding.statePanel.isVisible = false
         root.isVisible = true
@@ -1912,15 +1921,20 @@ class MainActivity : AppCompatActivity() {
         binding.stateAction.isVisible = !loading && action
         binding.stateAction.text = actionLabel
         binding.contentGrid.isVisible = false
-        binding.categoryList.isVisible = keepCategories && section != Section.HOME && section != Section.SEARCH
+        setCategoryNavigationVisible(keepCategories && section != Section.HOME && section != Section.SEARCH)
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         if (action && deviceClass() == DeviceClass.TELEVISION) binding.stateAction.post { binding.stateAction.requestFocus() }
     }
     private fun hideState() {
         binding.statePanel.isVisible = false
         binding.contentGrid.isVisible = true
-        binding.categoryList.isVisible = section != Section.HOME && section != Section.SEARCH
+        setCategoryNavigationVisible(section != Section.HOME && section != Section.SEARCH)
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+    }
+
+    private fun setCategoryNavigationVisible(visible: Boolean) {
+        binding.categoryBar.isVisible = visible
+        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS && nestedSeries == null
     }
     private fun showFailure(error: Throwable) {
         if (error is CancellationException) return

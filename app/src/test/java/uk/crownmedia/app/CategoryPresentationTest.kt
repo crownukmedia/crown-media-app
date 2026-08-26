@@ -20,7 +20,7 @@ class CategoryPresentationTest {
             ),
         )
 
-        assertEquals(listOf(CATEGORY_MENU_ID, "all", "favorites", "10", "12"), result.map { it.id })
+        assertEquals(listOf("all", "favorites", "10", "12"), result.map { it.id })
         assertEquals("Uncategorized", result.last().name)
     }
 
@@ -37,7 +37,7 @@ class CategoryPresentationTest {
             ),
         )
 
-        assertEquals(listOf("3", "4", "2", "5", "1", "6"), result.drop(3).map { it.id })
+        assertEquals(listOf("3", "4", "2", "5", "1", "6"), result.drop(2).map { it.id })
     }
 
     @Test
