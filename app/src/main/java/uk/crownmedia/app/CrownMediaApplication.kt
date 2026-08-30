@@ -10,6 +10,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 class CrownMediaApplication : Application(), ImageLoaderFactory {
+    lateinit var usageAnalytics: UsageAnalytics
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        usageAnalytics = UsageAnalytics.create(this)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
         .dispatcher(Dispatchers.IO.limitedParallelism(4))

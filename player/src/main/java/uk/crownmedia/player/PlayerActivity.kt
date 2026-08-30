@@ -52,15 +52,28 @@ class PlayerActivity : AppCompatActivity() {
     private var failureRecorded = false
     private var successRecorded = false
     private var failureStage = "created"
-    private var automaticRetries = 0
     private var fallbackAttempted = false
     private var currentUrl = ""
+    private var isLive = false
+    private var hasReachedReady = false
+    private var userPaused = false
+    private lateinit var recoveryPolicy: PlaybackRecoveryPolicy
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val startupTimeout = Runnable {
         logFailure("startup_timeout", null)
-        if (switchToFallbackUrl()) retryAfterTransientFailure(countAttempt = false)
-        else if (automaticRetries < MAX_AUTOMATIC_RETRIES) retryAfterTransientFailure()
-        else showUnavailable(getString(R.string.playback_timeout_detail))
+        if (!attemptRecovery(recoverable = true, allowFallback = true)) {
+            showUnavailable(getString(R.string.playback_timeout_detail))
+        }
+    }
+    private val rebufferTimeout = Runnable {
+        if (!isLive || userPaused || player?.playbackState != Player.STATE_BUFFERING) return@Runnable
+        logFailure("live_rebuffer_timeout", null)
+        if (!attemptRecovery(recoverable = true, allowFallback = true)) {
+            showUnavailable(getString(R.string.playback_timeout_detail))
+        }
+    }
+    private val stablePlayback = Runnable {
+        if (isLive && player?.isPlaying == true) recoveryPolicy.onStablePlayback()
     }
     private val automaticRetry = Runnable {
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
@@ -90,9 +103,10 @@ class PlayerActivity : AppCompatActivity() {
         playerTitle.text = intent.getStringExtra(EXTRA_TITLE).orEmpty()
         resumeEnabled = intent.getBooleanExtra(EXTRA_RESUME, false)
         currentUrl = intent.getStringExtra(EXTRA_URL).orEmpty()
-        val live = intent.getBooleanExtra(EXTRA_LIVE, false)
-        playbackLoadingMessage.setText(if (live) R.string.opening_channel else R.string.opening_video)
-        playbackBack.setText(if (live) R.string.back_to_channels else R.string.back_to_content)
+        isLive = intent.getBooleanExtra(EXTRA_LIVE, false)
+        recoveryPolicy = PlaybackRecoveryPolicy(isLive)
+        playbackLoadingMessage.setText(if (isLive) R.string.opening_channel else R.string.opening_video)
+        playbackBack.setText(if (isLive) R.string.back_to_channels else R.string.back_to_content)
         contentKey = hash(intent.getStringExtra(EXTRA_URL).orEmpty())
     }
 
@@ -102,6 +116,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun initialize() {
         if (player != null) return
         val url = currentUrl.takeIf(String::isNotBlank) ?: run { finish(); return }
+        hasReachedReady = false
         failureStage = "initializing"
         val buffer = intent.getStringExtra(EXTRA_BUFFER) ?: "normal"
         val loadControl = when (buffer) {
@@ -136,16 +151,16 @@ class PlayerActivity : AppCompatActivity() {
         instance.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 logFailure("player_error", error)
-                if (switchToFallbackUrl()) {
-                    retryAfterTransientFailure(countAttempt = false)
-                } else if (error.errorCode in 2000..3999 && automaticRetries < MAX_AUTOMATIC_RETRIES) {
-                    retryAfterTransientFailure()
-                } else {
+                if (!attemptRecovery(error.errorCode in 2000..3999, allowFallback = true)) {
                     showUnavailable(getString(R.string.playback_error_detail))
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) playerTitle.animate().alpha(0f).setStartDelay(1800).setDuration(300).start()
+                timeoutHandler.removeCallbacks(stablePlayback)
+                if (isPlaying) {
+                    playerTitle.animate().alpha(0f).setStartDelay(1800).setDuration(300).start()
+                    if (isLive) timeoutHandler.postDelayed(stablePlayback, STABLE_PLAYBACK_RESET_MS)
+                }
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 failureStage = when (playbackState) {
@@ -154,12 +169,30 @@ class PlayerActivity : AppCompatActivity() {
                     Player.STATE_ENDED -> "ended"
                     else -> failureStage
                 }
-                if (playbackState == Player.STATE_READY) {
-                    timeoutHandler.removeCallbacks(startupTimeout)
-                    timeoutHandler.removeCallbacks(automaticRetry)
-                    playbackLoading.isVisible = false
-                    playbackError.isVisible = false
-                    recordSuccess()
+                when (playbackState) {
+                    Player.STATE_BUFFERING -> {
+                        if (isLive && hasReachedReady && instance.playWhenReady && !userPaused) {
+                            playbackLoadingMessage.setText(R.string.reconnecting_channel)
+                            playbackLoading.isVisible = true
+                            timeoutHandler.removeCallbacks(rebufferTimeout)
+                            timeoutHandler.postDelayed(rebufferTimeout, LIVE_REBUFFER_TIMEOUT_MS)
+                        }
+                    }
+                    Player.STATE_READY -> {
+                        hasReachedReady = true
+                        timeoutHandler.removeCallbacks(startupTimeout)
+                        timeoutHandler.removeCallbacks(rebufferTimeout)
+                        timeoutHandler.removeCallbacks(automaticRetry)
+                        playbackLoading.isVisible = false
+                        playbackError.isVisible = false
+                        recordSuccess()
+                    }
+                    Player.STATE_ENDED -> if (isLive && !userPaused) {
+                        logFailure("live_stream_ended", null)
+                        if (!attemptRecovery(recoverable = true, allowFallback = true)) {
+                            showUnavailable(getString(R.string.playback_error_detail))
+                        }
+                    }
                 }
             }
         })
@@ -171,8 +204,10 @@ class PlayerActivity : AppCompatActivity() {
             release()
             failureRecorded = false
             successRecorded = false
-            automaticRetries = 0
             fallbackAttempted = false
+            hasReachedReady = false
+            userPaused = false
+            recoveryPolicy.onStablePlayback()
             currentUrl = intent.getStringExtra(EXTRA_URL).orEmpty()
             initialize()
         }
@@ -180,19 +215,28 @@ class PlayerActivity : AppCompatActivity() {
         playbackLoading.isVisible = true
         failureStage = "preparing"
         instance.prepare()
-        instance.playWhenReady = true
+        instance.playWhenReady = !userPaused
         timeoutHandler.removeCallbacks(startupTimeout)
         timeoutHandler.postDelayed(startupTimeout, STARTUP_TIMEOUT_MS)
     }
 
-    private fun retryAfterTransientFailure(countAttempt: Boolean = true) {
-        if (countAttempt) automaticRetries++
+    private fun attemptRecovery(recoverable: Boolean, allowFallback: Boolean): Boolean {
+        val retryDelay = if (allowFallback && switchToFallbackUrl()) {
+            0L
+        } else {
+            recoveryPolicy.nextRetryDelayMillis(recoverable) ?: return false
+        }
         failureStage = "retry_wait"
         timeoutHandler.removeCallbacks(startupTimeout)
+        timeoutHandler.removeCallbacks(rebufferTimeout)
+        timeoutHandler.removeCallbacks(stablePlayback)
         player?.stop()
         playbackError.isVisible = false
         playbackLoading.isVisible = true
-        timeoutHandler.postDelayed(automaticRetry, AUTOMATIC_RETRY_DELAY_MS)
+        playbackLoadingMessage.setText(if (isLive) R.string.reconnecting_channel else R.string.opening_video)
+        timeoutHandler.removeCallbacks(automaticRetry)
+        timeoutHandler.postDelayed(automaticRetry, retryDelay)
+        return true
     }
 
     private fun switchToFallbackUrl(): Boolean {
@@ -206,6 +250,9 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun showUnavailable(detail: String) {
         timeoutHandler.removeCallbacks(startupTimeout)
+        timeoutHandler.removeCallbacks(rebufferTimeout)
+        timeoutHandler.removeCallbacks(stablePlayback)
+        timeoutHandler.removeCallbacks(automaticRetry)
         player?.stop()
         playbackLoading.isVisible = false
         playbackErrorMessage.text = detail
@@ -271,6 +318,8 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun release() {
         timeoutHandler.removeCallbacks(startupTimeout)
+        timeoutHandler.removeCallbacks(rebufferTimeout)
+        timeoutHandler.removeCallbacks(stablePlayback)
         timeoutHandler.removeCallbacks(automaticRetry)
         player?.let { current ->
             if (resumeEnabled && current.duration > 0) {
@@ -282,22 +331,37 @@ class PlayerActivity : AppCompatActivity() {
             }
             current.release()
         }
+        playerView.player = null
         player = null
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (playbackError.isVisible) return super.dispatchKeyEvent(event)
-        if (event.action == KeyEvent.ACTION_DOWN) when (event.keyCode) {
+        when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                player?.let { if (it.isPlaying) it.pause() else it.play() }; return true
+                if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) {
+                    player?.let { activePlayer ->
+                        userPaused = activePlayer.playWhenReady
+                        if (userPaused) {
+                            timeoutHandler.removeCallbacks(rebufferTimeout)
+                            playbackLoading.isVisible = false
+                            activePlayer.pause()
+                        } else {
+                            activePlayer.play()
+                        }
+                    }
+                }
+                return true
             }
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                if (intent.getBooleanExtra(EXTRA_LIVE, false).not()) player?.seekBack(); return true
+                if (event.action == KeyEvent.ACTION_DOWN && !isLive) player?.seekBack()
+                return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                if (intent.getBooleanExtra(EXTRA_LIVE, false).not()) player?.seekForward(); return true
+                if (event.action == KeyEvent.ACTION_DOWN && !isLive) player?.seekForward()
+                return true
             }
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> playerView.showController()
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> if (event.action == KeyEvent.ACTION_DOWN) playerView.showController()
         }
         return super.dispatchKeyEvent(event)
     }
@@ -315,8 +379,8 @@ class PlayerActivity : AppCompatActivity() {
         private const val PLAYBACK_USER_AGENT = "CrownMedia/1.0"
         private const val TAG = "CrownPlayer"
         private const val STARTUP_TIMEOUT_MS = 25_000L
-        private const val MAX_AUTOMATIC_RETRIES = 1
-        private const val AUTOMATIC_RETRY_DELAY_MS = 1_000L
+        private const val LIVE_REBUFFER_TIMEOUT_MS = 20_000L
+        private const val STABLE_PLAYBACK_RESET_MS = 30_000L
         private val PLAYBACK_HTTP_CLIENT = OkHttpClient.Builder()
             .dispatcher(Dispatcher().apply {
                 maxRequests = 8

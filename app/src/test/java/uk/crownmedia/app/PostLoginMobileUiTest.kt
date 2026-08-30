@@ -4,10 +4,13 @@ import android.content.res.Configuration
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.EditText
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -126,11 +129,35 @@ class PostLoginMobileUiTest {
     @Test
     fun searchAndCategoryRowsHaveIndependentVerticalSpace() {
         val density = activity.resources.displayMetrics.density
-        val categories = activity.findViewById<View>(R.id.category_list)
+        val categoryBar = activity.findViewById<ViewGroup>(R.id.category_bar)
+        val menu = activity.findViewById<View>(R.id.category_menu_button)
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
         val state = activity.findViewById<View>(R.id.state_panel)
 
-        assertEquals((8 * density).toInt(), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
-        assertEquals(R.id.category_list, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
+        assertEquals((4 * density).toInt(), (categoryBar.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
+        assertEquals((56 * density).toInt(), categoryBar.layoutParams.height)
+        assertEquals(categoryBar, menu.parent)
+        assertEquals(categoryBar, categories.parent)
+        assertEquals(0, categoryBar.indexOfChild(menu))
+        assertEquals(1, categoryBar.indexOfChild(categories))
+        assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as LinearLayoutManager).orientation)
+        assertEquals(R.id.category_bar, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
+    }
+
+    @Test
+    fun mobileCategoryButtonsUseCompactContentBasedSizing() {
+        val density = activity.resources.displayMetrics.density
+        val category = activity.layoutInflater.inflate(R.layout.item_category, FrameLayout(activity), false) as ViewGroup
+        val name = category.findViewById<TextView>(R.id.category_name)
+        val actions = category.findViewById<View>(R.id.category_actions)
+        val menu = activity.findViewById<View>(R.id.category_menu_button)
+
+        assertEquals(ViewGroup.LayoutParams.WRAP_CONTENT, category.layoutParams.width)
+        assertEquals(0, category.minimumWidth)
+        assertEquals((12 * density).toInt(), name.paddingStart)
+        assertEquals((12 * density).toInt(), name.paddingEnd)
+        assertEquals((48 * density).toInt(), actions.layoutParams.width)
+        assertEquals((48 * density).toInt(), menu.layoutParams.width)
     }
 
     @Test

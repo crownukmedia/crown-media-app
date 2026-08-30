@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var store: AppStore
     private lateinit var cache: CatalogCache
     private lateinit var streamAvailability: StreamAvailability
+    private lateinit var analytics: UsageAnalytics
     private val api = XtreamClient()
     private lateinit var categoriesAdapter: CategoryAdapter
     private lateinit var catalogAdapter: CatalogAdapter
@@ -110,12 +111,16 @@ class MainActivity : AppCompatActivity() {
     private var masterSearchQuery = ""
     private var updatingSearchBox = false
     private var contentRequestGeneration = 0L
+    private var lastTrackedSearch: Int? = null
+    private var categoryMenuDialog: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        analytics = (application as CrownMediaApplication).usageAnalytics
+        analytics.setDeviceClass(deviceClass())
         store = storeFactory(this)
         cache = CatalogCache(CrownDatabase.get(this).catalogDao())
         streamAvailability = StreamAvailability(this)
@@ -151,8 +156,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun configureLists() {
         categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory)
-        binding.categoryList.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        binding.categoryList.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false).apply {
+            initialPrefetchItemCount = 12
+        }
         binding.categoryList.adapter = categoriesAdapter
+        binding.categoryMenuButton.setOnClickListener { showCategoryMenu() }
         catalogAdapter = CatalogAdapter(::openCard, ::cardOptions)
         val television = deviceClass() == DeviceClass.TELEVISION
         val initialColumns = when {
@@ -263,6 +271,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun runActiveSearch(query: String) {
+        val normalized = query.trim()
+        if (normalized.length >= MIN_SEARCH_LENGTH) {
+            val signature = 31 * section.hashCode() + normalized.hashCode()
+            if (signature != lastTrackedSearch) {
+                lastTrackedSearch = signature
+                analytics.trackSearch(section.name.lowercase())
+            }
+        }
         if (section == Section.SEARCH) search(query)
         else if (section in PAGED_SECTIONS) searchCategory(section, query)
     }
@@ -331,7 +347,7 @@ class MainActivity : AppCompatActivity() {
         binding.actionMore.isVisible = !television && value != Section.SEARCH
         binding.actionReload.isVisible = !television
         binding.actionPlaylist.isVisible = !television
-        binding.categoryList.isVisible = value != Section.HOME && value != Section.SEARCH
+        setCategoryNavigationVisible(value != Section.HOME && value != Section.SEARCH)
         binding.screenTitle.text = when (value) {
             Section.HOME -> "Welcome to Crown Media"
             Section.LIVE -> "Live TV"
@@ -366,6 +382,7 @@ class MainActivity : AppCompatActivity() {
         if (enteringAuthenticatedShell && deviceClass() == DeviceClass.TELEVISION) {
             navigationView(value).post { navigationView(value).requestFocus() }
         }
+        analytics.trackScreen(value.name.lowercase())
     }
 
     private fun updateSelectedNavigation(value: Section) {
@@ -390,13 +407,17 @@ class MainActivity : AppCompatActivity() {
         listOf(binding.navHome, binding.navLive, binding.navMovies, binding.navSeries, binding.navSearch).forEach {
             it.nextFocusRightId = primaryTarget.id
         }
-        binding.categoryList.nextFocusLeftId = activeNav.id
+        binding.categoryMenuButton.nextFocusLeftId = activeNav.id
+        binding.categoryMenuButton.nextFocusRightId = binding.categoryList.id
+        binding.categoryMenuButton.nextFocusUpId = binding.searchBox.id
+        binding.categoryMenuButton.nextFocusDownId = binding.contentGrid.id
+        binding.categoryList.nextFocusLeftId = binding.categoryMenuButton.id
         binding.categoryList.nextFocusUpId = binding.searchBox.id
         binding.categoryList.nextFocusDownId = binding.contentGrid.id
         binding.contentGrid.nextFocusLeftId = activeNav.id
         binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.topBar.id
         binding.searchBox.nextFocusLeftId = activeNav.id
-        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.contentGrid.id
+        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryMenuButton.id else binding.contentGrid.id
         binding.actionSearchClear.nextFocusLeftId = binding.searchBox.id
         binding.actionSearchClear.nextFocusDownId = binding.contentGrid.id
         binding.stateAction.nextFocusLeftId = activeNav.id
@@ -465,7 +486,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (requiresPin(category.name)) { verifyPin { selectCategory(category) }; return }
-        if (category.id == currentCategory) return
+        if (category.id == currentCategory) {
+            scrollCategoryIntoView(category.id)
+            return
+        }
         contentRequestGeneration++
         val state = sectionState(section)
         state.searchQuery = ""
@@ -478,8 +502,40 @@ class MainActivity : AppCompatActivity() {
             categoryId = category.id
         }
         currentCategory = category.id
-        categoriesAdapter.submit(state.categories, currentCategory)
+        categoriesAdapter.submit(state.categories, currentCategory) {
+            scrollCategoryIntoView(currentCategory)
+        }
+        analytics.trackCategorySelected(section.name.lowercase())
         load()
+    }
+
+    private fun scrollCategoryIntoView(categoryId: String) {
+        sectionState(section).categories.indexOfFirst { it.id == categoryId }
+            .takeIf { it >= 0 }
+            ?.let(binding.categoryList::smoothScrollToPosition)
+    }
+
+    private fun showCategoryMenu() {
+        if (section !in PAGED_SECTIONS || nestedSeries != null || isFinishing) return
+        val choices = sectionState(section).categories
+        if (choices.isEmpty()) {
+            Toast.makeText(this, "No categories available", Toast.LENGTH_SHORT).show()
+            return
+        }
+        categoryMenuDialog?.dismiss()
+        val selected = choices.indexOfFirst { it.id == currentCategory }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.all_categories)
+            .setSingleChoiceItems(choices.map { it.name }.toTypedArray(), selected) { activeDialog, which ->
+                val chosen = choices.getOrNull(which) ?: return@setSingleChoiceItems
+                activeDialog.dismiss()
+                selectCategory(chosen)
+            }
+            .setNegativeButton("Close", null)
+            .showCrown(preferredButton = null)
+        categoryMenuDialog = dialog
+        if (selected >= 0) dialog.listView.setSelection(selected)
+        dialog.setOnDismissListener { if (categoryMenuDialog === dialog) categoryMenuDialog = null }
     }
 
     private fun ensurePlaylistState() {
@@ -556,9 +612,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun baseCategories(providerCategories: List<XtreamCategory>, playlistId: String): List<XtreamCategory> {
-        val hidden = store.hiddenCategories(playlistId)
-        return listOf(XtreamCategory("all", "All"), XtreamCategory("favorites", "Favorites")) +
-            providerCategories.filterNot { it.id in hidden }
+        return displayedCategoryList(providerCategories, store.hiddenCategories(playlistId))
     }
 
     private suspend fun cachedPage(
@@ -617,7 +671,8 @@ class MainActivity : AppCompatActivity() {
             state.endReached = page.endReached
             if (page.cards.isNotEmpty()) {
                 val known = state.cards.asSequence().mapTo(HashSet()) { "${it.kind}:${it.id}" }
-                state.cards = state.cards + page.cards.filter { known.add("${it.kind}:${it.id}") }
+                val combined = state.cards + page.cards.filter { known.add("${it.kind}:${it.id}") }
+                state.cards = if (target == Section.LIVE) sort(combined, Section.LIVE) else combined
                 if (section == target && currentCategory == categoryId) catalogAdapter.submit(state.cards)
             }
         }
@@ -875,6 +930,7 @@ class MainActivity : AppCompatActivity() {
                 "account" -> showAccount(); "reload" -> refreshAllCatalogs(); "playlist" -> showPlaylists()
             }; return
         }
+        analytics.trackContentOpened(card.kind)
         when (card.kind) {
             "live" -> play(card, live = true)
             "movie" -> showMovie(card)
@@ -914,6 +970,7 @@ class MainActivity : AppCompatActivity() {
             }
             fallbackExtension?.let { api.streamUrl(playlist.credentials, card.kind, card.id, it) }
         } else null
+        analytics.trackPlaybackRequested(card.kind, store.player, live)
         when (store.player) {
             "vlc" -> external(url, card.title, "org.videolan.vlc")
             "mx" -> if (!PlayerActivity.launchExternal(this, url, card.title, "com.mxtech.videoplayer.ad")) external(url, card.title, "com.mxtech.videoplayer.pro")
@@ -1009,7 +1066,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.screenTitle.text = nested.details.name
         binding.screenSubtitle.text = listOfNotNull(nested.details.genre, "Season ${nested.season}", "Back returns to Series").joinToString("  •  ")
-        binding.categoryList.isVisible = true
+        setCategoryNavigationVisible(true)
         categoriesAdapter.submit(seasons, "season:${nested.season}")
         hideState()
         catalogAdapter.submit(episodes) { if (deviceClass() == DeviceClass.TELEVISION && episodes.isNotEmpty()) restoreCardFocus(null) }
@@ -1341,6 +1398,7 @@ class MainActivity : AppCompatActivity() {
     private fun showWelcome() {
         catalogAdapter.submit(emptyList())
         showLogin(canGoBack = false)
+        analytics.trackScreen("login")
     }
 
     private fun showManualPlaylist() {
@@ -1355,7 +1413,7 @@ class MainActivity : AppCompatActivity() {
         binding.actionMore.isVisible = false
         binding.sideNav.isVisible = false
         binding.searchRow.isVisible = false
-        binding.categoryList.isVisible = false
+        setCategoryNavigationVisible(false)
         binding.contentGrid.isVisible = false
         binding.statePanel.isVisible = false
         root.isVisible = true
@@ -1409,10 +1467,12 @@ class MainActivity : AppCompatActivity() {
             runCatching { api.authenticate(credentials) }.onSuccess { account ->
                 if (generation != loginGeneration || !binding.loginPanel.root.isVisible) return@onSuccess
                 if (account.status.name != "ACTIVE") {
+                    analytics.trackLogin("inactive", service)
                     setLoginLoading(false)
                     formError.text = getString(R.string.inactive_account, account.status.name.lowercase())
                     formError.isVisible = true
                 } else {
+                    analytics.trackLogin("success", service)
                     if (saveLogin.isChecked) {
                         store.saveLoginDetails(
                             service,
@@ -1432,6 +1492,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 if (error is CancellationException || generation != loginGeneration) return@onFailure
+                analytics.trackLogin("failure", service)
                 setLoginLoading(false)
                 formError.text = friendly(error)
                 formError.isVisible = true
@@ -1507,6 +1568,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAccount() {
         val p = store.selected() ?: run { showWelcome(); return }
+        analytics.trackScreen("account")
         val expiry = p.expiresAt?.let { DateFormat.getDateTimeInstance().format(Date(it * 1000)) } ?: "Not supplied"
         val dialog = AlertDialog.Builder(this).setTitle(p.name).setMessage(
             "STATUS\n${p.status}\n\nEXPIRY\n$expiry\n\nCONNECTIONS\n${p.activeConnections ?: "Not supplied"} active of ${p.maximumConnections ?: "Not supplied"} maximum\n\nSERVER\n${Uri.parse(p.credentials.serverUrl).host ?: "Configured"}\n\nUSERNAME\nSaved securely"
@@ -1557,6 +1619,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSettings() {
+        analytics.trackScreen("settings")
         val playerLabel = when (store.player) { "vlc" -> "VLC"; "mx" -> "MX Player"; "chooser" -> "System chooser"; else -> "Internal Crown Player" }
         val bufferLabel = when (store.buffer) { "low" -> "Low latency"; "resilient" -> "Resilient"; else -> "Normal" }
         val sortLabel = when (store.sort) { "asc" -> "Name A–Z"; "desc" -> "Name Z–A"; else -> "Provider order" }
@@ -1566,6 +1629,7 @@ class MainActivity : AppCompatActivity() {
             "Content sorting  •  $sortLabel",
             "Parental controls  •  ${if (store.parentalPin == null) "Off" else "On"}",
             "Restore hidden categories",
+            "Share usage and playback error  •  ${when { !analytics.isConfigured -> "Unavailable"; analytics.isEnabled -> "On"; else -> "Off" }}",
         )
         AlertDialog.Builder(this).setTitle("Settings").setItems(labels) { _, which ->
             when (which) {
@@ -1578,8 +1642,27 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, getString(R.string.settings_updated), Toast.LENGTH_SHORT).show()
                     showSettings()
                 }
+                5 -> showUsageAnalyticsChoice()
             }
         }.setNegativeButton("Close", null).showCrown(preferredButton = null)
+    }
+
+    private fun showUsageAnalyticsChoice() {
+        if (!analytics.isConfigured) {
+            Toast.makeText(this, "Usage analytics is not configured in this build", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val options = arrayOf("On", "Off")
+        AlertDialog.Builder(this)
+            .setTitle("Share usage and playback error")
+            .setSingleChoiceItems(options, if (analytics.isEnabled) 0 else 1) { dialog, which ->
+                analytics.updateConsent(which == 0)
+                if (which == 0) analytics.setDeviceClass(deviceClass())
+                dialog.dismiss()
+                showSettings()
+            }
+            .setNegativeButton("Back", null)
+            .showCrown(preferredButton = null)
     }
 
     private fun showPlayerChoice() {
@@ -1688,10 +1771,7 @@ class MainActivity : AppCompatActivity() {
         }
         val playlistId = store.selected()?.id
         return if (target == Section.LIVE && playlistId != null) {
-            val statuses = ordered.associate { it.id to streamAvailability.status(playlistId, it.id) }
-            ordered.sortedWith(
-                compareBy<CatalogCard> { statuses.getValue(it.id).rank }
-            )
+            prioritizeLiveCards(ordered) { streamAvailability.status(playlistId, it.id) }
         } else ordered
     }
 
@@ -1774,7 +1854,6 @@ class MainActivity : AppCompatActivity() {
             }
             val ranked = withContext(Dispatchers.Default) {
                 displayedCategories(
-                    playlist.id,
                     providerCategories,
                     store.hiddenCategories(playlist.id),
                     allCards,
@@ -1794,7 +1873,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun displayedCategories(
-        playlistId: String,
         providerCategories: List<XtreamCategory>,
         manuallyHidden: Set<String>,
         allLiveCards: List<CatalogCard>,
@@ -1802,43 +1880,13 @@ class MainActivity : AppCompatActivity() {
         forSection: Section = section,
     ): List<XtreamCategory> {
         val liveCardsByCategory = if (forSection == Section.LIVE) allLiveCards.groupBy { it.categoryId } else emptyMap()
-        val visibleProviderCategories = providerCategories.filterNot { it.id in manuallyHidden }.filter { category ->
+        val visibleProviderCategories = providerCategories.filter { category ->
             // Only hide categories that are genuinely empty in a complete catalog. Health signals
-            // rank categories; they never erase a category or block the user from retrying content.
+            // never erase a category or block the user from retrying content.
             if (forSection != Section.LIVE || !catalogComplete) true
             else liveCardsByCategory[category.id].orEmpty().isNotEmpty()
-        }.let { visible ->
-            if (forSection != Section.LIVE) visible else {
-                val quality = liveCardsByCategory.mapValues { (_, cards) -> categoryQuality(playlistId, cards) }
-                visible.withIndex().sortedWith(
-                compareBy<IndexedValue<XtreamCategory>> { indexed ->
-                    quality[indexed.value.id]?.healthRank ?: 3
-                }.thenBy { indexed ->
-                    quality[indexed.value.id]?.failureWeight ?: Int.MAX_VALUE
-                }.thenBy { it.index }
-                ).map { it.value }
-            }
         }
-        return listOf(XtreamCategory("all", "All"), XtreamCategory("favorites", "Favorites")) + visibleProviderCategories
-    }
-
-    private fun categoryQuality(playlistId: String, cards: List<CatalogCard>): CategoryQuality {
-        val statuses = cards.map { streamAvailability.status(playlistId, it.id) }
-        val healthRank = when {
-            StreamAvailability.Status.HEALTHY in statuses -> 0
-            StreamAvailability.Status.UNKNOWN in statuses -> 1
-            StreamAvailability.Status.TEMPORARILY_FAILED in statuses -> 2
-            else -> 3
-        }
-        val weight = statuses.fold(0) { total, status -> total +
-            when (status) {
-                StreamAvailability.Status.REPEATEDLY_FAILED -> 2
-                StreamAvailability.Status.TEMPORARILY_FAILED -> 1
-                else -> 0
-            }
-        }
-        val failureWeight = if (statuses.isEmpty()) Int.MAX_VALUE else weight * 100 / (statuses.size * 2)
-        return CategoryQuality(healthRank, failureWeight)
+        return displayedCategoryList(visibleProviderCategories, manuallyHidden)
     }
 
     private fun XtreamItem.toCard(kind: String, favorites: Set<String>): CatalogCard {
@@ -1873,15 +1921,20 @@ class MainActivity : AppCompatActivity() {
         binding.stateAction.isVisible = !loading && action
         binding.stateAction.text = actionLabel
         binding.contentGrid.isVisible = false
-        binding.categoryList.isVisible = keepCategories && section != Section.HOME && section != Section.SEARCH
+        setCategoryNavigationVisible(keepCategories && section != Section.HOME && section != Section.SEARCH)
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         if (action && deviceClass() == DeviceClass.TELEVISION) binding.stateAction.post { binding.stateAction.requestFocus() }
     }
     private fun hideState() {
         binding.statePanel.isVisible = false
         binding.contentGrid.isVisible = true
-        binding.categoryList.isVisible = section != Section.HOME && section != Section.SEARCH
+        setCategoryNavigationVisible(section != Section.HOME && section != Section.SEARCH)
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+    }
+
+    private fun setCategoryNavigationVisible(visible: Boolean) {
+        binding.categoryBar.isVisible = visible
+        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS && nestedSeries == null
     }
     private fun showFailure(error: Throwable) {
         if (error is CancellationException) return
@@ -1949,8 +2002,6 @@ class MainActivity : AppCompatActivity() {
     private enum class Section(val apiKind: String, val cardKind: String, val displayName: String) {
         HOME("", "", "Home"), LIVE("live", "live", "Live TV"), MOVIES("vod", "movie", "Movies"), SERIES("series", "series", "Series"), SEARCH("", "", "Search")
     }
-
-    private data class CategoryQuality(val healthRank: Int, val failureWeight: Int)
 
     private data class SeriesDetailState(
         val card: CatalogCard,

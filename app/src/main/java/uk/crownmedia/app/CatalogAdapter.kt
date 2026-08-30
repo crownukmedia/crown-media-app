@@ -5,6 +5,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.text.TextUtils
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.AsyncListDiffer
@@ -69,7 +70,13 @@ class CategoryAdapter(
         fun bind(row: Row) {
             val value = row.category
             binding.categoryName.text = value.name
+            binding.categoryName.ellipsize = TextUtils.TruncateAt.END
+            binding.categoryName.maxLines = 1
+            binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
+            binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
             binding.root.isSelected = row.selected
+            binding.root.contentDescription = value.name
+            binding.root.nextFocusLeftId = if (bindingAdapterPosition == 0) R.id.category_menu_button else View.NO_ID
             binding.categoryActions.isVisible = binding.root.context.deviceClass() != DeviceClass.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             binding.categoryActions.contentDescription = binding.root.context.getString(R.string.options_for, value.name)
             binding.categoryActions.setOnClickListener { onLongClick(value) }
