@@ -96,7 +96,7 @@ class MainActivity : AppCompatActivity() {
     private val catalogWarmJobs = mutableMapOf<String, Deferred<Result<Int>>>()
     private val contentCounts = EnumMap<Section, ContentCountState>(Section::class.java)
     private val sectionStates = EnumMap<Section, SectionState>(Section::class.java)
-    private val refreshJobs = EnumMap<Section, Job>(Section::class.java)
+    private val refreshJobs = mutableMapOf<RefreshKey, Job>()
     private val catalogRefreshPermit = Semaphore(1)
     private var activePlaylistId: String? = null
     private var nestedSeries: SeriesDetailState? = null
@@ -324,7 +324,7 @@ class MainActivity : AppCompatActivity() {
             masterSearchQuery = ""
             if (section in PAGED_SECTIONS) sectionState(section).searchQuery = ""
             if (value in PAGED_SECTIONS) {
-                refreshJobs.remove(value)?.cancel()
+                cancelSectionRefreshes(value)
                 sectionState(value).resetForTopLevelEntry()
             }
         }
@@ -500,11 +500,13 @@ class MainActivity : AppCompatActivity() {
             nextOffset = 0
             endReached = false
             categoryId = category.id
+            generation++
         }
         currentCategory = category.id
         categoriesAdapter.submit(state.categories, currentCategory) {
             scrollCategoryIntoView(currentCategory)
         }
+        cancelSectionRefreshes(section)
         analytics.trackCategorySelected(section.name.lowercase())
         load()
     }
@@ -693,9 +695,19 @@ class MainActivity : AppCompatActivity() {
         val persistedRefreshAt = store.catalogRefreshAt(playlist.id, target.cardKind, state.categoryId.takeUnless { it == "all" || it == "favorites" })
         state.lastRefreshAt = maxOf(state.lastRefreshAt, persistedRefreshAt)
         if (!force && hadContent && System.currentTimeMillis() - state.lastRefreshAt < REFRESH_TTL_MS) return
-        if (refreshJobs[target]?.isActive == true) return
+        // TV-002: key refreshes by (target, categoryId, generation) so a category switch or a
+        // top-level re-entry supersedes any stale in-flight refresh instead of being silently
+        // swallowed by an unrelated active job (which left the UI stuck in a loading state).
+        val refreshKey = RefreshKey(target, state.categoryId, state.generation)
+        val activeForSection = refreshJobs.filterKeys { it.target == target }
+        activeForSection.keys
+            .firstOrNull { it.categoryId == refreshKey.categoryId && it.generation == refreshKey.generation }
+            ?.let { if (refreshJobs[it]?.isActive == true) return }
+        if (activeForSection.isNotEmpty()) {
+            activeForSection.values.forEach(Job::cancel)
+            refreshJobs.keys.removeAll { it.target == target }
+        }
         if (!hadContent) {
-            refreshJobs.filterKeys { it != target }.values.forEach(Job::cancel)
             healthJob?.cancel()
         }
         val refreshCategory = state.categoryId
@@ -707,12 +719,21 @@ class MainActivity : AppCompatActivity() {
             } catch (_: CancellationException) {
                 return@launch
             } catch (error: Throwable) {
-                if (section == target && state.categoryId == refreshCategory && state.cards.isEmpty()) showFailure(error)
-                else if (section == target && state.categoryId == refreshCategory) binding.screenSubtitle.text = getString(R.string.offline_catalog, playlist.name)
+                // Only surface errors for a refresh that still owns the current category/generation.
+                if (section == target && state.categoryId == refreshCategory && state.generation == refreshKey.generation) {
+                    if (state.cards.isEmpty()) showFailure(error)
+                    else binding.screenSubtitle.text = getString(R.string.offline_catalog, playlist.name)
+                }
             }
         }
-        refreshJobs[target] = job
-        job.invokeOnCompletion { if (refreshJobs[target] === job) refreshJobs.remove(target) }
+        refreshJobs[refreshKey] = job
+        job.invokeOnCompletion { if (refreshJobs[refreshKey] === job) refreshJobs.remove(refreshKey) }
+    }
+
+    /** Cancel every in-flight refresh scoped to [target]; used on category switch / top-level re-entry. */
+    private fun cancelSectionRefreshes(target: Section) {
+        refreshJobs.filterKeys { it.target == target }.values.forEach(Job::cancel)
+        refreshJobs.keys.removeAll { it.target == target }
     }
 
     private suspend fun refreshCatalog(
@@ -1848,17 +1869,26 @@ class MainActivity : AppCompatActivity() {
             delay(750)
             val providerCategories = cache.categories(playlist.id, Section.LIVE.cardKind)
             val favorites = store.favorites(playlist.id)
-            val allCards = withContext(Dispatchers.Default) {
-                cache.items(playlist.id, Section.LIVE.cardKind, null)
+            // TV-001/TV-006: never materialize the full Live catalog into memory. Use the SQL
+            // aggregate for empty-category filtering and a bounded per-category sample for
+            // health/quality ranking — ranking stays proportional to visible candidates.
+            val visibleState = sectionState(Section.LIVE)
+            val visibleCards = visibleState.cards
+            val nonEmpty = withContext(Dispatchers.Default) {
+                cache.nonEmptyCategoryIds(playlist.id, Section.LIVE.cardKind)
+            }
+            val sampleCards = withContext(Dispatchers.Default) {
+                cache.categorySamples(playlist.id, Section.LIVE.cardKind, perCategory = 8)
                     .map { it.toCard(Section.LIVE.cardKind, favorites) }
             }
             val ranked = withContext(Dispatchers.Default) {
-                displayedCategories(
+                displayedCategoriesRanked(
+                    playlist,
                     providerCategories,
                     store.hiddenCategories(playlist.id),
-                    allCards,
+                    nonEmpty,
+                    sampleCards,
                     catalogComplete = store.catalogComplete(playlist.id, Section.LIVE.cardKind, null),
-                    forSection = Section.LIVE,
                 )
             }
             val state = sectionState(Section.LIVE)
@@ -1867,24 +1897,35 @@ class MainActivity : AppCompatActivity() {
             if (section == Section.LIVE) {
                 currentCategory = state.categoryId
                 categoriesAdapter.submit(ranked, currentCategory)
-                scheduleLiveHealthRefresh(playlist, state.cards, allCards)
+                scheduleLiveHealthRefresh(playlist, visibleCards, sampleCards + visibleCards)
             }
         }
     }
 
-    private fun displayedCategories(
+    private fun displayedCategoriesRanked(
+        playlist: SavedPlaylist,
         providerCategories: List<XtreamCategory>,
         manuallyHidden: Set<String>,
-        allLiveCards: List<CatalogCard>,
+        nonEmptyCategories: Set<String>,
+        sampleCards: List<CatalogCard>,
         catalogComplete: Boolean = false,
-        forSection: Section = section,
     ): List<XtreamCategory> {
-        val liveCardsByCategory = if (forSection == Section.LIVE) allLiveCards.groupBy { it.categoryId } else emptyMap()
+        val playlistId = playlist.id
+        val sampleCardsByCategory = sampleCards.groupBy { it.categoryId }
         val visibleProviderCategories = providerCategories.filter { category ->
-            // Only hide categories that are genuinely empty in a complete catalog. Health signals
-            // never erase a category or block the user from retrying content.
-            if (forSection != Section.LIVE || !catalogComplete) true
-            else liveCardsByCategory[category.id].orEmpty().isNotEmpty()
+            // Only hide categories that are genuinely empty in a complete catalog. The SQL
+            // aggregate (nonEmptyCategories) drives this without materializing the full catalog.
+            if (!catalogComplete) true
+            else category.id in nonEmptyCategories
+        }.let { visible ->
+            val quality = sampleCardsByCategory.mapValues { (_, cards) -> categoryQuality(playlistId, cards) }
+            visible.withIndex().sortedWith(
+                compareBy<IndexedValue<XtreamCategory>> { indexed ->
+                    quality[indexed.value.id]?.healthRank ?: 3
+                }.thenBy { indexed ->
+                    quality[indexed.value.id]?.failureWeight ?: Int.MAX_VALUE
+                }.thenBy { it.index }
+            ).map { it.value }
         }
         return displayedCategoryList(visibleProviderCategories, manuallyHidden)
     }
@@ -2017,8 +2058,13 @@ class MainActivity : AppCompatActivity() {
         companion object { val EMPTY = CatalogPage(emptyList(), 0, true) }
     }
 
+    /** Ownership key for a catalog refresh: scoped to (section, categoryId, generation) so a
+     *  category switch or top-level re-entry invalidates any in-flight stale refresh. */
+    private data class RefreshKey(val target: Section, val categoryId: String, val generation: Long)
+
     private data class SectionState(
         var categoryId: String = "all",
+        var generation: Long = 0L,
         var categories: List<XtreamCategory> = emptyList(),
         var cards: List<CatalogCard> = emptyList(),
         var nextOffset: Int = 0,
@@ -2034,6 +2080,7 @@ class MainActivity : AppCompatActivity() {
             searchQuery = ""
             if (categoryId != "all") {
                 categoryId = "all"
+                generation++
                 cards = emptyList()
                 nextOffset = 0
                 endReached = false
