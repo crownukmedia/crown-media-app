@@ -30,7 +30,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.doOnLayout
 import androidx.core.view.ViewCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -87,6 +89,7 @@ class MainActivity : AppCompatActivity() {
     private var searchJob: Job? = null
     private var scopedSearchJob: Job? = null
     private var countJob: Job? = null
+    private var categoryCountJob: Job? = null
     private var healthJob: Job? = null
     private var liveRankingJob: Job? = null
     private var playlistRefreshJob: Job? = null
@@ -456,6 +459,16 @@ class MainActivity : AppCompatActivity() {
             if (section != target || requestGeneration != contentRequestGeneration || state.categoryId != requestedCategory) return@launch
             val (providerCategories, page) = cachedResult.getOrNull() ?: (emptyList<XtreamCategory>() to CatalogPage.EMPTY)
             state.categories = baseCategories(providerCategories, playlist.id)
+            // TV-009 safety net: a category preserved from a previous visit may no longer
+            // exist after a catalog refresh — fall back to "All" instead of a stuck empty state.
+            if (state.categories.none { it.id == state.categoryId }) {
+                state.categoryId = "all"
+                state.cards = emptyList()
+                state.nextOffset = 0
+                state.endReached = false
+                state.scrollState = null
+                state.categoryScrollState = null
+            }
             state.cards = page.cards
             state.nextOffset = page.consumed
             state.endReached = page.endReached
@@ -551,6 +564,7 @@ class MainActivity : AppCompatActivity() {
         liveRankingJob?.cancel()
         scopedSearchJob?.cancel()
         countJob?.cancel()
+        categoryCountJob?.cancel()
         catalogWarmJobs.values.forEach { it.cancel() }
         catalogWarmJobs.clear()
         sectionStates.clear()
@@ -581,6 +595,7 @@ class MainActivity : AppCompatActivity() {
         categoriesAdapter.submit(state.categories, state.categoryId) {
             if (restoreScroll) state.categoryScrollState?.let { binding.categoryList.layoutManager?.onRestoreInstanceState(it) }
         }
+        store.selected()?.let { loadCategoryCounts(it, section) }
         hideState()
         catalogAdapter.submit(state.cards) {
             if (restoreScroll) state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
@@ -749,6 +764,7 @@ class MainActivity : AppCompatActivity() {
         state.categories = baseCategories(providerCategories, playlist.id)
         if (section == target && state.categoryId == refreshCategory) {
             categoriesAdapter.submit(state.categories, state.categoryId)
+            store.selected()?.let { loadCategoryCounts(it, target) }
         }
         val actualCategory = refreshCategory.takeUnless { it == "all" || it == "favorites" }
         val refreshMarker = System.currentTimeMillis()
@@ -912,26 +928,43 @@ class MainActivity : AppCompatActivity() {
     private fun loadContentCounts(playlist: SavedPlaylist) {
         countJob?.cancel()
         countJob = lifecycleScope.launch {
-            coroutineScope {
-                PAGED_SECTIONS.map { target ->
-                    async {
-                        val cachedCount = runCatching { cache.count(playlist.id, target.cardKind) }.getOrDefault(0)
-                        if (store.catalogComplete(playlist.id, target.cardKind, null)) {
-                            updateContentCount(target, ContentCountState.Ready(cachedCount))
-                            return@async
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                coroutineScope {
+                    PAGED_SECTIONS.map { target ->
+                        async {
+                            val cachedCount = runCatching { cache.count(playlist.id, target.cardKind) }.getOrDefault(0)
+                            if (store.catalogComplete(playlist.id, target.cardKind, null)) {
+                                updateContentCount(target, ContentCountState.Ready(cachedCount))
+                                return@async
+                            }
+                            updateContentCount(target, ContentCountState.Loading)
+                            val result = warmCatalogKind(playlist, target.cardKind).await()
+                            if (activePlaylistId != playlist.id) return@async
+                            updateContentCount(
+                                target,
+                                result.fold(
+                                    onSuccess = { ContentCountState.Ready(it) },
+                                    onFailure = { ContentCountState.Unavailable },
+                                ),
+                            )
                         }
-                        updateContentCount(target, ContentCountState.Loading)
-                        val result = warmCatalogKind(playlist, target.cardKind).await()
-                        if (activePlaylistId != playlist.id) return@async
-                        updateContentCount(
-                            target,
-                            result.fold(
-                                onSuccess = { ContentCountState.Ready(it) },
-                                onFailure = { ContentCountState.Unavailable },
-                            ),
-                        )
-                    }
-                }.awaitAll()
+                    }.awaitAll()
+                }
+            }
+        }
+    }
+
+    /** TV-004: load per-category counts on a background dispatcher, independent of catalog indexing. */
+    private fun loadCategoryCounts(playlist: SavedPlaylist, target: Section) {
+        if (target !in PAGED_SECTIONS) return
+        categoryCountJob?.cancel()
+        val playlistId = playlist.id
+        categoryCountJob = lifecycleScope.launch {
+            val counts = withContext(Dispatchers.Default) {
+                runCatching { cache.categoryCounts(playlistId, target.cardKind) }.getOrDefault(emptyMap())
+            }
+            if (section == target && activePlaylistId == playlistId) {
+                categoriesAdapter.updateCounts(counts)
             }
         }
     }
@@ -1829,17 +1862,19 @@ class MainActivity : AppCompatActivity() {
         val candidates = leading + categorySamples
         if (candidates.isEmpty()) return
         healthJob = lifecycleScope.launch {
-            val permits = Semaphore(connectionLimit)
-            coroutineScope {
-                candidates.map { card ->
-                    async {
-                        val available = permits.withPermit { probeLiveStream(playlist, card.id) }
-                        if (available) streamAvailability.recordSuccess(playlist.id, card.id)
-                        else streamAvailability.recordProbeFailure(playlist.id, card.id)
-                    }
-                }.awaitAll()
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                val permits = Semaphore(connectionLimit)
+                coroutineScope {
+                    candidates.map { card ->
+                        async {
+                            val available = permits.withPermit { probeLiveStream(playlist, card.id) }
+                            if (available) streamAvailability.recordSuccess(playlist.id, card.id)
+                            else streamAvailability.recordProbeFailure(playlist.id, card.id)
+                        }
+                    }.awaitAll()
+                }
+                if (section == Section.LIVE && store.selected()?.id == playlist.id) renderCachedLive(playlist)
             }
-            if (section == Section.LIVE && store.selected()?.id == playlist.id) renderCachedLive(playlist)
         }
     }
 
@@ -1866,38 +1901,41 @@ class MainActivity : AppCompatActivity() {
     private fun refreshLiveCategoryRanking(playlist: SavedPlaylist) {
         liveRankingJob?.cancel()
         liveRankingJob = lifecycleScope.launch {
-            delay(750)
-            val providerCategories = cache.categories(playlist.id, Section.LIVE.cardKind)
-            val favorites = store.favorites(playlist.id)
-            // TV-001/TV-006: never materialize the full Live catalog into memory. Use the SQL
-            // aggregate for empty-category filtering and a bounded per-category sample for
-            // health/quality ranking — ranking stays proportional to visible candidates.
-            val visibleState = sectionState(Section.LIVE)
-            val visibleCards = visibleState.cards
-            val nonEmpty = withContext(Dispatchers.Default) {
-                cache.nonEmptyCategoryIds(playlist.id, Section.LIVE.cardKind)
-            }
-            val sampleCards = withContext(Dispatchers.Default) {
-                cache.categorySamples(playlist.id, Section.LIVE.cardKind, perCategory = 8)
-                    .map { it.toCard(Section.LIVE.cardKind, favorites) }
-            }
-            val ranked = withContext(Dispatchers.Default) {
-                displayedCategoriesRanked(
-                    playlist,
-                    providerCategories,
-                    store.hiddenCategories(playlist.id),
-                    nonEmpty,
-                    sampleCards,
-                    catalogComplete = store.catalogComplete(playlist.id, Section.LIVE.cardKind, null),
-                )
-            }
-            val state = sectionState(Section.LIVE)
-            state.categories = ranked
-            if (state.categories.none { it.id == state.categoryId }) state.categoryId = "all"
-            if (section == Section.LIVE) {
-                currentCategory = state.categoryId
-                categoriesAdapter.submit(ranked, currentCategory)
-                scheduleLiveHealthRefresh(playlist, visibleCards, sampleCards + visibleCards)
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                delay(750)
+                val providerCategories = cache.categories(playlist.id, Section.LIVE.cardKind)
+                val favorites = store.favorites(playlist.id)
+                // TV-001/TV-006: never materialize the full Live catalog into memory. Use the SQL
+                // aggregate for empty-category filtering and a bounded per-category sample for
+                // health/quality ranking — ranking stays proportional to visible candidates.
+                val visibleState = sectionState(Section.LIVE)
+                val visibleCards = visibleState.cards
+                val nonEmpty = withContext(Dispatchers.Default) {
+                    cache.nonEmptyCategoryIds(playlist.id, Section.LIVE.cardKind)
+                }
+                val sampleCards = withContext(Dispatchers.Default) {
+                    cache.categorySamples(playlist.id, Section.LIVE.cardKind, perCategory = 8)
+                        .map { it.toCard(Section.LIVE.cardKind, favorites) }
+                }
+                val ranked = withContext(Dispatchers.Default) {
+                    displayedCategoriesRanked(
+                        playlist,
+                        providerCategories,
+                        store.hiddenCategories(playlist.id),
+                        nonEmpty,
+                        sampleCards,
+                        catalogComplete = store.catalogComplete(playlist.id, Section.LIVE.cardKind, null),
+                    )
+                }
+                val state = sectionState(Section.LIVE)
+                state.categories = ranked
+                if (state.categories.none { it.id == state.categoryId }) state.categoryId = "all"
+                if (section == Section.LIVE) {
+                    currentCategory = state.categoryId
+                    categoriesAdapter.submit(ranked, currentCategory)
+                    loadCategoryCounts(playlist, Section.LIVE)
+                    scheduleLiveHealthRefresh(playlist, visibleCards, sampleCards + visibleCards)
+                }
             }
         }
     }
@@ -1928,6 +1966,25 @@ class MainActivity : AppCompatActivity() {
             ).map { it.value }
         }
         return displayedCategoryList(visibleProviderCategories, manuallyHidden)
+    }
+
+    private fun categoryQuality(playlistId: String, cards: List<CatalogCard>): CategoryQuality {
+        val statuses = cards.map { streamAvailability.status(playlistId, it.id) }
+        val healthRank = when {
+            StreamAvailability.Status.HEALTHY in statuses -> 0
+            StreamAvailability.Status.UNKNOWN in statuses -> 1
+            StreamAvailability.Status.TEMPORARILY_FAILED in statuses -> 2
+            else -> 3
+        }
+        val weight = statuses.fold(0) { total, status -> total +
+            when (status) {
+                StreamAvailability.Status.REPEATEDLY_FAILED -> 2
+                StreamAvailability.Status.TEMPORARILY_FAILED -> 1
+                else -> 0
+            }
+        }
+        val failureWeight = if (statuses.isEmpty()) Int.MAX_VALUE else weight * 100 / (statuses.size * 2)
+        return CategoryQuality(healthRank, failureWeight)
     }
 
     private fun XtreamItem.toCard(kind: String, favorites: Set<String>): CatalogCard {
@@ -2044,6 +2101,8 @@ class MainActivity : AppCompatActivity() {
         HOME("", "", "Home"), LIVE("live", "live", "Live TV"), MOVIES("vod", "movie", "Movies"), SERIES("series", "series", "Series"), SEARCH("", "", "Search")
     }
 
+    private data class CategoryQuality(val healthRank: Int, val failureWeight: Int)
+
     private data class SeriesDetailState(
         val card: CatalogCard,
         val details: XtreamSeriesDetails,
@@ -2077,18 +2136,10 @@ class MainActivity : AppCompatActivity() {
         var searchQuery: String = "",
     ) {
         fun resetForTopLevelEntry() {
+            // TV-009: preserve category selection, cards, and scroll position when returning
+            // to a top-level section; only transient search/loading state resets.
             searchQuery = ""
-            if (categoryId != "all") {
-                categoryId = "all"
-                generation++
-                cards = emptyList()
-                nextOffset = 0
-                endReached = false
-            }
             loadingPage = false
-            scrollState = null
-            categoryScrollState = null
-            focusedCardKey = null
         }
     }
 

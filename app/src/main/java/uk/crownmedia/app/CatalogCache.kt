@@ -38,6 +38,14 @@ class CatalogCache(private val dao: CatalogDao) {
     suspend fun itemCount(playlistId: String, kind: String, categoryId: String?): Int =
         dao.categoryItemCount(playlistId, kind, categoryId)
 
+    /** Per-category item counts as a map, computed on the background dispatcher (TV-003/TV-004). */
+    suspend fun categoryCounts(playlistId: String, kind: String): Map<String, Int> =
+        withContext(Dispatchers.Default) {
+            dao.categoryItemCounts(playlistId, kind)
+                .filter { it.itemCount > 0 && it.categoryId.isNotBlank() }
+                .associate { it.categoryId to it.itemCount }
+        }
+
     /** Aggregate per-category counts from SQL; avoids materializing the full catalog into memory. */
     suspend fun nonEmptyCategoryIds(playlistId: String, kind: String): Set<String> = withContext(Dispatchers.Default) {
         dao.categoryItemCounts(playlistId, kind)
