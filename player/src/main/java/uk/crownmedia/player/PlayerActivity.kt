@@ -337,6 +337,12 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (playbackError.isVisible) return super.dispatchKeyEvent(event)
+        // TV-008: when the Media3 controller is visible/focused, let it own D-pad navigation
+        // so the user can move between play/pause, seek, and back controls. Only fall back to
+        // global shortcuts when the controller is hidden.
+        if (event.action == KeyEvent.ACTION_DOWN && playerView.isControllerFullyVisible) {
+            return super.dispatchKeyEvent(event)
+        }
         when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) {

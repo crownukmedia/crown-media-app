@@ -57,9 +57,20 @@ class CategoryAdapter(
         override fun areItemsTheSame(oldItem: Row, newItem: Row) = oldItem.category.id == newItem.category.id
         override fun areContentsTheSame(oldItem: Row, newItem: Row) = oldItem == newItem
     })
+    private var counts: Map<String, Int> = emptyMap()
 
     fun submit(values: List<XtreamCategory>, selectedId: String = "all", committed: (() -> Unit)? = null) {
         differ.submitList(values.map { Row(it, it.id == selectedId) }, committed)
+    }
+
+    /** TV-003/TV-004: apply per-category item counts without resubmitting the list (keeps focus/scroll). */
+    fun updateCounts(values: Map<String, Int>) {
+        if (counts == values) return
+        val previous = counts
+        counts = values
+        differ.currentList.indices
+            .filter { index -> previous[differ.currentList[index].category.id] != values[differ.currentList[index].category.id] }
+            .forEach(::notifyItemChanged)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(ItemCategoryBinding.inflate(LayoutInflater.from(parent.context), parent, false))
@@ -74,6 +85,10 @@ class CategoryAdapter(
             binding.categoryName.maxLines = 1
             binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
             binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
+            val count = counts[value.id]
+            val showCount = count != null && count > 0 && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
+            binding.categoryCount.isVisible = showCount
+            if (showCount) binding.categoryCount.text = "($count)"
             binding.root.isSelected = row.selected
             binding.root.contentDescription = value.name
             binding.root.nextFocusLeftId = if (bindingAdapterPosition == 0) R.id.category_menu_button else View.NO_ID
