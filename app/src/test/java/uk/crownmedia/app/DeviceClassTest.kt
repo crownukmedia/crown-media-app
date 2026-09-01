@@ -35,11 +35,23 @@ class DeviceClassTest {
     @Test
     fun explicitUserChoiceOverridesDetectionAndPersists() {
         assertFalse(selection.hasUserChoice)
+        assertEquals(AppLayoutPreference.AUTO, selection.preference)
         assertEquals(AppLayout.TELEVISION, selection.resolve(DeviceClass.TELEVISION))
 
         selection.select(AppLayout.MOBILE)
 
         assertTrue(selection.hasUserChoice)
+        assertEquals(AppLayoutPreference.MOBILE, selection.preference)
         assertEquals(AppLayout.MOBILE, LayoutSelection(RuntimeEnvironment.getApplication()).resolve(DeviceClass.TELEVISION))
+    }
+
+    @Test
+    fun explicitAutoChoicePersistsWithoutRepeatedFirstLaunchPrompt() {
+        selection.select(AppLayoutPreference.AUTO)
+
+        assertTrue(selection.hasUserChoice)
+        assertEquals(AppLayoutPreference.AUTO, selection.preference)
+        assertEquals(AppLayout.MOBILE, selection.resolve(DeviceClass.PHONE))
+        assertEquals(AppLayout.TELEVISION, selection.resolve(DeviceClass.TELEVISION))
     }
 }

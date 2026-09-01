@@ -1,7 +1,9 @@
 package uk.crownmedia.app
 
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
@@ -80,6 +82,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var analytics: UsageAnalytics
     private lateinit var layoutSelection: LayoutSelection
     private lateinit var activeLayout: AppLayout
+    private var detectedDeviceClass: DeviceClass = DeviceClass.PHONE
     private val api = XtreamClient()
     private lateinit var categoriesAdapter: CategoryAdapter
     private lateinit var catalogAdapter: CatalogAdapter
@@ -119,17 +122,29 @@ class MainActivity : AppCompatActivity() {
     private var lastTrackedSearch: Int? = null
     private var categoryMenuDialog: AlertDialog? = null
 
+    override fun attachBaseContext(newBase: Context) {
+        detectedDeviceClass = newBase.deviceClass()
+        val selectedLayout = LayoutSelection(newBase).resolve(detectedDeviceClass)
+        val configuration = Configuration(newBase.resources.configuration).apply {
+            val selectedUiMode = when (selectedLayout) {
+                AppLayout.MOBILE -> Configuration.UI_MODE_TYPE_NORMAL
+                AppLayout.TELEVISION -> Configuration.UI_MODE_TYPE_TELEVISION
+            }
+            uiMode = (uiMode and Configuration.UI_MODE_TYPE_MASK.inv()) or selectedUiMode
+        }
+        super.attachBaseContext(newBase.createConfigurationContext(configuration))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        val detectedDeviceClass = deviceClass()
         layoutSelection = LayoutSelection(this)
         activeLayout = layoutSelection.resolve(detectedDeviceClass)
         val launchLayout = layoutInflater.inflate(activeLayout.startupLayoutResource(), null, false)
         binding = ActivityMainBinding.bind(launchLayout)
         setContentView(binding.root)
         analytics = (application as CrownMediaApplication).usageAnalytics
-        analytics.setDeviceClass(deviceClass())
+        analytics.setDeviceClass(detectedDeviceClass)
         store = storeFactory(this)
         cache = CatalogCache(CrownDatabase.get(this).catalogDao())
         streamAvailability = StreamAvailability(this)
@@ -1724,6 +1739,7 @@ class MainActivity : AppCompatActivity() {
             "Parental controls  •  ${if (store.parentalPin == null) "Off" else "On"}",
             "Restore hidden categories",
             "Share usage and playback error  •  ${when { !analytics.isConfigured -> "Unavailable"; analytics.isEnabled -> "On"; else -> "Off" }}",
+            getString(R.string.app_layout_setting, getString(layoutSelection.preference.labelResource)),
         )
         AlertDialog.Builder(this).setTitle("Settings").setItems(labels) { _, which ->
             when (which) {
@@ -1737,8 +1753,25 @@ class MainActivity : AppCompatActivity() {
                     showSettings()
                 }
                 5 -> showUsageAnalyticsChoice()
+                6 -> showLayoutChoice()
             }
         }.setNegativeButton("Close", null).showCrown(preferredButton = null)
+    }
+
+    private fun showLayoutChoice() {
+        val preferences = AppLayoutPreference.entries
+        val labels = preferences.map { getString(it.labelResource) }.toTypedArray()
+        val selected = preferences.indexOf(layoutSelection.preference).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.app_layout)
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                val preference = preferences.getOrNull(which) ?: return@setSingleChoiceItems
+                layoutSelection.select(preference)
+                dialog.dismiss()
+                recreate()
+            }
+            .setNegativeButton(R.string.back, null)
+            .showCrown(preferredButton = null)
     }
 
     private fun showUsageAnalyticsChoice() {

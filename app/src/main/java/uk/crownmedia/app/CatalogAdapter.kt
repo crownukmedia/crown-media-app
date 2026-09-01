@@ -6,6 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.text.TextUtils
+import android.content.res.Resources
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.AsyncListDiffer
@@ -48,6 +49,19 @@ internal fun CatalogCard.preferredArtworkSource(): Any {
     }
 }
 
+internal fun categoryAccessibilityLabel(
+    resources: Resources,
+    category: XtreamCategory,
+    count: Int?,
+): String = if (count != null) {
+    resources.getQuantityString(
+        R.plurals.category_item_count_description,
+        count,
+        category.name,
+        count,
+    )
+} else category.name
+
 class CategoryAdapter(
     private val onClick: (XtreamCategory) -> Unit,
     private val onLongClick: (XtreamCategory) -> Unit,
@@ -85,12 +99,13 @@ class CategoryAdapter(
             binding.categoryName.maxLines = 1
             binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
             binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
-            val count = counts[value.id]
-            val showCount = count != null && count > 0 && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
-            binding.categoryCount.isVisible = showCount
-            if (showCount) binding.categoryCount.text = "($count)"
+            val count = counts[value.id]?.takeIf {
+                it > 0 && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
+            }
+            binding.categoryCount.isVisible = count != null
+            if (count != null) binding.categoryCount.text = "($count)"
             binding.root.isSelected = row.selected
-            binding.root.contentDescription = value.name
+            binding.root.contentDescription = categoryAccessibilityLabel(binding.root.resources, value, count)
             binding.root.nextFocusLeftId = if (bindingAdapterPosition == 0) R.id.category_menu_button else View.NO_ID
             binding.categoryActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             binding.categoryActions.contentDescription = binding.root.context.getString(R.string.options_for, value.name)

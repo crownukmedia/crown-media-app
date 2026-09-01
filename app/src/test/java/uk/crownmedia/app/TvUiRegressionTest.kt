@@ -144,9 +144,16 @@ class TvUiRegressionTest {
     fun tvSearchCategoriesAndStateUseNonOverlappingVerticalAnchors() {
         val categories = activity.findViewById<View>(R.id.category_bar)
         val state = activity.findViewById<View>(R.id.state_panel)
+        val message = activity.findViewById<View>(R.id.state_message)
+        val stateParams = state.layoutParams as ConstraintLayout.LayoutParams
 
         assertEquals(dp(4), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
-        assertEquals(R.id.category_bar, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
+        assertEquals(R.id.category_bar, stateParams.topToBottom)
+        assertEquals(0, stateParams.width)
+        assertEquals(dp(480), stateParams.matchConstraintMaxWidth)
+        assertEquals(dp(32), stateParams.marginStart)
+        assertEquals(dp(32), stateParams.marginEnd)
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, message.layoutParams.width)
     }
 
     @Test
@@ -209,8 +216,24 @@ class TvUiRegressionTest {
 
         val dialog = ShadowAlertDialog.getLatestAlertDialog()
         assertNotNull(dialog)
+        assertTrue(dialog.findViewById<TextView>(android.R.id.message).text.toString().contains("Settings"))
         assertEquals("Use TV layout", dialog.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
         assertEquals("Use mobile layout", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
+    }
+
+    @Test
+    fun settingsExposesRecoverableAutoMobileAndTvLayoutChoices() {
+        activity.findViewById<View>(R.id.nav_settings).performClick()
+
+        val settingsDialog = ShadowAlertDialog.getLatestAlertDialog()
+        assertEquals("App layout • TV", settingsDialog.listView.adapter.getItem(6).toString())
+        requireNotNull(settingsDialog.listView.onItemClickListener)
+            .onItemClick(settingsDialog.listView, null, 6, 6L)
+
+        val layoutDialog = ShadowAlertDialog.getLatestAlertDialog()
+        assertEquals("Auto-detect", layoutDialog.listView.adapter.getItem(0).toString())
+        assertEquals("Mobile", layoutDialog.listView.adapter.getItem(1).toString())
+        assertEquals("TV", layoutDialog.listView.adapter.getItem(2).toString())
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()

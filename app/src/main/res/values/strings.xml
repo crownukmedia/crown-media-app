@@ -52,7 +52,12 @@
     <string name="open_all_categories">Open all categories</string>
     <string name="all_categories">All categories</string>
     <string name="tv_layout_detected">TV layout detected</string>
-    <string name="tv_layout_confirmation">This device looks like a TV. Use the remote-friendly TV layout?</string>
+    <string name="tv_layout_confirmation">This device looks like a TV. Use the remote-friendly TV layout? You can change this later in Settings.</string>
     <string name="use_tv_layout">Use TV layout</string>
     <string name="use_mobile_layout">Use mobile layout</string>
+    <string name="app_layout">App layout</string>
+    <string name="app_layout_setting">App layout  •  %1$s</string>
+    <string name="app_layout_auto">Auto-detect</string>
+    <string name="app_layout_mobile">Mobile</string>
+    <string name="app_layout_tv">TV</string>
 </resources>
