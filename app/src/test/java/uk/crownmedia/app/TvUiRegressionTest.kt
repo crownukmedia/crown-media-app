@@ -1,8 +1,10 @@
 package uk.crownmedia.app
 
 import android.app.UiModeManager
+import android.app.AlertDialog
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -18,6 +20,7 @@ import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -27,6 +30,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAlertDialog
 import uk.crownmedia.core.model.ProviderCredentials
 
 @RunWith(RobolectricTestRunner::class)
@@ -37,6 +41,7 @@ class TvUiRegressionTest {
     @Before
     fun setUp() {
         setTelevisionMode()
+        LayoutSelection(RuntimeEnvironment.getApplication()).select(AppLayout.TELEVISION)
         val store = AppStore(FakeSecureStore()).apply {
             save(
                 "TV test",
@@ -55,6 +60,7 @@ class TvUiRegressionTest {
     @After
     fun tearDown() {
         activity.finish()
+        LayoutSelection(RuntimeEnvironment.getApplication()).clear()
         MainActivity.storeFactory = ::AppStore
     }
 
@@ -66,7 +72,7 @@ class TvUiRegressionTest {
         assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
         assertEquals(6, grid.adapter?.itemCount)
         assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
-        assertEquals(dp(120), sideNav.layoutParams.width)
+        assertEquals(dp(320), sideNav.layoutParams.width)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_reload).visibility)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_playlist).visibility)
     }
@@ -109,6 +115,8 @@ class TvUiRegressionTest {
         assertEquals(R.id.search_box, categories.nextFocusUpId)
         assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as LinearLayoutManager).orientation)
         assertEquals(dp(62), activity.findViewById<View>(R.id.category_bar).layoutParams.height)
+        assertEquals(dp(46), categories.layoutParams.height)
+        assertFalse(activity.findViewById<TextView>(R.id.nav_live).text.contains('\n'))
         val scaledDensity = activity.resources.displayMetrics.density * activity.resources.configuration.fontScale
         assertEquals(14f, navHome.textSize / scaledDensity, 0.1f)
     }
@@ -128,6 +136,8 @@ class TvUiRegressionTest {
         assertEquals(dp(14), category.findViewById<TextView>(R.id.category_name).paddingStart)
         assertEquals(dp(14), category.findViewById<TextView>(R.id.category_name).paddingEnd)
         assertEquals(dp(48), activity.findViewById<View>(R.id.category_menu_button).layoutParams.width)
+        assertEquals(dp(46), activity.findViewById<View>(R.id.category_menu_button).layoutParams.height)
+        assertEquals(dp(46), activity.findViewById<View>(R.id.category_list).layoutParams.height)
     }
 
     @Test
@@ -171,12 +181,36 @@ class TvUiRegressionTest {
         activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
 
         val logo = activity.findViewById<ImageView>(R.id.login_logo)
+        val login = activity.findViewById<View>(R.id.login_panel)
+        val loginParams = login.layoutParams as ConstraintLayout.LayoutParams
 
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals(dp(8), logo.paddingLeft)
         assertEquals(dp(8), logo.paddingTop)
         assertEquals(dp(8), logo.paddingRight)
         assertEquals(dp(8), logo.paddingBottom)
+        assertEquals(0, loginParams.width)
+        assertEquals(dp(720), loginParams.matchConstraintMaxWidth)
+        assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.startToStart)
+        assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.endToEnd)
+        assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.topToTop)
+        assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.bottomToBottom)
+    }
+
+    @Test
+    fun firstTvLaunchRequestsConsentForDetectedLayout() {
+        activity.finish()
+        LayoutSelection(RuntimeEnvironment.getApplication()).clear()
+        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        setTelevisionMode()
+
+        activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val dialog = ShadowAlertDialog.getLatestAlertDialog()
+        assertNotNull(dialog)
+        assertEquals("Use TV layout", dialog.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        assertEquals("Use mobile layout", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()

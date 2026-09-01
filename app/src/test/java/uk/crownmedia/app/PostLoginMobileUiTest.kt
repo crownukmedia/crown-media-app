@@ -158,6 +158,7 @@ class PostLoginMobileUiTest {
         assertEquals((12 * density).toInt(), name.paddingEnd)
         assertEquals((48 * density).toInt(), actions.layoutParams.width)
         assertEquals((48 * density).toInt(), menu.layoutParams.width)
+        assertEquals((48 * density).toInt(), activity.findViewById<View>(R.id.category_list).layoutParams.height)
     }
 
     @Test

@@ -51,4 +51,8 @@
     <string name="options_for">Options for %1$s</string>
     <string name="open_all_categories">Open all categories</string>
     <string name="all_categories">All categories</string>
+    <string name="tv_layout_detected">TV layout detected</string>
+    <string name="tv_layout_confirmation">This device looks like a TV. Use the remote-friendly TV layout?</string>
+    <string name="use_tv_layout">Use TV layout</string>
+    <string name="use_mobile_layout">Use mobile layout</string>
 </resources>

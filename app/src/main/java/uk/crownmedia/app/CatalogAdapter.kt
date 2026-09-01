@@ -92,7 +92,7 @@ class CategoryAdapter(
             binding.root.isSelected = row.selected
             binding.root.contentDescription = value.name
             binding.root.nextFocusLeftId = if (bindingAdapterPosition == 0) R.id.category_menu_button else View.NO_ID
-            binding.categoryActions.isVisible = binding.root.context.deviceClass() != DeviceClass.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
+            binding.categoryActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             binding.categoryActions.contentDescription = binding.root.context.getString(R.string.options_for, value.name)
             binding.categoryActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
@@ -135,7 +135,7 @@ class CatalogAdapter(
             binding.meta.text = value.meta
             binding.badge.text = value.badge
             binding.badge.visibility = if (value.badge.isBlank()) View.GONE else View.VISIBLE
-            val television = binding.root.context.deviceClass() == DeviceClass.TELEVISION
+            val television = binding.root.context.appLayout() == AppLayout.TELEVISION
             val poster = !uniformLandscapeCards && (value.kind == "movie" || value.kind == "series")
             val artworkHeightDp = if (poster) 220 else if (television) 118 else 104
             val artworkHeight = (artworkHeightDp * binding.root.resources.displayMetrics.density).toInt()
@@ -179,7 +179,7 @@ class CatalogAdapter(
                 )
             }
             binding.root.contentDescription = listOf(value.title, value.meta, value.badge).filter { it.isNotBlank() }.joinToString(", ")
-            binding.moreActions.isVisible = binding.root.context.deviceClass() != DeviceClass.TELEVISION && value.kind != "home"
+            binding.moreActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.kind != "home"
             binding.moreActions.contentDescription = binding.root.context.getString(R.string.options_for, value.title)
             binding.moreActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
