@@ -1,5 +1,6 @@
 package uk.crownmedia.app
 
+import android.app.AlertDialog
 import android.content.res.Configuration
 import android.view.LayoutInflater
 import android.view.View
@@ -21,7 +22,9 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAlertDialog
 import kotlinx.coroutines.runBlocking
 import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
@@ -124,6 +127,22 @@ class PostLoginMobileUiTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         assertEquals("", search.text.toString())
         assertEquals("Search live channels", search.hint.toString())
+    }
+
+    @Test
+    fun mobileBackReturnsFromSectionThenConfirmsExitAtHome() {
+        activity.findViewById<View>(R.id.nav_live).performClick()
+
+        activity.onBackPressedDispatcher.onBackPressed()
+
+        assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
+        assertFalse(activity.isFinishing)
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Exit Crown Media?", shadowOf(dialog).title.toString())
+        assertEquals("Cancel", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
+        assertFalse(activity.isFinishing)
     }
 
     @Test

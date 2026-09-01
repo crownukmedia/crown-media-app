@@ -6,8 +6,8 @@
     <LinearLayout android:id="@+id/side_nav" android:layout_width="88dp" android:layout_height="0dp"
         android:clipChildren="false" android:clipToPadding="false" android:orientation="vertical"
         app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent">
-        <LinearLayout android:id="@+id/tv_nav_panel" android:layout_width="88dp" android:layout_height="match_parent"
-            android:background="#F20A0D14" android:elevation="24dp" android:gravity="center_horizontal" android:orientation="vertical"
+        <LinearLayout android:id="@+id/tv_nav_panel" android:layout_width="match_parent" android:layout_height="match_parent"
+            android:background="#F20A0D14" android:gravity="center_horizontal" android:orientation="vertical"
             android:paddingHorizontal="12dp" android:paddingVertical="12dp">
             <ImageView android:id="@+id/brand_logo" android:layout_width="56dp" android:layout_height="54dp" android:layout_marginBottom="10dp" android:background="@drawable/bg_logo_surface" android:contentDescription="@string/app_name" android:adjustViewBounds="true" android:padding="5dp" android:scaleType="fitCenter" android:src="@drawable/crown_media_logo_header" />
             <Button android:id="@+id/nav_home" style="@style/Widget.Crown.NavButton" android:text="@string/nav_home" app:icon="@drawable/ic_nav_home" />

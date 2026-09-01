@@ -74,10 +74,14 @@ class TvUiRegressionTest {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val sideNav = activity.findViewById<View>(R.id.side_nav)
 
+        shadowOf(Looper.getMainLooper()).idle()
+
         assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
         assertEquals(6, grid.adapter?.itemCount)
         assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
         assertEquals(dp(88), sideNav.layoutParams.width)
+        assertTrue(grid.hasFocus())
+        assertFalse(activity.findViewById<View>(R.id.nav_home).hasFocus())
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_reload).visibility)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_playlist).visibility)
     }
@@ -162,30 +166,79 @@ class TvUiRegressionTest {
     }
 
     @Test
-    fun tvNavigationExpandsOverContentOnFocusAndCollapsesAfterFocusLeaves() {
+    fun tvNavigationPushesContentOnFocusAndCollapsesAfterFocusLeaves() {
         val rail = activity.findViewById<View>(R.id.side_nav)
         val panel = activity.findViewById<View>(R.id.tv_nav_panel)
-        val home = activity.findViewById<Button>(R.id.nav_home)
+        val home = activity.findViewById<MaterialButton>(R.id.nav_home)
         val content = activity.findViewById<View>(R.id.content_grid)
+        val topBar = activity.findViewById<View>(R.id.top_bar)
 
         assertEquals(dp(88), rail.layoutParams.width)
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, panel.layoutParams.width)
+        assertEquals(R.id.side_nav, (topBar.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         content.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
-        assertEquals(dp(88), panel.layoutParams.width)
+        assertEquals(dp(88), rail.layoutParams.width)
         assertEquals("", home.text.toString())
+        assertEquals(Gravity.CENTER, home.gravity)
+        assertEquals(0, home.iconPadding)
+        assertEquals(0, home.paddingLeft)
+        assertEquals(0, home.paddingRight)
 
         home.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
 
-        assertEquals(dp(260), panel.layoutParams.width)
+        assertEquals(dp(260), rail.layoutParams.width)
         assertEquals("Home", home.text.toString())
-        assertEquals(dp(88), rail.layoutParams.width)
+        assertEquals(Gravity.START or Gravity.CENTER_VERTICAL, home.gravity)
+        assertEquals(dp(16), home.iconPadding)
 
         content.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
 
-        assertEquals(dp(88), panel.layoutParams.width)
+        assertEquals(dp(88), rail.layoutParams.width)
         assertEquals("", home.text.toString())
+    }
+
+    @Test
+    fun tvBackFromContentSectionReturnsHomeWithoutFinishing() {
+        activity.findViewById<View>(R.id.nav_live).performClick()
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
+        assertEquals("Welcome to Crown Media", activity.findViewById<TextView>(R.id.screen_title).text.toString())
+        assertFalse(activity.isFinishing)
+        assertTrue(activity.findViewById<View>(R.id.content_grid).hasFocus())
+    }
+
+    @Test
+    fun tvBackCollapsesExpandedSidebarBeforeLeavingHome() {
+        val rail = activity.findViewById<View>(R.id.side_nav)
+        activity.findViewById<View>(R.id.nav_home).requestFocus()
+        shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
+        assertEquals(dp(260), rail.layoutParams.width)
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
+
+        assertEquals(dp(88), rail.layoutParams.width)
+        assertTrue(activity.findViewById<View>(R.id.content_grid).hasFocus())
+        assertFalse(activity.isFinishing)
+    }
+
+    @Test
+    fun tvBackAtHomeShowsExitConfirmation() {
+        activity.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Exit Crown Media?", shadowOf(dialog).title.toString())
+        assertEquals("Are you sure you want to exit the app?", shadowOf(dialog).message.toString())
+        assertEquals("Exit", dialog.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        assertEquals("Cancel", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
+        assertFalse(activity.isFinishing)
     }
 
     @Test

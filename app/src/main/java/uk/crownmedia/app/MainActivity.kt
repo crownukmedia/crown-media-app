@@ -161,7 +161,12 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.setAccessibilityHeading(binding.stateTitle, true)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (binding.loginPanel.root.isVisible && store.selected() != null) {
+                if (categoryMenuDialog?.isShowing == true) {
+                    categoryMenuDialog?.dismiss()
+                } else if (tvNavigationExpanded) {
+                    setTvNavigationExpanded(false)
+                    focusCurrentSectionContent()
+                } else if (binding.loginPanel.root.isVisible && store.selected() != null) {
                     cancelLogin()
                     open(Section.HOME)
                 } else if (nestedSeries != null) {
@@ -172,9 +177,10 @@ class MainActivity : AppCompatActivity() {
                 } else if (section == Section.SEARCH) {
                     hideKeyboard()
                     open(Section.HOME)
+                } else if (section in PAGED_SECTIONS) {
+                    open(Section.HOME)
                 } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+                    confirmExit()
                 }
             }
         })
@@ -243,11 +249,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureNavigation() {
-        binding.navHome.setOnClickListener { open(Section.HOME) }
-        binding.navLive.setOnClickListener { open(Section.LIVE) }
-        binding.navMovies.setOnClickListener { open(Section.MOVIES) }
-        binding.navSeries.setOnClickListener { open(Section.SERIES) }
-        binding.navSearch.setOnClickListener { open(Section.SEARCH) }
+        binding.navHome.setOnClickListener { openFromNavigation(Section.HOME) }
+        binding.navLive.setOnClickListener { openFromNavigation(Section.LIVE) }
+        binding.navMovies.setOnClickListener { openFromNavigation(Section.MOVIES) }
+        binding.navSeries.setOnClickListener { openFromNavigation(Section.SERIES) }
+        binding.navSearch.setOnClickListener { openFromNavigation(Section.SEARCH) }
         binding.navAccount.setOnClickListener { showAccount() }
         binding.navSettings.setOnClickListener { showSettings() }
         binding.navExit.setOnClickListener { confirmExit() }
@@ -267,6 +273,13 @@ class MainActivity : AppCompatActivity() {
         if (isTelevisionLayout()) {
             configureTvNavigationRail()
         }
+    }
+
+    private fun openFromNavigation(target: Section) {
+        open(target)
+        if (!isTelevisionLayout()) return
+        setTvNavigationExpanded(false)
+        binding.root.post(::focusCurrentSectionContent)
     }
 
     private fun configureTvNavigationRail() {
@@ -293,17 +306,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun setTvNavigationExpanded(expanded: Boolean) {
         if (!isTelevisionLayout() || tvNavigationExpanded == expanded) return
-        val panel = findViewById<LinearLayout>(R.id.tv_nav_panel) ?: return
+        val rail = binding.sideNav
         tvNavigationExpanded = expanded
         applyTvNavigationLabels(expanded)
         tvNavigationAnimator?.cancel()
         val collapsedWidth = dp(TV_NAV_COLLAPSED_WIDTH_DP)
         val responsiveExpandedDp = responsiveTvNavigationWidthDp(resources.configuration.screenWidthDp)
         val targetWidth = if (expanded) dp(responsiveExpandedDp) else collapsedWidth
-        tvNavigationAnimator = ValueAnimator.ofInt(panel.width.takeIf { it > 0 } ?: panel.layoutParams.width, targetWidth).apply {
+        tvNavigationAnimator = ValueAnimator.ofInt(rail.width.takeIf { it > 0 } ?: rail.layoutParams.width, targetWidth).apply {
             duration = TV_NAV_ANIMATION_MS
             addUpdateListener { animator ->
-                panel.layoutParams = panel.layoutParams.apply { width = animator.animatedValue as Int }
+                rail.layoutParams = rail.layoutParams.apply { width = animator.animatedValue as Int }
             }
             start()
         }
@@ -313,7 +326,19 @@ class MainActivity : AppCompatActivity() {
         tvNavigationButtons().forEach { button ->
             button.text = if (expanded) tvNavigationLabels[button.id] ?: "" else ""
             button.gravity = if (expanded) Gravity.START or Gravity.CENTER_VERTICAL else Gravity.CENTER
+            button.iconPadding = if (expanded) dp(TV_NAV_ICON_PADDING_DP) else 0
+            val horizontalPadding = if (expanded) dp(TV_NAV_BUTTON_PADDING_DP) else 0
+            button.setPadding(horizontalPadding, button.paddingTop, horizontalPadding, button.paddingBottom)
             button.contentDescription = tvNavigationLabels[button.id] ?: ""
+        }
+    }
+
+    private fun focusCurrentSectionContent() {
+        when {
+            catalogAdapter.itemCount > 0 -> restoreCardFocus(sectionState(section).focusedCardKey)
+            section in PAGED_SECTIONS && binding.categoryList.isVisible -> binding.categoryList.requestFocus()
+            section == Section.SEARCH -> binding.searchBox.requestFocus()
+            else -> binding.contentGrid.requestFocus()
         }
     }
 
@@ -438,7 +463,6 @@ class MainActivity : AppCompatActivity() {
             liveRankingJob?.cancel()
         }
         val navigationStarted = SystemClock.elapsedRealtime()
-        val enteringAuthenticatedShell = binding.loginPanel.root.isVisible
         showAuthenticatedShell()
         section = value
         // Supersede any pending AsyncListDiffer commit from a Home count update before the
@@ -487,9 +511,6 @@ class MainActivity : AppCompatActivity() {
             load()
         }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "tab_${value.name.lowercase()}_render_ms=${SystemClock.elapsedRealtime() - navigationStarted}")
-        if (enteringAuthenticatedShell && isTelevisionLayout()) {
-            navigationView(value).post { navigationView(value).requestFocus() }
-        }
         analytics.trackScreen(value.name.lowercase())
     }
 
@@ -996,11 +1017,11 @@ class MainActivity : AppCompatActivity() {
         categoriesAdapter.submit(emptyList())
         val p = store.selected() ?: return
         PAGED_SECTIONS.forEach { contentCounts.putIfAbsent(it, ContentCountState.Loading) }
-        renderHome(p)
+        renderHome(p, focusContent = isTelevisionLayout())
         loadContentCounts(p)
     }
 
-    private fun renderHome(p: SavedPlaylist) {
+    private fun renderHome(p: SavedPlaylist, focusContent: Boolean = false) {
         val expiry = p.expiresAt?.let { DateFormat.getDateInstance().format(Date(it * 1000)) } ?: "No expiry reported"
         val cards = listOf(
             CatalogCard("live", "home", "Live TV", null, "${countState(Section.LIVE).homeDescription("channels")} • EPG & catch-up", "WATCH", localArtwork = R.drawable.home_live_icon),
@@ -1013,6 +1034,9 @@ class MainActivity : AppCompatActivity() {
         val state = sectionState(Section.HOME).apply { this.cards = cards; categories = emptyList() }
         catalogAdapter.submit(cards) {
             state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
+            if (focusContent && section == Section.HOME && isTelevisionLayout()) {
+                restoreCardFocus(state.focusedCardKey)
+            }
         }
     }
 
@@ -1959,7 +1983,14 @@ class MainActivity : AppCompatActivity() {
         prepareCrownDialog(dialog)
     }
 
-    private fun confirmExit() { AlertDialog.Builder(this).setTitle("Exit Crown Media?").setPositiveButton("Exit") { _, _ -> finishAffinity() }.setNegativeButton("Stay", null).showCrown() }
+    private fun confirmExit() {
+        AlertDialog.Builder(this)
+            .setTitle("Exit Crown Media?")
+            .setMessage("Are you sure you want to exit the app?")
+            .setPositiveButton("Exit") { _, _ -> finishAffinity() }
+            .setNegativeButton("Cancel", null)
+            .showCrown()
+    }
     private fun openTrailer(value: String) {
         val url = if (value.startsWith("http")) value else "https://www.youtube.com/watch?v=$value"
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { Toast.makeText(this, "No browser or YouTube app found", Toast.LENGTH_LONG).show() }
@@ -2309,6 +2340,8 @@ class MainActivity : AppCompatActivity() {
         private const val TV_NAV_MIN_EXPANDED_WIDTH_DP = 220
         private const val TV_NAV_MAX_EXPANDED_WIDTH_DP = 260
         private const val TV_NAV_ANIMATION_MS = 180L
+        private const val TV_NAV_ICON_PADDING_DP = 16
+        private const val TV_NAV_BUTTON_PADDING_DP = 16
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
 
