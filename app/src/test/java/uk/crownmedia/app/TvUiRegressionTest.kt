@@ -5,18 +5,22 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Looper
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
+import com.google.android.material.button.MaterialButton
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -32,6 +36,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
 import uk.crownmedia.core.model.ProviderCredentials
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "w960dp-h540dp-television-xhdpi")
@@ -59,7 +64,7 @@ class TvUiRegressionTest {
 
     @After
     fun tearDown() {
-        activity.finish()
+        if (::activity.isInitialized) activity.finish()
         LayoutSelection(RuntimeEnvironment.getApplication()).clear()
         MainActivity.storeFactory = ::AppStore
     }
@@ -72,7 +77,7 @@ class TvUiRegressionTest {
         assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
         assertEquals(6, grid.adapter?.itemCount)
         assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
-        assertEquals(dp(320), sideNav.layoutParams.width)
+        assertEquals(dp(88), sideNav.layoutParams.width)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_reload).visibility)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_playlist).visibility)
     }
@@ -126,7 +131,7 @@ class TvUiRegressionTest {
         val logo = activity.findViewById<ImageView>(R.id.brand_logo)
         val category = activity.layoutInflater.inflate(R.layout.item_category, FrameLayout(activity), false)
 
-        assertEquals(dp(72), logo.layoutParams.width)
+        assertEquals(dp(56), logo.layoutParams.width)
         assertEquals(dp(54), logo.layoutParams.height)
         assertEquals(dp(5), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
@@ -154,6 +159,33 @@ class TvUiRegressionTest {
         assertEquals(dp(32), stateParams.marginStart)
         assertEquals(dp(32), stateParams.marginEnd)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, message.layoutParams.width)
+    }
+
+    @Test
+    fun tvNavigationExpandsOverContentOnFocusAndCollapsesAfterFocusLeaves() {
+        val rail = activity.findViewById<View>(R.id.side_nav)
+        val panel = activity.findViewById<View>(R.id.tv_nav_panel)
+        val home = activity.findViewById<Button>(R.id.nav_home)
+        val content = activity.findViewById<View>(R.id.content_grid)
+
+        assertEquals(dp(88), rail.layoutParams.width)
+        content.requestFocus()
+        shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
+        assertEquals(dp(88), panel.layoutParams.width)
+        assertEquals("", home.text.toString())
+
+        home.requestFocus()
+        shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
+
+        assertEquals(dp(260), panel.layoutParams.width)
+        assertEquals("Home", home.text.toString())
+        assertEquals(dp(88), rail.layoutParams.width)
+
+        content.requestFocus()
+        shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
+
+        assertEquals(dp(88), panel.layoutParams.width)
+        assertEquals("", home.text.toString())
     }
 
     @Test
@@ -189,6 +221,7 @@ class TvUiRegressionTest {
 
         val logo = activity.findViewById<ImageView>(R.id.login_logo)
         val login = activity.findViewById<View>(R.id.login_panel)
+        val loginContent = (login as ViewGroup).getChildAt(0) as LinearLayout
         val loginParams = login.layoutParams as ConstraintLayout.LayoutParams
 
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
@@ -202,6 +235,7 @@ class TvUiRegressionTest {
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.endToEnd)
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.topToTop)
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.bottomToBottom)
+        assertEquals(Gravity.CENTER, loginContent.gravity)
     }
 
     @Test
@@ -234,6 +268,27 @@ class TvUiRegressionTest {
         assertEquals("Auto-detect", layoutDialog.listView.adapter.getItem(0).toString())
         assertEquals("Mobile", layoutDialog.listView.adapter.getItem(1).toString())
         assertEquals("TV", layoutDialog.listView.adapter.getItem(2).toString())
+    }
+
+    @Test
+    fun tvDialogButtonsUseWhiteTextAndPinkFocusedBackground() {
+        activity.findViewById<View>(R.id.nav_exit).performClick()
+        val dialog = ShadowAlertDialog.getLatestAlertDialog()
+        val positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE) as MaterialButton
+        val negative = dialog.getButton(AlertDialog.BUTTON_NEGATIVE) as MaterialButton
+        val white = ContextCompat.getColor(activity, R.color.white)
+        val pink = ContextCompat.getColor(activity, R.color.crown_primary_bright)
+
+        positive.requestFocus()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(white, positive.currentTextColor)
+        assertEquals(pink, positive.backgroundTintList?.getColorForState(intArrayOf(android.R.attr.state_focused), 0))
+
+        negative.requestFocus()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(white, negative.currentTextColor)
+        assertEquals(pink, negative.backgroundTintList?.getColorForState(intArrayOf(android.R.attr.state_focused), 0))
+        assertFalse(positive.hasFocus())
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()

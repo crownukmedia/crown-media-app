@@ -53,7 +53,7 @@
         android:paddingVertical="36dp"
         android:visibility="gone">
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/playback_unavailable" android:textColor="#FFFFFF" android:textSize="28sp" android:textStyle="bold" />
-        <TextView android:id="@+id/playback_error_message" android:layout_width="640dp" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:gravity="center" android:textColor="#C7CBD6" android:textSize="17sp" />
+        <TextView android:id="@+id/playback_error_message" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:gravity="center" android:textColor="#C7CBD6" android:textSize="17sp" />
         <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="24dp" android:orientation="horizontal">
             <Button android:id="@+id/playback_retry" style="@style/Widget.Crown.PlayerTvButton" android:nextFocusRight="@id/playback_back" android:text="@string/retry_playback" />
             <Button android:id="@+id/playback_back" style="@style/Widget.Crown.PlayerTvButton" android:layout_marginStart="16dp" android:nextFocusLeft="@id/playback_retry" android:text="@string/back_to_channels" />

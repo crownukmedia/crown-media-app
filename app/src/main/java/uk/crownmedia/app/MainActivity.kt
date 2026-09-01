@@ -1,6 +1,7 @@
 package uk.crownmedia.app
 
 import android.app.AlertDialog
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -14,6 +15,7 @@ import android.util.Log
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
+import android.view.Gravity
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -41,6 +43,7 @@ import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
@@ -121,6 +124,9 @@ class MainActivity : AppCompatActivity() {
     private var contentRequestGeneration = 0L
     private var lastTrackedSearch: Int? = null
     private var categoryMenuDialog: AlertDialog? = null
+    private var tvNavigationExpanded = false
+    private var tvNavigationAnimator: ValueAnimator? = null
+    private val tvNavigationLabels = mutableMapOf<Int, CharSequence>()
 
     override fun attachBaseContext(newBase: Context) {
         detectedDeviceClass = newBase.deviceClass()
@@ -259,17 +265,70 @@ class MainActivity : AppCompatActivity() {
             if (retry != null) retry() else if (store.selected() == null) showManualPlaylist() else load(true)
         }
         if (isTelevisionLayout()) {
-            listOf(binding.navHome, binding.navLive, binding.navMovies, binding.navSeries, binding.navSearch, binding.navAccount, binding.navSettings, binding.navExit)
-                .forEach { button ->
-                    button.setOnFocusChangeListener { view, focused ->
-                        (view as? com.google.android.material.button.MaterialButton)?.strokeWidth =
-                            ((if (focused) 3 else 1) * resources.displayMetrics.density).toInt().coerceAtLeast(1)
-                        view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
-                            .translationZ(if (focused) 10f else 0f).setDuration(120).start()
-                    }
-                }
+            configureTvNavigationRail()
         }
     }
+
+    private fun configureTvNavigationRail() {
+        val buttons = tvNavigationButtons()
+        buttons.forEach { button ->
+            tvNavigationLabels[button.id] = button.text
+            button.contentDescription = button.text
+            button.setOnFocusChangeListener { view, focused ->
+                (view as? MaterialButton)?.strokeWidth =
+                    ((if (focused) 3 else 1) * resources.displayMetrics.density).toInt().coerceAtLeast(1)
+                view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
+                    .translationZ(if (focused) 10f else 0f).setDuration(120).start()
+                if (focused) {
+                    setTvNavigationExpanded(true)
+                } else {
+                    binding.root.post {
+                        if (buttons.none(View::hasFocus)) setTvNavigationExpanded(false)
+                    }
+                }
+            }
+        }
+        applyTvNavigationLabels(expanded = false)
+    }
+
+    private fun setTvNavigationExpanded(expanded: Boolean) {
+        if (!isTelevisionLayout() || tvNavigationExpanded == expanded) return
+        val panel = findViewById<LinearLayout>(R.id.tv_nav_panel) ?: return
+        tvNavigationExpanded = expanded
+        applyTvNavigationLabels(expanded)
+        tvNavigationAnimator?.cancel()
+        val collapsedWidth = dp(TV_NAV_COLLAPSED_WIDTH_DP)
+        val responsiveExpandedDp = responsiveTvNavigationWidthDp(resources.configuration.screenWidthDp)
+        val targetWidth = if (expanded) dp(responsiveExpandedDp) else collapsedWidth
+        tvNavigationAnimator = ValueAnimator.ofInt(panel.width.takeIf { it > 0 } ?: panel.layoutParams.width, targetWidth).apply {
+            duration = TV_NAV_ANIMATION_MS
+            addUpdateListener { animator ->
+                panel.layoutParams = panel.layoutParams.apply { width = animator.animatedValue as Int }
+            }
+            start()
+        }
+    }
+
+    private fun applyTvNavigationLabels(expanded: Boolean) {
+        tvNavigationButtons().forEach { button ->
+            button.text = if (expanded) tvNavigationLabels[button.id] ?: "" else ""
+            button.gravity = if (expanded) Gravity.START or Gravity.CENTER_VERTICAL else Gravity.CENTER
+            button.contentDescription = tvNavigationLabels[button.id] ?: ""
+        }
+    }
+
+    private fun tvNavigationButtons(): List<MaterialButton> = listOf(
+        binding.navHome,
+        binding.navLive,
+        binding.navMovies,
+        binding.navSeries,
+        binding.navSearch,
+        binding.navAccount,
+        binding.navSettings,
+        binding.navExit,
+    ).mapNotNull { it as? MaterialButton }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun showMobileMenu(anchor: View) {
         if (store.selected() == null) return
@@ -382,6 +441,9 @@ class MainActivity : AppCompatActivity() {
         val enteringAuthenticatedShell = binding.loginPanel.root.isVisible
         showAuthenticatedShell()
         section = value
+        // Supersede any pending AsyncListDiffer commit from a Home count update before the
+        // destination begins loading. Otherwise the old Home tiles can flash over the new route.
+        if (changingTopLevelSection && value != Section.HOME) catalogAdapter.submit(emptyList())
         binding.pageProgress.isVisible = false
         val state = sectionState(value)
         currentCategory = state.categoryId
@@ -933,6 +995,7 @@ class MainActivity : AppCompatActivity() {
         hideState()
         categoriesAdapter.submit(emptyList())
         val p = store.selected() ?: return
+        PAGED_SECTIONS.forEach { contentCounts.putIfAbsent(it, ContentCountState.Loading) }
         renderHome(p)
         loadContentCounts(p)
     }
@@ -959,9 +1022,19 @@ class MainActivity : AppCompatActivity() {
     private fun updateCountNavigation() {
         if (!::binding.isInitialized) return
         val television = isTelevisionLayout()
-        binding.navLive.text = countState(Section.LIVE).navigationLabel(getString(R.string.nav_live), television = television)
-        binding.navMovies.text = countState(Section.MOVIES).navigationLabel(getString(R.string.nav_movies), television = television)
-        binding.navSeries.text = countState(Section.SERIES).navigationLabel(getString(R.string.nav_series), television = television)
+        updateNavigationText(binding.navLive, countState(Section.LIVE).navigationLabel(getString(R.string.nav_live), television = television))
+        updateNavigationText(binding.navMovies, countState(Section.MOVIES).navigationLabel(getString(R.string.nav_movies), television = television))
+        updateNavigationText(binding.navSeries, countState(Section.SERIES).navigationLabel(getString(R.string.nav_series), television = television))
+    }
+
+    private fun updateNavigationText(view: TextView, label: CharSequence) {
+        if (!isTelevisionLayout()) {
+            view.text = label
+            return
+        }
+        tvNavigationLabels[view.id] = label
+        view.contentDescription = label
+        view.text = if (tvNavigationExpanded) label else ""
     }
 
     private fun updateContentCount(target: Section, value: ContentCountState) {
@@ -983,7 +1056,9 @@ class MainActivity : AppCompatActivity() {
                                 updateContentCount(target, ContentCountState.Ready(cachedCount))
                                 return@async
                             }
-                            updateContentCount(target, ContentCountState.Loading)
+                            // A non-empty Room cache is immediately useful; do not hide it behind
+                            // a full provider refresh. The final exact value replaces it later.
+                            if (cachedCount > 0) updateContentCount(target, ContentCountState.Ready(cachedCount))
                             val result = warmCatalogKind(playlist, target.cardKind).await()
                             if (activePlaylistId != playlist.id) return@async
                             updateContentCount(
@@ -2136,7 +2211,13 @@ class MainActivity : AppCompatActivity() {
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE),
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL),
         )
+        val textColors = ContextCompat.getColorStateList(this, R.color.tv_button_text)
+        val backgroundColors = ContextCompat.getColorStateList(this, R.color.tv_button_background)
+        val strokeColors = ContextCompat.getColorStateList(this, R.color.tv_button_stroke)
         buttons.forEach { button ->
+            button.setTextColor(textColors)
+            ViewCompat.setBackgroundTintList(button, backgroundColors)
+            (button as? MaterialButton)?.strokeColor = strokeColors
             button.setOnFocusChangeListener { view, focused ->
                 view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
                     .translationZ(if (focused) 10f else 0f).setDuration(120).start()
@@ -2224,7 +2305,15 @@ class MainActivity : AppCompatActivity() {
         private const val MIN_SEARCH_LENGTH = 2
         private const val SEARCH_RESULT_LIMIT = 500
         private const val QR_CONNECT_UI_ENABLED = false
+        private const val TV_NAV_COLLAPSED_WIDTH_DP = 88
+        private const val TV_NAV_MIN_EXPANDED_WIDTH_DP = 220
+        private const val TV_NAV_MAX_EXPANDED_WIDTH_DP = 260
+        private const val TV_NAV_ANIMATION_MS = 180L
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
+
+        internal fun responsiveTvNavigationWidthDp(screenWidthDp: Int): Int =
+            (screenWidthDp * 0.32f).toInt()
+                .coerceIn(TV_NAV_MIN_EXPANDED_WIDTH_DP, TV_NAV_MAX_EXPANDED_WIDTH_DP)
     }
 }
