@@ -28,11 +28,16 @@ class AppStoreTest {
     @Test
     fun checkedLoginSurvivesStoreRecreation() {
         val secureStore = FakeSecureStore()
-        AppStore(secureStore).save("Crown Premium", credentials, null, "ACTIVE", null, null, persist = true)
+        AppStore(secureStore).save(
+            "Crown Premium", credentials, null, "ACTIVE", null, null,
+            serverTimezone = "Europe/London",
+            persist = true,
+        )
 
         val restored = AppStore(secureStore).selected()
         assertEquals("user", restored?.credentials?.username)
         assertEquals("secret", restored?.credentials?.password)
+        assertEquals("Europe/London", restored?.serverTimezone)
     }
 
     @Test

@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent" android:layout_height="match_parent">
 
-    <LinearLayout android:id="@+id/side_nav" android:layout_width="120dp" android:layout_height="0dp"
+    <LinearLayout android:id="@+id/side_nav" android:layout_width="320dp" android:layout_height="0dp"
         android:background="#E60A0D14" android:gravity="center_horizontal" android:orientation="vertical" android:paddingHorizontal="16dp" android:paddingVertical="12dp"
         app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent">
         <ImageView android:id="@+id/brand_logo" android:layout_width="72dp" android:layout_height="54dp" android:layout_marginBottom="10dp" android:background="@drawable/bg_logo_surface" android:contentDescription="@string/app_name" android:adjustViewBounds="true" android:padding="5dp" android:scaleType="fitCenter" android:src="@drawable/crown_media_logo_header" />
@@ -39,7 +39,7 @@
         app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toEndOf="@id/side_nav" app:layout_constraintTop_toBottomOf="@id/top_bar">
         <ImageButton android:id="@+id/category_menu_button" android:layout_width="48dp" android:layout_height="46dp" android:layout_marginEnd="8dp"
             android:background="@drawable/bg_chip_tv" android:contentDescription="@string/open_all_categories" android:focusable="true" android:padding="12dp" android:src="@drawable/ic_categories_menu" />
-        <androidx.recyclerview.widget.RecyclerView android:id="@+id/category_list" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        <androidx.recyclerview.widget.RecyclerView android:id="@+id/category_list" android:layout_width="0dp" android:layout_height="46dp" android:layout_weight="1"
             android:clipToPadding="false" android:overScrollMode="never" />
     </LinearLayout>
     <androidx.recyclerview.widget.RecyclerView android:id="@+id/content_grid" android:layout_width="0dp" android:layout_height="0dp" android:clipToPadding="false" android:paddingStart="24dp" android:paddingTop="16dp" android:paddingEnd="40dp" android:paddingBottom="28dp"
@@ -59,13 +59,15 @@
     <include
         android:id="@+id/login_panel"
         layout="@layout/view_login"
-        android:layout_width="600dp"
+        android:layout_width="0dp"
         android:layout_height="0dp"
+        android:layout_marginHorizontal="32dp"
         android:visibility="gone"
+        app:layout_constraintWidth_max="720dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
-    <View android:id="@+id/desktop_controls" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent" />
+    <LinearLayout android:id="@+id/desktop_controls" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent" />
 </androidx.constraintlayout.widget.ConstraintLayout>

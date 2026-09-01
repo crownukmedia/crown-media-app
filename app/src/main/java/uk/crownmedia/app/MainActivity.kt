@@ -120,7 +120,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
+        val launchLayout = layoutInflater.inflate(deviceClass().startupLayoutResource(), null, false)
+        binding = ActivityMainBinding.bind(launchLayout)
         setContentView(binding.root)
         analytics = (application as CrownMediaApplication).usageAnalytics
         analytics.setDeviceClass(deviceClass())
@@ -913,9 +914,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateCountNavigation() {
         if (!::binding.isInitialized) return
-        binding.navLive.text = countState(Section.LIVE).navigationLabel(getString(R.string.nav_live))
-        binding.navMovies.text = countState(Section.MOVIES).navigationLabel(getString(R.string.nav_movies))
-        binding.navSeries.text = countState(Section.SERIES).navigationLabel(getString(R.string.nav_series))
+        val television = deviceClass() == DeviceClass.TELEVISION
+        binding.navLive.text = countState(Section.LIVE).navigationLabel(getString(R.string.nav_live), television = television)
+        binding.navMovies.text = countState(Section.MOVIES).navigationLabel(getString(R.string.nav_movies), television = television)
+        binding.navSeries.text = countState(Section.SERIES).navigationLabel(getString(R.string.nav_series), television = television)
     }
 
     private fun updateContentCount(target: Section, value: ContentCountState) {
@@ -1166,7 +1168,7 @@ class MainActivity : AppCompatActivity() {
                         val stopTimestamp = entry.stopTimestamp
                         if (card.badge.contains("CATCH", true) && startTimestamp != null && stopTimestamp != null) {
                             val duration = ((stopTimestamp - startTimestamp) / 60).toInt().coerceAtLeast(1)
-                            val start = java.text.SimpleDateFormat("yyyy-MM-dd:HH-mm", java.util.Locale.US).format(Date(startTimestamp * 1000))
+                            val start = formatCatchUpStart(startTimestamp, playlist.serverTimezone)
                             val url = api.catchUpUrl(playlist.credentials, card.id, start, duration)
                             startActivity(PlayerActivity.internalIntent(this@MainActivity, url, entry.title, false, store.buffer))
                         }
@@ -1539,6 +1541,7 @@ class MainActivity : AppCompatActivity() {
                         name, credentials, account.expiresAtEpochSeconds, account.status.name,
                         account.activeConnections, account.maximumConnections,
                         allowedFormats = account.allowedFormats,
+                        serverTimezone = account.serverTimezone,
                         persist = saveLogin.isChecked,
                     )
                     setLoginLoading(false)
@@ -1641,6 +1644,7 @@ class MainActivity : AppCompatActivity() {
                     p.name, p.credentials, a.expiresAtEpochSeconds, a.status.name,
                     a.activeConnections, a.maximumConnections, id = p.id,
                     allowedFormats = a.allowedFormats,
+                    serverTimezone = a.serverTimezone,
                 )
                 Toast.makeText(this@MainActivity, "Account refreshed", Toast.LENGTH_SHORT).show(); showAccount()
             }.onFailure { error ->
@@ -1650,13 +1654,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshPlaybackCapabilitiesIfNeeded() {
-        val playlist = store.selected()?.takeIf { it.allowedFormats.isEmpty() } ?: return
+        val playlist = store.selected()?.takeIf {
+            it.allowedFormats.isEmpty() || it.serverTimezone.isNullOrBlank()
+        } ?: return
         lifecycleScope.launch {
             runCatching { api.authenticate(playlist.credentials) }.onSuccess { account ->
                 store.save(
                     playlist.name, playlist.credentials, account.expiresAtEpochSeconds, account.status.name,
                     account.activeConnections, account.maximumConnections, id = playlist.id,
                     allowedFormats = account.allowedFormats,
+                    serverTimezone = account.serverTimezone,
                 )
             }
         }

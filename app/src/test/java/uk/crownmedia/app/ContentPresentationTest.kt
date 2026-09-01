@@ -11,6 +11,7 @@ class ContentPresentationTest {
 
         assertEquals("4,320", state.displayValue(Locale.US))
         assertEquals("Movies\n(4,320)", state.navigationLabel("Movies", Locale.US))
+        assertEquals("Movies (4,320)", state.navigationLabel("Movies", Locale.US, television = true))
         assertEquals("4,320 movies", state.homeDescription("movies", Locale.US))
     }
 

@@ -17,3 +17,9 @@ fun Context.deviceClass(): DeviceClass {
         DeviceClass.PHONE
     }
 }
+
+/** Selects the launch layout explicitly while keeping the existing mobile resource untouched. */
+internal fun DeviceClass.startupLayoutResource(): Int = when (this) {
+    DeviceClass.TELEVISION -> R.layout.activity_main_television
+    DeviceClass.PHONE, DeviceClass.TABLET -> R.layout.activity_main
+}
