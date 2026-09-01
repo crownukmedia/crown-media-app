@@ -78,6 +78,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cache: CatalogCache
     private lateinit var streamAvailability: StreamAvailability
     private lateinit var analytics: UsageAnalytics
+    private lateinit var layoutSelection: LayoutSelection
+    private lateinit var activeLayout: AppLayout
     private val api = XtreamClient()
     private lateinit var categoriesAdapter: CategoryAdapter
     private lateinit var catalogAdapter: CatalogAdapter
@@ -100,7 +102,7 @@ class MainActivity : AppCompatActivity() {
     private val contentCounts = EnumMap<Section, ContentCountState>(Section::class.java)
     private val sectionStates = EnumMap<Section, SectionState>(Section::class.java)
     private val refreshJobs = mutableMapOf<RefreshKey, Job>()
-    private val catalogRefreshPermit = Semaphore(1)
+    private val catalogWork = CatalogWorkCoordinator()
     private var activePlaylistId: String? = null
     private var nestedSeries: SeriesDetailState? = null
     private var stateRetry: (() -> Unit)? = null
@@ -120,7 +122,10 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        val launchLayout = layoutInflater.inflate(deviceClass().startupLayoutResource(), null, false)
+        val detectedDeviceClass = deviceClass()
+        layoutSelection = LayoutSelection(this)
+        activeLayout = layoutSelection.resolve(detectedDeviceClass)
+        val launchLayout = layoutInflater.inflate(activeLayout.startupLayoutResource(), null, false)
         binding = ActivityMainBinding.bind(launchLayout)
         setContentView(binding.root)
         analytics = (application as CrownMediaApplication).usageAnalytics
@@ -156,7 +161,29 @@ class MainActivity : AppCompatActivity() {
             refreshPlaybackCapabilitiesIfNeeded()
             open(Section.HOME)
         }
+        confirmDetectedTelevisionLayout(detectedDeviceClass)
     }
+
+    private fun confirmDetectedTelevisionLayout(detectedDeviceClass: DeviceClass) {
+        if (detectedDeviceClass != DeviceClass.TELEVISION || layoutSelection.hasUserChoice || isFinishing) return
+        binding.root.post {
+            if (isFinishing || isDestroyed || layoutSelection.hasUserChoice) return@post
+            AlertDialog.Builder(this)
+                .setTitle(R.string.tv_layout_detected)
+                .setMessage(R.string.tv_layout_confirmation)
+                .setPositiveButton(R.string.use_tv_layout) { _, _ ->
+                    layoutSelection.select(AppLayout.TELEVISION)
+                }
+                .setNegativeButton(R.string.use_mobile_layout) { _, _ ->
+                    layoutSelection.select(AppLayout.MOBILE)
+                    recreate()
+                }
+                .setCancelable(false)
+                .showCrown()
+        }
+    }
+
+    private fun isTelevisionLayout(): Boolean = activeLayout == AppLayout.TELEVISION
 
     private fun configureLists() {
         categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory)
@@ -166,7 +193,7 @@ class MainActivity : AppCompatActivity() {
         binding.categoryList.adapter = categoriesAdapter
         binding.categoryMenuButton.setOnClickListener { showCategoryMenu() }
         catalogAdapter = CatalogAdapter(::openCard, ::cardOptions)
-        val television = deviceClass() == DeviceClass.TELEVISION
+        val television = isTelevisionLayout()
         val initialColumns = when {
             television -> 5
             resources.configuration.smallestScreenWidthDp >= 600 -> 4
@@ -216,7 +243,7 @@ class MainActivity : AppCompatActivity() {
             stateRetry = null
             if (retry != null) retry() else if (store.selected() == null) showManualPlaylist() else load(true)
         }
-        if (deviceClass() == DeviceClass.TELEVISION) {
+        if (isTelevisionLayout()) {
             listOf(binding.navHome, binding.navLive, binding.navMovies, binding.navSeries, binding.navSearch, binding.navAccount, binding.navSettings, binding.navExit)
                 .forEach { button ->
                     button.setOnFocusChangeListener { view, focused ->
@@ -347,7 +374,7 @@ class MainActivity : AppCompatActivity() {
         binding.searchRow.isVisible = searchVisible
         binding.actionSearchClear.isVisible = searchVisible
         if (searchVisible) bindSearchBox(value)
-        val television = deviceClass() == DeviceClass.TELEVISION
+        val television = isTelevisionLayout()
         binding.actionMore.isVisible = !television && value != Section.SEARCH
         binding.actionReload.isVisible = !television
         binding.actionPlaylist.isVisible = !television
@@ -383,7 +410,7 @@ class MainActivity : AppCompatActivity() {
             load()
         }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "tab_${value.name.lowercase()}_render_ms=${SystemClock.elapsedRealtime() - navigationStarted}")
-        if (enteringAuthenticatedShell && deviceClass() == DeviceClass.TELEVISION) {
+        if (enteringAuthenticatedShell && isTelevisionLayout()) {
             navigationView(value).post { navigationView(value).requestFocus() }
         }
         analytics.trackScreen(value.name.lowercase())
@@ -400,7 +427,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureTvPresentation(value: Section) {
-        if (deviceClass() != DeviceClass.TELEVISION) return
+        if (!isTelevisionLayout()) return
         contentLayoutManager.spanCount = if (value == Section.HOME) 3 else 5
         catalogAdapter.setUniformLandscapeCards(value == Section.HOME || value == Section.SEARCH)
         val activeNav = navigationView(value)
@@ -602,11 +629,11 @@ class MainActivity : AppCompatActivity() {
             if (restoreScroll) state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
             val focusKey = pendingContentFocusKey ?: if (binding.contentGrid.hasFocus()) focusedCardKey() else null
             pendingContentFocusKey = null
-            if (focusKey != null && deviceClass() == DeviceClass.TELEVISION) {
+            if (focusKey != null && isTelevisionLayout()) {
                 restoreCardFocus(focusKey)
             }
         }
-        if (section in PAGED_SECTIONS && deviceClass() == DeviceClass.TELEVISION) {
+        if (section in PAGED_SECTIONS && isTelevisionLayout()) {
             binding.screenSubtitle.text = "${store.selected()?.name.orEmpty()}  •  ${getString(R.string.tv_content_hint)}"
         }
     }
@@ -703,6 +730,8 @@ class MainActivity : AppCompatActivity() {
         hadContent: Boolean,
     ) {
         if (target !in PAGED_SECTIONS) return
+        // Interactive category work must never queue behind background count/index warm-up.
+        cancelCatalogWarmup(playlist.id, target.cardKind)
         val state = sectionState(target)
         if (playlistRefreshJob?.isActive == true) {
             if (hadContent) return
@@ -729,7 +758,7 @@ class MainActivity : AppCompatActivity() {
         val refreshCategory = state.categoryId
         val job = lifecycleScope.launch {
             try {
-                catalogRefreshPermit.withPermit {
+                catalogWork.interactive {
                     refreshCatalog(playlist, target, refreshCategory, hadContent)
                 }
             } catch (_: CancellationException) {
@@ -850,7 +879,7 @@ class MainActivity : AppCompatActivity() {
             var failures = 0
             for (target in PAGED_SECTIONS) {
                 try {
-                    catalogRefreshPermit.withPermit {
+                    catalogWork.interactive {
                         refreshCatalog(playlist, target, "all", hadContent = true)
                     }
                 } catch (_: CancellationException) {
@@ -914,7 +943,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateCountNavigation() {
         if (!::binding.isInitialized) return
-        val television = deviceClass() == DeviceClass.TELEVISION
+        val television = isTelevisionLayout()
         binding.navLive.text = countState(Section.LIVE).navigationLabel(getString(R.string.nav_live), television = television)
         binding.navMovies.text = countState(Section.MOVIES).navigationLabel(getString(R.string.nav_movies), television = television)
         binding.navSeries.text = countState(Section.SERIES).navigationLabel(getString(R.string.nav_series), television = television)
@@ -1067,7 +1096,7 @@ class MainActivity : AppCompatActivity() {
                     movie.plot,
                 ).joinToString("\n\n")
                 val builder = AlertDialog.Builder(this@MainActivity).setTitle(movie.name)
-                if (deviceClass() == DeviceClass.TELEVISION) builder.setView(contentDetailsView(card, message))
+                if (isTelevisionLayout()) builder.setView(contentDetailsView(card, message))
                 else builder.setMessage(message.ifBlank { "No metadata supplied." })
                 builder
                     .setPositiveButton("Play") { _, _ -> play(card.copy(extension = movie.extension), false) }
@@ -1090,7 +1119,7 @@ class MainActivity : AppCompatActivity() {
                 hideState()
                 if (details.episodes.values.all { it.isEmpty() }) {
                     val builder = AlertDialog.Builder(this@MainActivity).setTitle(details.name)
-                    if (deviceClass() == DeviceClass.TELEVISION) builder.setView(contentDetailsView(card, details.plot ?: "No episodes supplied."))
+                    if (isTelevisionLayout()) builder.setView(contentDetailsView(card, details.plot ?: "No episodes supplied."))
                     else builder.setMessage(details.plot ?: "No episodes supplied.")
                     builder.setPositiveButton("Close", null).showCrown()
                 } else {
@@ -1098,7 +1127,7 @@ class MainActivity : AppCompatActivity() {
                         nestedSeries = SeriesDetailState(card, details, details.episodes.keys.minOrNull() ?: 1)
                         renderSeriesDetails()
                     }
-                    if (deviceClass() == DeviceClass.TELEVISION) {
+                    if (isTelevisionLayout()) {
                         AlertDialog.Builder(this@MainActivity)
                             .setTitle(details.name)
                             .setView(contentDetailsView(card, listOfNotNull(details.genre, details.plot).joinToString("\n\n")))
@@ -1125,7 +1154,7 @@ class MainActivity : AppCompatActivity() {
         setCategoryNavigationVisible(true)
         categoriesAdapter.submit(seasons, "season:${nested.season}")
         hideState()
-        catalogAdapter.submit(episodes) { if (deviceClass() == DeviceClass.TELEVISION && episodes.isNotEmpty()) restoreCardFocus(null) }
+        catalogAdapter.submit(episodes) { if (isTelevisionLayout() && episodes.isNotEmpty()) restoreCardFocus(null) }
         if (episodes.isEmpty()) {
             stateRetry = { closeSeriesDetails() }
             showState(
@@ -1378,7 +1407,7 @@ class MainActivity : AppCompatActivity() {
         val key = "${playlist.id}:$kind"
         catalogWarmJobs[key]?.takeIf { it.isActive }?.let { return it }
         val job = lifecycleScope.async {
-            val result = catalogRefreshPermit.withPermit {
+            val result = catalogWork.background {
                 runCatching {
                     val target = PAGED_SECTIONS.firstOrNull { it.cardKind == kind }
                         ?: error("Unsupported catalog kind: $kind")
@@ -1407,6 +1436,10 @@ class MainActivity : AppCompatActivity() {
         catalogWarmJobs[key] = job
         job.invokeOnCompletion { if (catalogWarmJobs[key] === job) catalogWarmJobs.remove(key) }
         return job
+    }
+
+    private fun cancelCatalogWarmup(playlistId: String, kind: String) {
+        catalogWarmJobs.remove("$playlistId:$kind")?.cancel()
     }
 
     private fun configureLogin() = with(binding.loginPanel) {
@@ -1475,7 +1508,7 @@ class MainActivity : AppCompatActivity() {
         root.isVisible = true
         loginCancel.isVisible = canGoBack
         loginCancel.isEnabled = canGoBack
-        if (deviceClass() == DeviceClass.TELEVISION) serviceDropdown.requestFocus() else playlistName.requestFocus()
+        if (isTelevisionLayout()) serviceDropdown.requestFocus() else playlistName.requestFocus()
     }
 
     private fun showAuthenticatedShell() {
@@ -1607,7 +1640,7 @@ class MainActivity : AppCompatActivity() {
         val base = BuildConfig.ACTIVATION_BASE_URL.trimEnd('/')
         val activationUrl = if (base.isBlank()) "https://crownmedia.tv/activate?device=$key" else "$base/activate?device=$key"
         val density = resources.displayMetrics.density
-        val maximumQrDp = if (deviceClass() == DeviceClass.TELEVISION) 360 else 300
+        val maximumQrDp = if (isTelevisionLayout()) 360 else 300
         val qrDp = (resources.configuration.screenWidthDp - 96).coerceIn(220, maximumQrDp)
         val qrPx = (qrDp * density).toInt()
         Toast.makeText(this, "Preparing QR code…", Toast.LENGTH_SHORT).show()
@@ -1632,7 +1665,7 @@ class MainActivity : AppCompatActivity() {
         ).setPositiveButton("Refresh account") { _, _ -> refreshAccount(p) }
             .setNeutralButton("Remove playlist") { _, _ -> confirmRemove(p) }
             .setNegativeButton("Close", null).showCrown()
-        if (deviceClass() == DeviceClass.TELEVISION) {
+        if (isTelevisionLayout()) {
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setTextColor(ContextCompat.getColor(this, R.color.crown_error))
         }
     }
@@ -2015,7 +2048,7 @@ class MainActivity : AppCompatActivity() {
         actionLabel: String = "TRY AGAIN",
         keepCategories: Boolean = false,
     ) {
-        if (deviceClass() == DeviceClass.TELEVISION && binding.contentGrid.hasFocus()) {
+        if (isTelevisionLayout() && binding.contentGrid.hasFocus()) {
             pendingContentFocusKey = focusedCardKey()
         }
         binding.statePanel.isVisible = true
@@ -2028,7 +2061,7 @@ class MainActivity : AppCompatActivity() {
         binding.contentGrid.isVisible = false
         setCategoryNavigationVisible(keepCategories && section != Section.HOME && section != Section.SEARCH)
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        if (action && deviceClass() == DeviceClass.TELEVISION) binding.stateAction.post { binding.stateAction.requestFocus() }
+        if (action && isTelevisionLayout()) binding.stateAction.post { binding.stateAction.requestFocus() }
     }
     private fun hideState() {
         binding.statePanel.isVisible = false
@@ -2064,7 +2097,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun prepareCrownDialog(dialog: AlertDialog, preferredButton: Int? = AlertDialog.BUTTON_POSITIVE) {
-        if (deviceClass() != DeviceClass.TELEVISION) return
+        if (!isTelevisionLayout()) return
         val buttons = listOfNotNull(
             dialog.getButton(AlertDialog.BUTTON_POSITIVE),
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE),

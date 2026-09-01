@@ -1,8 +1,10 @@
 package uk.crownmedia.app
 
 import android.app.UiModeManager
+import android.app.AlertDialog
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -18,6 +20,7 @@ import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -27,6 +30,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAlertDialog
 import uk.crownmedia.core.model.ProviderCredentials
 
 @RunWith(RobolectricTestRunner::class)
@@ -37,6 +41,7 @@ class TvUiRegressionTest {
     @Before
     fun setUp() {
         setTelevisionMode()
+        LayoutSelection(RuntimeEnvironment.getApplication()).select(AppLayout.TELEVISION)
         val store = AppStore(FakeSecureStore()).apply {
             save(
                 "TV test",
@@ -55,6 +60,7 @@ class TvUiRegressionTest {
     @After
     fun tearDown() {
         activity.finish()
+        LayoutSelection(RuntimeEnvironment.getApplication()).clear()
         MainActivity.storeFactory = ::AppStore
     }
 
@@ -189,6 +195,22 @@ class TvUiRegressionTest {
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.endToEnd)
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.topToTop)
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, loginParams.bottomToBottom)
+    }
+
+    @Test
+    fun firstTvLaunchRequestsConsentForDetectedLayout() {
+        activity.finish()
+        LayoutSelection(RuntimeEnvironment.getApplication()).clear()
+        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        setTelevisionMode()
+
+        activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val dialog = ShadowAlertDialog.getLatestAlertDialog()
+        assertNotNull(dialog)
+        assertEquals("Use TV layout", dialog.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        assertEquals("Use mobile layout", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
