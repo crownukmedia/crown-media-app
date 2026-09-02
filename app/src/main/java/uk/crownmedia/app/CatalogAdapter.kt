@@ -65,6 +65,7 @@ internal fun categoryAccessibilityLabel(
 class CategoryAdapter(
     private val onClick: (XtreamCategory) -> Unit,
     private val onLongClick: (XtreamCategory) -> Unit,
+    private val onDpad: (View, Int, Int, KeyEvent) -> Boolean = { _, _, _, _ -> false },
 ) : RecyclerView.Adapter<CategoryAdapter.Holder>() {
     data class Row(val category: XtreamCategory, val selected: Boolean)
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<Row>() {
@@ -112,8 +113,11 @@ class CategoryAdapter(
             binding.categoryActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
             binding.root.setOnLongClickListener { onLongClick(value); true }
-            binding.root.setOnKeyListener { _, keyCode, event ->
-                if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
+            binding.root.setOnKeyListener { view, keyCode, event ->
+                val position = bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION && onDpad(view, position, keyCode, event)) {
+                    true
+                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
                     onLongClick(value)
                     true
                 } else false
@@ -126,6 +130,7 @@ class CategoryAdapter(
 class CatalogAdapter(
     private val onClick: (CatalogCard) -> Unit,
     private val onLongClick: (CatalogCard) -> Unit,
+    private val onDpad: (View, Int, Int, KeyEvent) -> Boolean = { _, _, _, _ -> false },
 ) : RecyclerView.Adapter<CatalogAdapter.Holder>() {
     private var uniformLandscapeCards = false
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<CatalogCard>() {
@@ -199,8 +204,11 @@ class CatalogAdapter(
             binding.moreActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
             binding.root.setOnLongClickListener { onLongClick(value); true }
-            binding.root.setOnKeyListener { _, keyCode, event ->
-                if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.kind != "home") {
+            binding.root.setOnKeyListener { view, keyCode, event ->
+                val position = bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION && onDpad(view, position, keyCode, event)) {
+                    true
+                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.kind != "home") {
                     onLongClick(value)
                     true
                 } else false

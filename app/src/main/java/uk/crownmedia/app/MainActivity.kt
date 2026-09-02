@@ -16,6 +16,7 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -125,6 +126,7 @@ class MainActivity : AppCompatActivity() {
     private var lastTrackedSearch: Int? = null
     private var categoryMenuDialog: AlertDialog? = null
     private var tvNavigationExpanded = false
+    private var tvNavigationFocusEnabled = false
     private var tvNavigationAnimator: ValueAnimator? = null
     private val tvNavigationLabels = mutableMapOf<Int, CharSequence>()
 
@@ -213,13 +215,13 @@ class MainActivity : AppCompatActivity() {
     private fun isTelevisionLayout(): Boolean = activeLayout == AppLayout.TELEVISION
 
     private fun configureLists() {
-        categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory)
+        categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory, ::handleCategoryDpad)
         binding.categoryList.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false).apply {
             initialPrefetchItemCount = 12
         }
         binding.categoryList.adapter = categoriesAdapter
         binding.categoryMenuButton.setOnClickListener { showCategoryMenu() }
-        catalogAdapter = CatalogAdapter(::openCard, ::cardOptions)
+        catalogAdapter = CatalogAdapter(::openCard, ::cardOptions, ::handleCatalogDpad)
         val television = isTelevisionLayout()
         val initialColumns = when {
             television -> 5
@@ -292,7 +294,7 @@ class MainActivity : AppCompatActivity() {
                     ((if (focused) 3 else 1) * resources.displayMetrics.density).toInt().coerceAtLeast(1)
                 view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
                     .translationZ(if (focused) 10f else 0f).setDuration(120).start()
-                if (focused) {
+                if (focused && tvNavigationFocusEnabled) {
                     setTvNavigationExpanded(true)
                 } else {
                     binding.root.post {
@@ -335,11 +337,65 @@ class MainActivity : AppCompatActivity() {
 
     private fun focusCurrentSectionContent() {
         when {
-            catalogAdapter.itemCount > 0 -> restoreCardFocus(sectionState(section).focusedCardKey)
-            section in PAGED_SECTIONS && binding.categoryList.isVisible -> binding.categoryList.requestFocus()
+            binding.contentGrid.isVisible && catalogAdapter.itemCount > 0 -> restoreCardFocus(sectionState(section).focusedCardKey)
+            section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
             section == Section.SEARCH -> binding.searchBox.requestFocus()
+            binding.searchBox.isVisible -> binding.searchBox.requestFocus()
+            binding.stateAction.isVisible -> binding.stateAction.requestFocus()
             else -> binding.contentGrid.requestFocus()
         }
+    }
+
+    private fun handleCatalogDpad(view: View, position: Int, keyCode: Int, event: KeyEvent): Boolean {
+        if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
+        if (keyCode !in TV_DPAD_KEYS) return false
+        val move = tvContentFocusMove(
+            position,
+            catalogAdapter.itemCount,
+            contentLayoutManager.spanCount,
+            keyCode,
+            section in PAGED_SECTIONS && binding.categoryBar.isVisible,
+        )
+        when (move.region) {
+            TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.contentGrid, move.position)
+            TvFocusRegion.SIDEBAR -> navigationView(section).requestFocus()
+            TvFocusRegion.CATEGORIES -> restoreCategoryFocus(currentCategory)
+            else -> view.requestFocus()
+        }
+        return true
+    }
+
+    private fun handleCategoryDpad(view: View, position: Int, keyCode: Int, event: KeyEvent): Boolean {
+        if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
+        if (keyCode !in TV_DPAD_KEYS) return false
+        val move = tvCategoryFocusMove(
+            position,
+            categoriesAdapter.itemCount,
+            keyCode,
+            binding.searchBox.isVisible,
+            catalogAdapter.itemCount > 0,
+        )
+        when (move.region) {
+            TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.categoryList, move.position)
+            TvFocusRegion.CATEGORY_MENU -> binding.categoryMenuButton.requestFocus()
+            TvFocusRegion.SEARCH -> binding.searchBox.requestFocus()
+            TvFocusRegion.CONTENT -> restoreCardFocus(sectionState(section).focusedCardKey)
+            else -> view.requestFocus()
+        }
+        return true
+    }
+
+    private fun requestRecyclerItemFocus(recyclerView: RecyclerView, position: Int) {
+        recyclerView.scrollToPosition(position)
+        recyclerView.post {
+            recyclerView.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus()
+                ?: recyclerView.requestFocus()
+        }
+    }
+
+    private fun restoreCategoryFocus(categoryId: String) {
+        val position = sectionState(section).categories.indexOfFirst { it.id == categoryId }.coerceAtLeast(0)
+        requestRecyclerItemFocus(binding.categoryList, position)
     }
 
     private fun tvNavigationButtons(): List<MaterialButton> = listOf(
@@ -574,7 +630,7 @@ class MainActivity : AppCompatActivity() {
         loadJob?.cancel()
         val requestGeneration = contentRequestGeneration
         val requestedCategory = state.categoryId
-        if (state.cards.isEmpty()) showState("Loading", "", true, false)
+        if (state.cards.isEmpty()) showState("Loading", "", true, false, keepCategories = target in PAGED_SECTIONS)
         loadJob = lifecycleScope.launch {
             val cacheStarted = SystemClock.elapsedRealtime()
             val cachedResult = runCatching {
@@ -629,6 +685,7 @@ class MainActivity : AppCompatActivity() {
             scrollCategoryIntoView(category.id)
             return
         }
+        val restoreTvCategoryFocus = isTelevisionLayout() && binding.categoryList.hasFocus()
         contentRequestGeneration++
         val state = sectionState(section)
         state.searchQuery = ""
@@ -644,7 +701,9 @@ class MainActivity : AppCompatActivity() {
         currentCategory = category.id
         categoriesAdapter.submit(state.categories, currentCategory) {
             scrollCategoryIntoView(currentCategory)
+            if (restoreTvCategoryFocus) restoreCategoryFocus(currentCategory)
         }
+        if (restoreTvCategoryFocus) setTvNavigationExpanded(false)
         cancelSectionRefreshes(section)
         analytics.trackCategorySelected(section.name.lowercase())
         load()
@@ -1036,6 +1095,7 @@ class MainActivity : AppCompatActivity() {
             state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
             if (focusContent && section == Section.HOME && isTelevisionLayout()) {
                 restoreCardFocus(state.focusedCardKey)
+                binding.contentGrid.post { tvNavigationFocusEnabled = true }
             }
         }
     }
@@ -1125,7 +1185,9 @@ class MainActivity : AppCompatActivity() {
     private fun openCardUnlocked(card: CatalogCard) {
         if (card.kind == "home") {
             when (card.id) {
-                "live" -> open(Section.LIVE); "movies" -> open(Section.MOVIES); "series" -> open(Section.SERIES)
+                "live" -> openFromNavigation(Section.LIVE)
+                "movies" -> openFromNavigation(Section.MOVIES)
+                "series" -> openFromNavigation(Section.SERIES)
                 "account" -> showAccount(); "reload" -> refreshAllCatalogs(); "playlist" -> showPlaylists()
             }; return
         }
@@ -2216,7 +2278,13 @@ class MainActivity : AppCompatActivity() {
     private fun showFailure(error: Throwable) {
         if (error is CancellationException) return
         stateRetry = null
-        showState("Couldn’t load content", friendly(error), false, true)
+        showState(
+            "Couldn’t load content",
+            friendly(error),
+            false,
+            true,
+            keepCategories = section in PAGED_SECTIONS,
+        )
     }
     private fun showOperationFailure(error: Throwable, retry: () -> Unit) {
         stateRetry = null
@@ -2342,6 +2410,12 @@ class MainActivity : AppCompatActivity() {
         private const val TV_NAV_ANIMATION_MS = 180L
         private const val TV_NAV_ICON_PADDING_DP = 16
         private const val TV_NAV_BUTTON_PADDING_DP = 16
+        private val TV_DPAD_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+        )
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
 

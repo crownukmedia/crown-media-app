@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.os.Looper
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -101,6 +102,74 @@ class TvUiRegressionTest {
             ),
             adapter.currentItems.map { it.localArtwork },
         )
+    }
+
+    @Test
+    fun homeGridDpadUsesRowsAndOnlyEntersSidebarAtFirstColumn() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val rail = activity.findViewById<View>(R.id.side_nav)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        fun focusedPosition(): Int = grid.getChildAdapterPosition(requireNotNull(grid.focusedChild))
+        fun press(keyCode: Int) {
+            requireNotNull(grid.focusedChild).dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+
+        assertEquals(0, focusedPosition())
+        press(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertEquals(1, focusedPosition())
+        press(KeyEvent.KEYCODE_DPAD_DOWN)
+        assertEquals(4, focusedPosition())
+        press(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertEquals(5, focusedPosition())
+        press(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertEquals(5, focusedPosition())
+        press(KeyEvent.KEYCODE_DPAD_UP)
+        assertEquals(2, focusedPosition())
+
+        requireNotNull(grid.findViewHolderForAdapterPosition(0)).itemView.requestFocus()
+        press(KeyEvent.KEYCODE_DPAD_LEFT)
+        shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
+        assertTrue(activity.findViewById<View>(R.id.nav_home).hasFocus())
+        assertEquals(dp(260), rail.layoutParams.width)
+    }
+
+    @Test
+    fun homeTileNavigatesDirectlyToDestinationWithoutRailOrHomeFlash() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val rail = activity.findViewById<View>(R.id.side_nav)
+        shadowOf(Looper.getMainLooper()).idle()
+        val liveTile = requireNotNull(grid.focusedChild)
+
+        liveTile.performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals("Live TV", activity.findViewById<TextView>(R.id.screen_title).text.toString())
+        assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)
+        assertEquals(dp(88), rail.layoutParams.width)
+        assertFalse(activity.findViewById<View>(R.id.nav_live).hasFocus())
+        assertTrue((grid.adapter as CatalogAdapter).currentItems.none { it.kind == "home" })
+    }
+
+    @Test
+    fun destinationLoadingKeepsRailCollapsedAndFocusOutsideSidebar() {
+        val rail = activity.findViewById<View>(R.id.side_nav)
+
+        activity.findViewById<View>(R.id.nav_movies).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(dp(88), rail.layoutParams.width)
+        assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
+        assertTrue(
+            activity.findViewById<View>(R.id.search_box).hasFocus() ||
+                activity.findViewById<View>(R.id.category_menu_button).hasFocus() ||
+                activity.findViewById<View>(R.id.content_grid).hasFocus() ||
+                activity.findViewById<View>(R.id.state_action).hasFocus(),
+        )
+        assertTrue(listOf(R.id.nav_home, R.id.nav_live, R.id.nav_movies, R.id.nav_series, R.id.nav_search).none {
+            activity.findViewById<View>(it).hasFocus()
+        })
     }
 
     @Test
