@@ -153,6 +153,28 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun firstDestinationLoadingNeverRevealsThePreviousHomeGrid() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val state = activity.findViewById<View>(R.id.state_panel)
+        shadowOf(Looper.getMainLooper()).idle()
+        val liveTile = requireNotNull(grid.focusedChild)
+
+        liveTile.performClick()
+
+        assertEquals("Live TV", activity.findViewById<TextView>(R.id.screen_title).text.toString())
+        assertEquals(View.VISIBLE, state.visibility)
+        assertEquals(View.GONE, grid.visibility)
+        assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
+        assertTrue(
+            activity.findViewById<View>(R.id.category_menu_button).hasFocus() ||
+                activity.findViewById<View>(R.id.search_box).hasFocus(),
+        )
+        assertTrue(listOf(R.id.nav_home, R.id.nav_live, R.id.nav_movies, R.id.nav_series, R.id.nav_search).none {
+            activity.findViewById<View>(it).hasFocus()
+        })
+    }
+
+    @Test
     fun destinationLoadingKeepsRailCollapsedAndFocusOutsideSidebar() {
         val rail = activity.findViewById<View>(R.id.side_nav)
 
@@ -232,6 +254,26 @@ class TvUiRegressionTest {
         assertEquals(dp(32), stateParams.marginStart)
         assertEquals(dp(32), stateParams.marginEnd)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, message.layoutParams.width)
+    }
+
+    @Test
+    fun pagedHeadersRemainFixedAndVisibleForEveryDestinationLoadingState() {
+        val topBar = activity.findViewById<View>(R.id.top_bar)
+        val categories = activity.findViewById<View>(R.id.category_bar)
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val categoryParams = categories.layoutParams as ConstraintLayout.LayoutParams
+        val gridParams = grid.layoutParams as ConstraintLayout.LayoutParams
+
+        assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, (topBar.layoutParams as ConstraintLayout.LayoutParams).topToTop)
+        assertEquals(R.id.top_bar, categoryParams.topToBottom)
+        assertEquals(R.id.category_bar, gridParams.topToBottom)
+
+        listOf(R.id.nav_live, R.id.nav_movies, R.id.nav_series).forEach { destination ->
+            activity.findViewById<View>(destination).performClick()
+            assertEquals(View.VISIBLE, categories.visibility)
+            assertEquals(View.VISIBLE, topBar.visibility)
+            assertEquals(View.GONE, grid.visibility)
+        }
     }
 
     @Test

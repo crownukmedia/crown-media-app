@@ -99,6 +99,7 @@ class MainActivity : AppCompatActivity() {
     private var scopedSearchJob: Job? = null
     private var countJob: Job? = null
     private var categoryCountJob: Job? = null
+    private var categoryCountJobKey: String? = null
     private var healthJob: Job? = null
     private var liveRankingJob: Job? = null
     private var playlistRefreshJob: Job? = null
@@ -546,6 +547,12 @@ class MainActivity : AppCompatActivity() {
         binding.screenSubtitle.text = store.selected()?.name ?: "Your world. One screen."
         updateSelectedNavigation(value)
         configureTvPresentation(value)
+        if (changingTopLevelSection && value in PAGED_SECTIONS) {
+            // Keep the previous route hidden until AsyncListDiffer commits the destination rows.
+            // Showing the destination loader here prevents Home/last-section cards flashing while
+            // the background diff is still replacing them.
+            showState("Loading", "", true, false, keepCategories = true)
+        }
         if (value == Section.SEARCH) {
             val query = binding.searchBox.text.toString()
             if (query.trim().length >= 2) search(query)
@@ -750,6 +757,7 @@ class MainActivity : AppCompatActivity() {
         scopedSearchJob?.cancel()
         countJob?.cancel()
         categoryCountJob?.cancel()
+        categoryCountJobKey = null
         catalogWarmJobs.values.forEach { it.cancel() }
         catalogWarmJobs.clear()
         sectionStates.clear()
@@ -777,12 +785,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSectionState(state: SectionState, restoreScroll: Boolean) {
         if (section in PAGED_SECTIONS && sectionStates[section] !== state) return
+        val target = section
         categoriesAdapter.submit(state.categories, state.categoryId) {
             if (restoreScroll) state.categoryScrollState?.let { binding.categoryList.layoutManager?.onRestoreInstanceState(it) }
         }
-        store.selected()?.let { loadCategoryCounts(it, section) }
-        hideState()
+        store.selected()?.let { loadCategoryCounts(it, target) }
         catalogAdapter.submit(state.cards) {
+            if (section != target || sectionStates[target] !== state) return@submit
+            // Reveal only after the destination generation owns the adapter. This closes the
+            // window where stale Home/previous-section rows could be shown after loading.
+            hideState()
             if (restoreScroll) state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
             val focusKey = pendingContentFocusKey ?: if (binding.contentGrid.hasFocus()) focusedCardKey() else null
             pendingContentFocusKey = null
@@ -1162,14 +1174,24 @@ class MainActivity : AppCompatActivity() {
     /** TV-004: load per-category counts on a background dispatcher, independent of catalog indexing. */
     private fun loadCategoryCounts(playlist: SavedPlaylist, target: Section) {
         if (target !in PAGED_SECTIONS) return
+        val key = "${playlist.id}:${target.cardKind}"
+        if (categoryCountJobKey == key && categoryCountJob?.isActive == true) return
         categoryCountJob?.cancel()
         val playlistId = playlist.id
-        categoryCountJob = lifecycleScope.launch {
+        categoryCountJobKey = key
+        val job = lifecycleScope.launch {
             val counts = withContext(Dispatchers.Default) {
                 runCatching { cache.categoryCounts(playlistId, target.cardKind) }.getOrDefault(emptyMap())
             }
             if (section == target && activePlaylistId == playlistId) {
                 categoriesAdapter.updateCounts(counts)
+            }
+        }
+        categoryCountJob = job
+        job.invokeOnCompletion {
+            if (categoryCountJob === job) {
+                categoryCountJob = null
+                categoryCountJobKey = null
             }
         }
     }
@@ -2251,6 +2273,13 @@ class MainActivity : AppCompatActivity() {
     ) {
         if (isTelevisionLayout() && binding.contentGrid.hasFocus()) {
             pendingContentFocusKey = focusedCardKey()
+            // Explicitly transfer focus before hiding the focused grid. Otherwise Android's
+            // spatial fallback can choose the navigation rail and expand it during details,
+            // playback preparation, or a route transition.
+            when {
+                section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
+                binding.searchBox.isVisible -> binding.searchBox.requestFocus()
+            }
         }
         binding.statePanel.isVisible = true
         binding.progress.isVisible = loading
@@ -2260,7 +2289,10 @@ class MainActivity : AppCompatActivity() {
         binding.stateAction.isVisible = !loading && action
         binding.stateAction.text = actionLabel
         binding.contentGrid.isVisible = false
-        setCategoryNavigationVisible(keepCategories && section != Section.HOME && section != Section.SEARCH)
+        // In paged destinations the header/category bar is a fixed sibling of the scrolling grid.
+        // Keep it mounted through loading, empty, error, and detail-fetch states so it remains
+        // sticky and D-pad reachable. Home and global Search intentionally have no category bar.
+        setCategoryNavigationVisible((keepCategories || section in PAGED_SECTIONS) && section != Section.HOME && section != Section.SEARCH)
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         if (action && isTelevisionLayout()) binding.stateAction.post { binding.stateAction.requestFocus() }
     }
