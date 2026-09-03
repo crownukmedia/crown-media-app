@@ -130,6 +130,7 @@ class MainActivity : AppCompatActivity() {
     private var tvNavigationFocusEnabled = false
     private var tvNavigationAnimator: ValueAnimator? = null
     private val tvNavigationLabels = mutableMapOf<Int, CharSequence>()
+    private val pendingTvFocusMoves = mutableSetOf<Int>()
 
     override fun attachBaseContext(newBase: Context) {
         detectedDeviceClass = newBase.deviceClass()
@@ -187,8 +188,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
-        if (store.selected() == null) showWelcome() else {
-            refreshPlaybackCapabilitiesIfNeeded()
+        val selectedPlaylist = store.selected()
+        if (selectedPlaylist == null) showWelcome() else {
+            refreshPlaybackCapabilitiesIfNeeded(selectedPlaylist)
             open(Section.HOME)
         }
         confirmDetectedTelevisionLayout(detectedDeviceClass)
@@ -221,7 +223,9 @@ class MainActivity : AppCompatActivity() {
             initialPrefetchItemCount = 12
         }
         binding.categoryList.adapter = categoriesAdapter
-        binding.categoryMenuButton.setOnClickListener { showCategoryMenu() }
+        binding.categoryMenuButton.setOnClickListener {
+            if (nestedSeries != null) closeSeriesDetails() else showCategoryMenu()
+        }
         catalogAdapter = CatalogAdapter(::openCard, ::cardOptions, ::handleCatalogDpad)
         val television = isTelevisionLayout()
         val initialColumns = when {
@@ -350,6 +354,10 @@ class MainActivity : AppCompatActivity() {
     private fun handleCatalogDpad(view: View, position: Int, keyCode: Int, event: KeyEvent): Boolean {
         if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
         if (keyCode !in TV_DPAD_KEYS) return false
+        // Held remotes can deliver repeats faster than RecyclerView can lay out the next row.
+        // Consume repeats while one frame-bounded focus transition is pending instead of stacking
+        // scroll/focus callbacks against stale adapter positions.
+        if (binding.contentGrid.id in pendingTvFocusMoves) return true
         val move = tvContentFocusMove(
             position,
             catalogAdapter.itemCount,
@@ -369,6 +377,7 @@ class MainActivity : AppCompatActivity() {
     private fun handleCategoryDpad(view: View, position: Int, keyCode: Int, event: KeyEvent): Boolean {
         if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
         if (keyCode !in TV_DPAD_KEYS) return false
+        if (binding.categoryList.id in pendingTvFocusMoves) return true
         val move = tvCategoryFocusMove(
             position,
             categoriesAdapter.itemCount,
@@ -387,11 +396,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestRecyclerItemFocus(recyclerView: RecyclerView, position: Int) {
-        recyclerView.scrollToPosition(position)
-        recyclerView.post {
-            recyclerView.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus()
-                ?: recyclerView.requestFocus()
+        val itemCount = recyclerView.adapter?.itemCount ?: 0
+        if (itemCount == 0 || position !in 0 until itemCount) return
+        if (!pendingTvFocusMoves.add(recyclerView.id)) return
+        val target = position
+
+        fun focusAfterLayout(remainingAttempts: Int) {
+            recyclerView.postOnAnimation {
+                val currentCount = recyclerView.adapter?.itemCount ?: 0
+                if (!recyclerView.isAttachedToWindow || currentCount == 0) {
+                    pendingTvFocusMoves.remove(recyclerView.id)
+                    return@postOnAnimation
+                }
+                val safeTarget = target.coerceIn(0, currentCount - 1)
+                recyclerView.scrollToPosition(safeTarget)
+                val focused = recyclerView.findViewHolderForAdapterPosition(safeTarget)
+                    ?.itemView
+                    ?.requestFocus() == true
+                if (focused || remainingAttempts == 0) {
+                    pendingTvFocusMoves.remove(recyclerView.id)
+                } else {
+                    focusAfterLayout(remainingAttempts - 1)
+                }
+            }
         }
+
+        focusAfterLayout(2)
     }
 
     private fun restoreCategoryFocus(categoryId: String) {
@@ -1003,8 +1033,14 @@ class MainActivity : AppCompatActivity() {
         cache.finishItemRefresh(playlist.id, target.cardKind, actualCategory, refreshMarker, received)
         state.lastRefreshAt = System.currentTimeMillis()
         if (received > 0) store.markCatalogRefreshed(playlist.id, target.cardKind, actualCategory, state.lastRefreshAt)
+        if (section == target) loadCategoryCounts(playlist, target, force = true)
         if (actualCategory == null || store.catalogComplete(playlist.id, target.cardKind, null)) {
-            updateContentCount(target, ContentCountState.Ready(cache.count(playlist.id, target.cardKind)))
+            updateContentCount(
+                target,
+                ContentCountState.Ready(
+                    cache.accessibleCount(playlist.id, target.cardKind, includeAdultContent()),
+                ),
+            )
         }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "${target.name.lowercase()}_refresh_total_ms=${SystemClock.elapsedRealtime() - refreshStarted};items=$received")
         if (state.categoryId == refreshCategory) {
@@ -1147,7 +1183,10 @@ class MainActivity : AppCompatActivity() {
                 coroutineScope {
                     PAGED_SECTIONS.map { target ->
                         async {
-                            val cachedCount = runCatching { cache.count(playlist.id, target.cardKind) }.getOrDefault(0)
+                            val includeAdult = includeAdultContent()
+                            val cachedCount = runCatching {
+                                cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
+                            }.getOrDefault(0)
                             if (store.catalogComplete(playlist.id, target.cardKind, null)) {
                                 updateContentCount(target, ContentCountState.Ready(cachedCount))
                                 return@async
@@ -1157,12 +1196,16 @@ class MainActivity : AppCompatActivity() {
                             if (cachedCount > 0) updateContentCount(target, ContentCountState.Ready(cachedCount))
                             val result = warmCatalogKind(playlist, target.cardKind).await()
                             if (activePlaylistId != playlist.id) return@async
+                            val refreshedCount = if (result.isSuccess) {
+                                runCatching {
+                                    cache.accessibleCount(playlist.id, target.cardKind, includeAdultContent())
+                                }.getOrDefault(cachedCount)
+                            } else cachedCount
                             updateContentCount(
                                 target,
-                                result.fold(
-                                    onSuccess = { ContentCountState.Ready(it) },
-                                    onFailure = { ContentCountState.Unavailable },
-                                ),
+                                if (result.isSuccess) ContentCountState.Ready(refreshedCount)
+                                else if (cachedCount > 0) ContentCountState.Ready(cachedCount)
+                                else ContentCountState.Unavailable,
                             )
                         }
                     }.awaitAll()
@@ -1172,16 +1215,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** TV-004: load per-category counts on a background dispatcher, independent of catalog indexing. */
-    private fun loadCategoryCounts(playlist: SavedPlaylist, target: Section) {
+    private fun loadCategoryCounts(playlist: SavedPlaylist, target: Section, force: Boolean = false) {
         if (target !in PAGED_SECTIONS) return
-        val key = "${playlist.id}:${target.cardKind}"
-        if (categoryCountJobKey == key && categoryCountJob?.isActive == true) return
+        val includeAdult = includeAdultContent()
+        val key = "${playlist.id}:${target.cardKind}:$includeAdult"
+        if (!force && categoryCountJobKey == key && categoryCountJob?.isActive == true) return
         categoryCountJob?.cancel()
         val playlistId = playlist.id
         categoryCountJobKey = key
         val job = lifecycleScope.launch {
             val counts = withContext(Dispatchers.Default) {
-                runCatching { cache.categoryCounts(playlistId, target.cardKind) }.getOrDefault(emptyMap())
+                runCatching {
+                    cache.accessibleCategoryCounts(playlistId, target.cardKind, includeAdult)
+                }.getOrDefault(emptyMap())
             }
             if (section == target && activePlaylistId == playlistId) {
                 categoriesAdapter.updateCounts(counts)
@@ -1314,30 +1360,34 @@ class MainActivity : AppCompatActivity() {
         detailJob = lifecycleScope.launch {
             runCatching { api.seriesInfo(playlist.credentials, card.id) }.onSuccess { details ->
                 if (section != Section.SERIES || store.selected()?.id != playlist.id) return@onSuccess
-                hideState()
-                if (details.episodes.values.all { it.isEmpty() }) {
-                    val builder = AlertDialog.Builder(this@MainActivity).setTitle(details.name)
-                    if (isTelevisionLayout()) builder.setView(contentDetailsView(card, details.plot ?: "No episodes supplied."))
-                    else builder.setMessage(details.plot ?: "No episodes supplied.")
-                    builder.setPositiveButton("Close", null).showCrown()
-                } else {
-                    val openEpisodes = {
-                        nestedSeries = SeriesDetailState(card, details, details.episodes.keys.minOrNull() ?: 1)
-                        renderSeriesDetails()
-                    }
-                    if (isTelevisionLayout()) {
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle(details.name)
-                            .setView(contentDetailsView(card, listOfNotNull(details.genre, details.plot).joinToString("\n\n")))
-                            .setPositiveButton("Browse episodes") { _, _ -> openEpisodes() }
-                            .setNegativeButton("Back", null)
-                            .showCrown()
-                    } else openEpisodes()
-                }
+                showSeriesOverview(card, details)
             }.onFailure { error ->
                 if (error !is CancellationException && section == Section.SERIES) showOperationFailure(error) { showSeries(card) }
             }
         }
+    }
+
+    private fun showSeriesOverview(card: CatalogCard, details: XtreamSeriesDetails) {
+        hideState()
+        if (details.episodes.values.all { it.isEmpty() }) {
+            val builder = AlertDialog.Builder(this).setTitle(details.name)
+            if (isTelevisionLayout()) builder.setView(contentDetailsView(card, details.plot ?: "No episodes supplied."))
+            else builder.setMessage(details.plot ?: "No episodes supplied.")
+            builder.setPositiveButton("Close", null).showCrown()
+            return
+        }
+        val openEpisodes = {
+            nestedSeries = SeriesDetailState(card, details, details.episodes.keys.minOrNull() ?: 1)
+            renderSeriesDetails()
+        }
+        if (isTelevisionLayout()) {
+            AlertDialog.Builder(this)
+                .setTitle(details.name)
+                .setView(contentDetailsView(card, listOfNotNull(details.genre, details.plot).joinToString("\n\n")))
+                .setPositiveButton("Browse episodes") { _, _ -> openEpisodes() }
+                .setNegativeButton("Back", null)
+                .showCrown()
+        } else openEpisodes()
     }
 
     private fun renderSeriesDetails() {
@@ -1351,9 +1401,8 @@ class MainActivity : AppCompatActivity() {
         binding.screenSubtitle.text = listOfNotNull(nested.details.genre, "Season ${nested.season}", "Back returns to Series").joinToString("  •  ")
         setCategoryNavigationVisible(true)
         categoriesAdapter.submit(seasons, "season:${nested.season}")
-        hideState()
-        catalogAdapter.submit(episodes) { if (isTelevisionLayout() && episodes.isNotEmpty()) restoreCardFocus(null) }
         if (episodes.isEmpty()) {
+            catalogAdapter.submit(emptyList())
             stateRetry = { closeSeriesDetails() }
             showState(
                 "No episodes",
@@ -1363,6 +1412,12 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.back_to_series),
                 keepCategories = true,
             )
+        } else {
+            catalogAdapter.submit(episodes) {
+                if (nestedSeries !== nested || section != Section.SERIES) return@submit
+                hideState()
+                if (isTelevisionLayout()) restoreCardFocus(null)
+            }
         }
     }
 
@@ -1373,12 +1428,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun closeSeriesDetails() {
+        val previous = nestedSeries ?: return
         nestedSeries = null
         detailJob?.cancel()
         detailJob = null
         binding.screenTitle.text = "Series"
         binding.screenSubtitle.text = store.selected()?.name.orEmpty()
+        setCategoryNavigationVisible(true)
+        pendingContentFocusKey = "${previous.card.kind}:${previous.card.id}"
         renderSectionState(sectionState(Section.SERIES), restoreScroll = true)
+        if (isTelevisionLayout()) {
+            binding.root.post {
+                if (section == Section.SERIES && nestedSeries == null && !isFinishing) {
+                    showSeriesOverview(previous.card, previous.details)
+                }
+            }
+        }
     }
 
     private fun showEpg(card: CatalogCard) {
@@ -1626,8 +1691,11 @@ class MainActivity : AppCompatActivity() {
                     cache.count(playlist.id, kind)
                 }
             }
-            result.onSuccess { count ->
-                PAGED_SECTIONS.firstOrNull { it.cardKind == kind }?.let { updateContentCount(it, ContentCountState.Ready(count)) }
+            if (result.isSuccess) {
+                PAGED_SECTIONS.firstOrNull { it.cardKind == kind }?.let { target ->
+                    val accessibleCount = cache.accessibleCount(playlist.id, kind, includeAdultContent())
+                    updateContentCount(target, ContentCountState.Ready(accessibleCount))
+                }
             }
             result
         }
@@ -1884,8 +1952,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshPlaybackCapabilitiesIfNeeded() {
-        val playlist = store.selected()?.takeIf {
+    private fun refreshPlaybackCapabilitiesIfNeeded(selectedPlaylist: SavedPlaylist? = store.selected()) {
+        val playlist = selectedPlaylist?.takeIf {
             it.allowedFormats.isEmpty() || it.serverTimezone.isNullOrBlank()
         } ?: return
         lifecycleScope.launch {
@@ -2051,6 +2119,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requiresPin(name: String): Boolean = store.parentalPin != null && !adultSessionUnlocked() && listOf("adult", "xxx", "18+").any { name.contains(it, true) }
     private fun adultSessionUnlocked(): Boolean = System.currentTimeMillis() < adultUnlockedUntil
+    private fun includeAdultContent(): Boolean = store.parentalPin == null || adultSessionUnlocked()
     private fun verifyPin(after: () -> Unit) {
         val input = EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD }
         val dialog = AlertDialog.Builder(this).setTitle("Enter parental PIN").setView(input).setPositiveButton("Unlock", null).setNegativeButton("Cancel", null).create()
@@ -2305,7 +2374,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun setCategoryNavigationVisible(visible: Boolean) {
         binding.categoryBar.isVisible = visible
-        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS && nestedSeries == null
+        val nested = nestedSeries != null
+        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS
+        binding.categoryMenuButton.setImageResource(if (nested) R.drawable.ic_arrow_back else R.drawable.ic_categories_menu)
+        binding.categoryMenuButton.contentDescription = getString(
+            when {
+                !nested -> R.string.open_all_categories
+                isTelevisionLayout() -> R.string.back_to_series_details
+                else -> R.string.back_to_series_listing
+            },
+        )
     }
     private fun showFailure(error: Throwable) {
         if (error is CancellationException) return

@@ -37,6 +37,8 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
 import uk.crownmedia.core.model.ProviderCredentials
+import uk.crownmedia.data.xtream.XtreamEpisode
+import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -133,6 +135,35 @@ class TvUiRegressionTest {
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
         assertTrue(activity.findViewById<View>(R.id.nav_home).hasFocus())
         assertEquals(dp(260), rail.layoutParams.width)
+    }
+
+    @Test
+    fun heldDpadRepeatsNeverQueueStaleGridFocusMoves() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        listOf(
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_LEFT,
+        ).forEach { keyCode ->
+            repeat(250) { repeatCount ->
+                val focused = grid.focusedChild ?: grid.findViewHolderForAdapterPosition(0)?.itemView
+                requireNotNull(focused).dispatchKeyEvent(
+                    KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, keyCode, repeatCount),
+                )
+            }
+            shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
+            val focusedChild = grid.focusedChild
+            if (focusedChild != null) {
+                assertTrue(grid.getChildAdapterPosition(focusedChild) in 0 until requireNotNull(grid.adapter).itemCount)
+            } else {
+                assertTrue(activity.findViewById<View>(R.id.side_nav).hasFocus())
+            }
+        }
+
+        assertFalse(activity.isFinishing)
     }
 
     @Test
@@ -322,6 +353,50 @@ class TvUiRegressionTest {
         assertEquals("Welcome to Crown Media", activity.findViewById<TextView>(R.id.screen_title).text.toString())
         assertFalse(activity.isFinishing)
         assertTrue(activity.findViewById<View>(R.id.content_grid).hasFocus())
+    }
+
+    @Test
+    fun nestedSeriesShowsBackControlAndRemoteBackRestoresDetailsHierarchy() {
+        activity.findViewById<View>(R.id.nav_series).performClick()
+        val card = CatalogCard("series-1", "series", "Test Series", null, "Series")
+        val details = XtreamSeriesDetails(
+            name = "Test Series",
+            plot = "Plot",
+            cover = null,
+            backdrop = null,
+            cast = null,
+            genre = "Drama",
+            rating = null,
+            trailer = null,
+            episodes = mapOf(
+                1 to listOf(XtreamEpisode("episode-1", 1, 1, "Pilot", "mp4", null, null, "45m")),
+            ),
+        )
+        val stateClass = Class.forName("uk.crownmedia.app.MainActivity\$SeriesDetailState")
+        val constructor = stateClass.declaredConstructors.single().apply { isAccessible = true }
+        val nested = constructor.newInstance(card, details, 1)
+        MainActivity::class.java.getDeclaredField("nestedSeries").apply {
+            isAccessible = true
+            set(activity, nested)
+        }
+        MainActivity::class.java.getDeclaredMethod("renderSeriesDetails").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val back = activity.findViewById<View>(R.id.category_menu_button)
+        assertEquals(View.VISIBLE, back.visibility)
+        assertEquals("Back to Series details", back.contentDescription.toString())
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Test Series", shadowOf(dialog).title.toString())
+        assertEquals("Browse episodes", dialog.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        assertEquals("Back", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
+        assertFalse(activity.isFinishing)
     }
 
     @Test

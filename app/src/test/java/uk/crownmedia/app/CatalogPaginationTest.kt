@@ -127,6 +127,36 @@ class CatalogPaginationTest {
         assertTrue(page.first().isAdult)
     }
 
+    @Test
+    fun accessibleCountsMatchRenderedRowsForEveryKindAndCategory() = runBlocking {
+        listOf("live", "movie", "series").forEach { kind ->
+            cache.saveItems(
+                "playlist",
+                kind,
+                null,
+                listOf(
+                    items(1).first().copy(id = "$kind-1", categoryId = "news"),
+                    items(1).first().copy(id = "$kind-2", categoryId = "news", isAdult = true),
+                    items(1).first().copy(id = "$kind-3", categoryId = "sport"),
+                    // A repeated server id replaces the same catalog identity; it is never
+                    // double-counted even if a provider response repeats it.
+                    items(1).first().copy(id = "$kind-3", categoryId = "sport"),
+                ),
+            )
+
+            assertEquals(2, cache.accessibleCount("playlist", kind, includeAdult = false))
+            assertEquals(3, cache.accessibleCount("playlist", kind, includeAdult = true))
+            assertEquals(
+                mapOf("news" to 1, "sport" to 1),
+                cache.accessibleCategoryCounts("playlist", kind, includeAdult = false),
+            )
+            assertEquals(
+                mapOf("news" to 2, "sport" to 1),
+                cache.accessibleCategoryCounts("playlist", kind, includeAdult = true),
+            )
+        }
+    }
+
     private fun items(count: Int) = List(count) { index ->
         XtreamItem(
             id = index.toString(),

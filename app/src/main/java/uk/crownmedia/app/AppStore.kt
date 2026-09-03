@@ -28,11 +28,22 @@ data class SavedLoginDetails(
 class AppStore internal constructor(private val prefs: CrownSecureStore) {
     constructor(context: Context) : this(CrownSecureStore.create(context))
     private var transientPlaylist: SavedPlaylist? = null
+    private var persistedPlaylistCache: List<SavedPlaylist>? = null
+    private var selectedIdCacheInitialized = false
+    private var selectedIdCache: String? = null
 
     var selectedId: String?
-        get() = prefs.getString("selected", null)
+        get() {
+            if (!selectedIdCacheInitialized) {
+                selectedIdCache = prefs.getString("selected", null)
+                selectedIdCacheInitialized = true
+            }
+            return selectedIdCache
+        }
         set(value) {
             if (transientPlaylist?.id != value) transientPlaylist = null
+            selectedIdCache = value
+            selectedIdCacheInitialized = true
             prefs.putString("selected", value)
         }
 
@@ -87,10 +98,13 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
 
     private fun savedLoginKey(service: CrownService) = "saved_login_${service.name}"
 
-    private fun persistedPlaylists(): List<SavedPlaylist> = try {
+    private fun persistedPlaylists(): List<SavedPlaylist> = persistedPlaylistCache ?: try {
         val array = JSONArray(prefs.getString("playlists", "[]"))
         (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.toPlaylist() }
-    } catch (_: Exception) { emptyList() }
+            .also { persistedPlaylistCache = it }
+    } catch (_: Exception) {
+        emptyList<SavedPlaylist>().also { persistedPlaylistCache = it }
+    }
 
     fun playlists(): List<SavedPlaylist> = persistedPlaylists() + listOfNotNull(transientPlaylist)
 
@@ -165,6 +179,7 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
             put("formats", JSONArray(p.allowedFormats))
             put("serverTimezone", p.serverTimezone)
         }) }
+        persistedPlaylistCache = values
         prefs.putString("playlists", array.toString())
     }
 
