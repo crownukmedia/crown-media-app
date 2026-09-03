@@ -96,6 +96,14 @@ interface CatalogDao {
     @Query("SELECT COUNT(*) FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:categoryId IS NULL OR categoryId = :categoryId)")
     suspend fun categoryItemCount(playlistId: String, kind: String, categoryId: String?): Int
 
+    @Query("SELECT categoryId, COUNT(*) AS itemCount FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind GROUP BY categoryId")
+    suspend fun categoryItemCounts(playlistId: String, kind: String): List<CategoryCount>
+
+    @Query("SELECT categoryId, COUNT(DISTINCT contentId) AS itemCount FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:includeAdult = 1 OR isAdult = 0) GROUP BY categoryId")
+    suspend fun accessibleCategoryItemCounts(playlistId: String, kind: String, includeAdult: Boolean): List<CategoryCount>
+
+    data class CategoryCount(val categoryId: String, val itemCount: Int)
+
     @Query("SELECT DISTINCT i.* FROM catalog_items i INNER JOIN catalog_search_tokens s ON i.playlistId = s.playlistId AND i.kind = s.kind AND i.contentId = s.contentId WHERE i.playlistId = :playlistId AND s.token >= :tokenStart AND s.token < :tokenEnd ORDER BY i.title COLLATE NOCASE LIMIT :limit")
     suspend fun searchCandidates(playlistId: String, tokenStart: String, tokenEnd: String, limit: Int): List<CachedCatalogItem>
 
@@ -104,6 +112,9 @@ interface CatalogDao {
 
     @Query("SELECT COUNT(*) FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind")
     suspend fun itemCount(playlistId: String, kind: String): Int
+
+    @Query("SELECT COUNT(DISTINCT contentId) FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:includeAdult = 1 OR isAdult = 0)")
+    suspend fun accessibleItemCount(playlistId: String, kind: String, includeAdult: Boolean): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCategories(values: List<CachedCategory>)

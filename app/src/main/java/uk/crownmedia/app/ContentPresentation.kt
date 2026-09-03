@@ -15,8 +15,11 @@ internal fun ContentCountState.displayValue(locale: Locale = Locale.getDefault()
     ContentCountState.Unavailable -> "—"
 }
 
-internal fun ContentCountState.navigationLabel(title: String, locale: Locale = Locale.getDefault()): String =
-    "$title\n(${displayValue(locale)})"
+internal fun ContentCountState.navigationLabel(
+    title: String,
+    locale: Locale = Locale.getDefault(),
+    television: Boolean = false,
+): String = if (television) "$title (${displayValue(locale)})" else "$title\n(${displayValue(locale)})"
 
 internal fun ContentCountState.homeDescription(noun: String, locale: Locale = Locale.getDefault()): String = when (this) {
     ContentCountState.Loading -> "Loading $noun count…"

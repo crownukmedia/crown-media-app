@@ -4,6 +4,7 @@
     <string name="playback_error_detail">The stream could not start. Try again, or return to the content list.</string>
     <string name="playback_timeout_detail">The stream took too long to respond. Try again, or return to the content list.</string>
     <string name="opening_channel">Opening channel…</string>
+    <string name="reconnecting_channel">Reconnecting channel…</string>
     <string name="opening_video">Opening video…</string>
     <string name="retry_playback">Retry</string>
     <string name="back_to_channels">Back to channels</string>

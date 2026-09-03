@@ -5,6 +5,8 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.text.TextUtils
+import android.content.res.Resources
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.AsyncListDiffer
@@ -47,18 +49,43 @@ internal fun CatalogCard.preferredArtworkSource(): Any {
     }
 }
 
+internal fun categoryAccessibilityLabel(
+    resources: Resources,
+    category: XtreamCategory,
+    count: Int?,
+): String = if (count != null) {
+    resources.getQuantityString(
+        R.plurals.category_item_count_description,
+        count,
+        category.name,
+        count,
+    )
+} else category.name
+
 class CategoryAdapter(
     private val onClick: (XtreamCategory) -> Unit,
     private val onLongClick: (XtreamCategory) -> Unit,
+    private val onDpad: (View, Int, Int, KeyEvent) -> Boolean = { _, _, _, _ -> false },
 ) : RecyclerView.Adapter<CategoryAdapter.Holder>() {
     data class Row(val category: XtreamCategory, val selected: Boolean)
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<Row>() {
         override fun areItemsTheSame(oldItem: Row, newItem: Row) = oldItem.category.id == newItem.category.id
         override fun areContentsTheSame(oldItem: Row, newItem: Row) = oldItem == newItem
     })
+    private var counts: Map<String, Int> = emptyMap()
 
     fun submit(values: List<XtreamCategory>, selectedId: String = "all", committed: (() -> Unit)? = null) {
         differ.submitList(values.map { Row(it, it.id == selectedId) }, committed)
+    }
+
+    /** TV-003/TV-004: apply per-category item counts without resubmitting the list (keeps focus/scroll). */
+    fun updateCounts(values: Map<String, Int>) {
+        if (counts == values) return
+        val previous = counts
+        counts = values
+        differ.currentList.indices
+            .filter { index -> previous[differ.currentList[index].category.id] != values[differ.currentList[index].category.id] }
+            .forEach(::notifyItemChanged)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(ItemCategoryBinding.inflate(LayoutInflater.from(parent.context), parent, false))
@@ -69,14 +96,28 @@ class CategoryAdapter(
         fun bind(row: Row) {
             val value = row.category
             binding.categoryName.text = value.name
+            binding.categoryName.ellipsize = TextUtils.TruncateAt.END
+            binding.categoryName.maxLines = 1
+            binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
+            binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
+            val count = counts[value.id]?.takeIf {
+                it > 0 && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
+            }
+            binding.categoryCount.isVisible = count != null
+            if (count != null) binding.categoryCount.text = "($count)"
             binding.root.isSelected = row.selected
-            binding.categoryActions.isVisible = binding.root.context.deviceClass() != DeviceClass.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
+            binding.root.contentDescription = categoryAccessibilityLabel(binding.root.resources, value, count)
+            binding.root.nextFocusLeftId = if (bindingAdapterPosition == 0) R.id.category_menu_button else View.NO_ID
+            binding.categoryActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             binding.categoryActions.contentDescription = binding.root.context.getString(R.string.options_for, value.name)
             binding.categoryActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
             binding.root.setOnLongClickListener { onLongClick(value); true }
-            binding.root.setOnKeyListener { _, keyCode, event ->
-                if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
+            binding.root.setOnKeyListener { view, keyCode, event ->
+                val position = bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION && onDpad(view, position, keyCode, event)) {
+                    true
+                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
                     onLongClick(value)
                     true
                 } else false
@@ -89,6 +130,7 @@ class CategoryAdapter(
 class CatalogAdapter(
     private val onClick: (CatalogCard) -> Unit,
     private val onLongClick: (CatalogCard) -> Unit,
+    private val onDpad: (View, Int, Int, KeyEvent) -> Boolean = { _, _, _, _ -> false },
 ) : RecyclerView.Adapter<CatalogAdapter.Holder>() {
     private var uniformLandscapeCards = false
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<CatalogCard>() {
@@ -113,7 +155,7 @@ class CatalogAdapter(
             binding.meta.text = value.meta
             binding.badge.text = value.badge
             binding.badge.visibility = if (value.badge.isBlank()) View.GONE else View.VISIBLE
-            val television = binding.root.context.deviceClass() == DeviceClass.TELEVISION
+            val television = binding.root.context.appLayout() == AppLayout.TELEVISION
             val poster = !uniformLandscapeCards && (value.kind == "movie" || value.kind == "series")
             val artworkHeightDp = if (poster) 220 else if (television) 118 else 104
             val artworkHeight = (artworkHeightDp * binding.root.resources.displayMetrics.density).toInt()
@@ -157,13 +199,16 @@ class CatalogAdapter(
                 )
             }
             binding.root.contentDescription = listOf(value.title, value.meta, value.badge).filter { it.isNotBlank() }.joinToString(", ")
-            binding.moreActions.isVisible = binding.root.context.deviceClass() != DeviceClass.TELEVISION && value.kind != "home"
+            binding.moreActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.kind != "home"
             binding.moreActions.contentDescription = binding.root.context.getString(R.string.options_for, value.title)
             binding.moreActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
             binding.root.setOnLongClickListener { onLongClick(value); true }
-            binding.root.setOnKeyListener { _, keyCode, event ->
-                if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.kind != "home") {
+            binding.root.setOnKeyListener { view, keyCode, event ->
+                val position = bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION && onDpad(view, position, keyCode, event)) {
+                    true
+                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.kind != "home") {
                     onLongClick(value)
                     true
                 } else false

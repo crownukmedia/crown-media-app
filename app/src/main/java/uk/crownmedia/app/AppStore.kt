@@ -15,6 +15,7 @@ data class SavedPlaylist(
     val activeConnections: Int?,
     val maximumConnections: Int?,
     val allowedFormats: List<String> = emptyList(),
+    val serverTimezone: String? = null,
 )
 
 data class SavedLoginDetails(
@@ -27,11 +28,22 @@ data class SavedLoginDetails(
 class AppStore internal constructor(private val prefs: CrownSecureStore) {
     constructor(context: Context) : this(CrownSecureStore.create(context))
     private var transientPlaylist: SavedPlaylist? = null
+    private var persistedPlaylistCache: List<SavedPlaylist>? = null
+    private var selectedIdCacheInitialized = false
+    private var selectedIdCache: String? = null
 
     var selectedId: String?
-        get() = prefs.getString("selected", null)
+        get() {
+            if (!selectedIdCacheInitialized) {
+                selectedIdCache = prefs.getString("selected", null)
+                selectedIdCacheInitialized = true
+            }
+            return selectedIdCache
+        }
         set(value) {
             if (transientPlaylist?.id != value) transientPlaylist = null
+            selectedIdCache = value
+            selectedIdCacheInitialized = true
             prefs.putString("selected", value)
         }
 
@@ -86,10 +98,13 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
 
     private fun savedLoginKey(service: CrownService) = "saved_login_${service.name}"
 
-    private fun persistedPlaylists(): List<SavedPlaylist> = try {
+    private fun persistedPlaylists(): List<SavedPlaylist> = persistedPlaylistCache ?: try {
         val array = JSONArray(prefs.getString("playlists", "[]"))
         (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.toPlaylist() }
-    } catch (_: Exception) { emptyList() }
+            .also { persistedPlaylistCache = it }
+    } catch (_: Exception) {
+        emptyList<SavedPlaylist>().also { persistedPlaylistCache = it }
+    }
 
     fun playlists(): List<SavedPlaylist> = persistedPlaylists() + listOfNotNull(transientPlaylist)
 
@@ -104,9 +119,10 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
         maximum: Int?,
         id: String = UUID.randomUUID().toString(),
         allowedFormats: List<String> = emptyList(),
+        serverTimezone: String? = null,
         persist: Boolean = transientPlaylist?.id != id,
     ): SavedPlaylist {
-        val value = SavedPlaylist(id, name, credentials, expiresAt, status, active, maximum, allowedFormats)
+        val value = SavedPlaylist(id, name, credentials, expiresAt, status, active, maximum, allowedFormats, serverTimezone)
         if (persist) {
             transientPlaylist = null
             write(persistedPlaylists().filterNot { it.id == id } + value)
@@ -161,7 +177,9 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
             put("expiry", p.expiresAt); put("status", p.status)
             put("active", p.activeConnections); put("maximum", p.maximumConnections)
             put("formats", JSONArray(p.allowedFormats))
+            put("serverTimezone", p.serverTimezone)
         }) }
+        persistedPlaylistCache = values
         prefs.putString("playlists", array.toString())
     }
 
@@ -175,6 +193,7 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
             optJSONArray("formats")?.let { formats ->
                 (0 until formats.length()).mapNotNull { formats.optString(it).takeIf(String::isNotBlank) }
             }.orEmpty(),
+            optString("serverTimezone").takeIf { has("serverTimezone") && !isNull("serverTimezone") && it.isNotBlank() },
         )
     } catch (_: Exception) { null }
 

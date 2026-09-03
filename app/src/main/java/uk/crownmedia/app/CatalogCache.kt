@@ -38,6 +38,47 @@ class CatalogCache(private val dao: CatalogDao) {
     suspend fun itemCount(playlistId: String, kind: String, categoryId: String?): Int =
         dao.categoryItemCount(playlistId, kind, categoryId)
 
+    /** Per-category item counts as a map, computed on the background dispatcher (TV-003/TV-004). */
+    suspend fun categoryCounts(playlistId: String, kind: String): Map<String, Int> =
+        withContext(Dispatchers.Default) {
+            dao.categoryItemCounts(playlistId, kind)
+                .filter { it.itemCount > 0 && it.categoryId.isNotBlank() }
+                .associate { it.categoryId to it.itemCount }
+        }
+
+    /** Counts the same distinct, parental-accessible rows that catalog rendering can expose. */
+    suspend fun accessibleCategoryCounts(playlistId: String, kind: String, includeAdult: Boolean): Map<String, Int> =
+        withContext(Dispatchers.Default) {
+            dao.accessibleCategoryItemCounts(playlistId, kind, includeAdult)
+                .filter { it.itemCount > 0 && it.categoryId.isNotBlank() }
+                .associate { it.categoryId to it.itemCount }
+        }
+
+    /** Aggregate per-category counts from SQL; avoids materializing the full catalog into memory. */
+    suspend fun nonEmptyCategoryIds(playlistId: String, kind: String): Set<String> = withContext(Dispatchers.Default) {
+        dao.categoryItemCounts(playlistId, kind)
+            .asSequence()
+            .filter { it.itemCount > 0 && it.categoryId.isNotBlank() }
+            .mapTo(mutableSetOf()) { it.categoryId }
+    }
+
+    /**
+     * Bounded per-category sample used for health/quality ranking. Never materializes the full
+     * catalog: pulls only the first [perCategory] rows (provider order) for every category, which
+     * keeps ranking work proportional to the number of categories, not the total item count.
+     */
+    suspend fun categorySamples(playlistId: String, kind: String, perCategory: Int = 8): List<XtreamItem> =
+        withContext(Dispatchers.Default) {
+            dao.categoryItemCounts(playlistId, kind)
+                .filter { it.itemCount > 0 && it.categoryId.isNotBlank() }
+                .flatMap { count ->
+                    dao.itemPageProvider(
+                        playlistId, kind, count.categoryId,
+                        minOf(perCategory, count.itemCount), 0,
+                    ).map { it.toXtream() }
+                }
+        }
+
     suspend fun search(playlistId: String, query: String, kind: String? = null, limit: Int = 240): List<Pair<String, XtreamItem>> = withContext(Dispatchers.Default) {
         val normalized = normalize(query)
         val tokens = tokens(normalized)
@@ -57,6 +98,9 @@ class CatalogCache(private val dao: CatalogDao) {
     }
 
     suspend fun count(playlistId: String, kind: String): Int = dao.itemCount(playlistId, kind)
+
+    suspend fun accessibleCount(playlistId: String, kind: String, includeAdult: Boolean): Int =
+        withContext(Dispatchers.Default) { dao.accessibleItemCount(playlistId, kind, includeAdult) }
 
     suspend fun saveCategories(playlistId: String, kind: String, values: List<XtreamCategory>) {
         dao.replaceCategories(playlistId, kind, values.mapIndexed { index, value ->
