@@ -194,7 +194,10 @@ class TvUiRegressionTest {
 
         assertEquals("Live TV", activity.findViewById<TextView>(R.id.screen_title).text.toString())
         assertEquals(View.VISIBLE, state.visibility)
-        assertEquals(View.GONE, grid.visibility)
+        // Keep the grid measured but non-drawing until RecyclerView completes the destination
+        // layout frame; outgoing Home holders must never be visible behind the loader.
+        assertEquals(View.INVISIBLE, grid.visibility)
+        assertEquals(null, grid.itemAnimator)
         assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
         assertTrue(
             activity.findViewById<View>(R.id.category_menu_button).hasFocus() ||
@@ -298,12 +301,16 @@ class TvUiRegressionTest {
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, (topBar.layoutParams as ConstraintLayout.LayoutParams).topToTop)
         assertEquals(R.id.top_bar, categoryParams.topToBottom)
         assertEquals(R.id.category_bar, gridParams.topToBottom)
+        assertEquals(dp(16).toFloat(), topBar.elevation, 0.1f)
+        assertEquals(dp(16).toFloat(), categories.elevation, 0.1f)
+        assertNotNull(topBar.background)
+        assertNotNull(categories.background)
 
         listOf(R.id.nav_live, R.id.nav_movies, R.id.nav_series).forEach { destination ->
             activity.findViewById<View>(destination).performClick()
             assertEquals(View.VISIBLE, categories.visibility)
             assertEquals(View.VISIBLE, topBar.visibility)
-            assertEquals(View.GONE, grid.visibility)
+            assertEquals(View.INVISIBLE, grid.visibility)
         }
     }
 

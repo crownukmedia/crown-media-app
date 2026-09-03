@@ -52,8 +52,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -238,6 +240,10 @@ class MainActivity : AppCompatActivity() {
         binding.contentGrid.adapter = catalogAdapter
         binding.contentGrid.setHasFixedSize(true)
         binding.contentGrid.setItemViewCacheSize(8)
+        // RecyclerView's default change/removal animations can keep outgoing Home holders drawn
+        // after a destination list has committed on slower TVs. The TV shell uses immediate,
+        // frame-synchronised route swaps instead; Mobile retains its existing animations.
+        if (television) binding.contentGrid.itemAnimator = null
         contentLayoutManager.initialPrefetchItemCount = 8
         binding.contentGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
@@ -822,15 +828,20 @@ class MainActivity : AppCompatActivity() {
         store.selected()?.let { loadCategoryCounts(it, target) }
         catalogAdapter.submit(state.cards) {
             if (section != target || sectionStates[target] !== state) return@submit
-            // Reveal only after the destination generation owns the adapter. This closes the
-            // window where stale Home/previous-section rows could be shown after loading.
-            hideState()
-            if (restoreScroll) state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
-            val focusKey = pendingContentFocusKey ?: if (binding.contentGrid.hasFocus()) focusedCardKey() else null
-            pendingContentFocusKey = null
-            if (focusKey != null && isTelevisionLayout()) {
-                restoreCardFocus(focusKey)
+            val revealDestination = reveal@{
+                if (section != target || sectionStates[target] !== state) return@reveal
+                hideState()
+                if (restoreScroll) state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
+                val focusKey = pendingContentFocusKey ?: if (binding.contentGrid.hasFocus()) focusedCardKey() else null
+                pendingContentFocusKey = null
+                if (focusKey != null && isTelevisionLayout()) restoreCardFocus(focusKey)
             }
+            // AsyncListDiffer commits before RecyclerView completes the layout/draw frame. Keep
+            // the TV grid invisible for that frame so outgoing Home/last-route holders can never
+            // flash between the loader and destination content.
+            if (isTelevisionLayout() && binding.contentGrid.visibility != View.VISIBLE) {
+                binding.contentGrid.postOnAnimation { revealDestination() }
+            } else revealDestination()
         }
         if (section in PAGED_SECTIONS && isTelevisionLayout()) {
             binding.screenSubtitle.text = "${store.selected()?.name.orEmpty()}  •  ${getString(R.string.tv_content_hint)}"
@@ -1170,8 +1181,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateContentCount(target: Section, value: ContentCountState) {
-        if (contentCounts[target] == value) return
-        contentCounts[target] = value
+        updateContentCounts(mapOf(target to value))
+    }
+
+    /** Publishes a count snapshot with one navigation update and at most one Home list diff. */
+    private fun updateContentCounts(values: Map<Section, ContentCountState>) {
+        if (values.none { (target, value) -> contentCounts[target] != value }) return
+        values.forEach { (target, value) -> contentCounts[target] = value }
         updateCountNavigation()
         if (section == Section.HOME) store.selected()?.let(::renderHome)
     }
@@ -1180,38 +1196,58 @@ class MainActivity : AppCompatActivity() {
         countJob?.cancel()
         countJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                coroutineScope {
+                val includeAdult = includeAdultContent()
+                val cachedSnapshot = coroutineScope {
                     PAGED_SECTIONS.map { target ->
                         async {
-                            val includeAdult = includeAdultContent()
-                            val cachedCount = runCatching {
-                                cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
-                            }.getOrDefault(0)
-                            if (store.catalogComplete(playlist.id, target.cardKind, null)) {
-                                updateContentCount(target, ContentCountState.Ready(cachedCount))
-                                return@async
-                            }
-                            // A non-empty Room cache is immediately useful; do not hide it behind
-                            // a full provider refresh. The final exact value replaces it later.
-                            if (cachedCount > 0) updateContentCount(target, ContentCountState.Ready(cachedCount))
-                            val result = warmCatalogKind(playlist, target.cardKind).await()
-                            if (activePlaylistId != playlist.id) return@async
-                            val refreshedCount = if (result.isSuccess) {
+                            val complete = store.catalogComplete(playlist.id, target.cardKind, null)
+                            val count = if (complete) {
                                 runCatching {
-                                    cache.accessibleCount(playlist.id, target.cardKind, includeAdultContent())
-                                }.getOrDefault(cachedCount)
-                            } else cachedCount
-                            updateContentCount(
-                                target,
-                                if (result.isSuccess) ContentCountState.Ready(refreshedCount)
-                                else if (cachedCount > 0) ContentCountState.Ready(cachedCount)
-                                else ContentCountState.Unavailable,
-                            )
+                                    cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
+                                }.getOrDefault(0)
+                            } else 0
+                            target to if (complete) ContentCountState.Ready(count) else ContentCountState.Loading
                         }
-                    }.awaitAll()
+                    }.awaitAll().toMap()
                 }
+                if (activePlaylistId != playlist.id) return@repeatOnLifecycle
+                // Complete Room catalogs render all three totals immediately in one frame.
+                updateContentCounts(cachedSnapshot)
+
+                val missing = PAGED_SECTIONS.filter { cachedSnapshot[it] == ContentCountState.Loading }
+                if (missing.isEmpty()) return@repeatOnLifecycle
+                val warmResults = coroutineScope {
+                    missing.map { target ->
+                        async { target to awaitCatalogWarmResult(playlist, target.cardKind) }
+                    }.awaitAll().toMap()
+                }
+                if (activePlaylistId != playlist.id) return@repeatOnLifecycle
+
+                val finalSnapshot = cachedSnapshot.toMutableMap()
+                missing.forEach { target ->
+                    val completed = warmResults[target]?.isSuccess == true ||
+                        store.catalogComplete(playlist.id, target.cardKind, null)
+                    finalSnapshot[target] = if (completed) {
+                        val count = runCatching {
+                            cache.accessibleCount(playlist.id, target.cardKind, includeAdultContent())
+                        }.getOrDefault(0)
+                        ContentCountState.Ready(count)
+                    } else ContentCountState.Unavailable
+                }
+                // Do not make Home visibly count Live, then Movies, then Series. Publish the
+                // completed provider snapshot atomically once all parallel requests settle.
+                updateContentCounts(finalSnapshot)
             }
         }
+    }
+
+    private suspend fun awaitCatalogWarmResult(playlist: SavedPlaylist, kind: String): Result<Int> = try {
+        warmCatalogKind(playlist, kind).await()
+    } catch (error: CancellationException) {
+        if (!currentCoroutineContext().isActive) throw error
+        // An interactive visit intentionally supersedes the same background warm-up. Other
+        // catalog counts must continue rather than losing the whole three-kind snapshot.
+        Result.failure(error)
     }
 
     /** TV-004: load per-category counts on a background dispatcher, independent of catalog indexing. */
@@ -1689,12 +1725,6 @@ class MainActivity : AppCompatActivity() {
                     cache.finishItemRefresh(playlist.id, kind, null, refreshMarker, received)
                     if (received > 0) store.markCatalogRefreshed(playlist.id, kind, null)
                     cache.count(playlist.id, kind)
-                }
-            }
-            if (result.isSuccess) {
-                PAGED_SECTIONS.firstOrNull { it.cardKind == kind }?.let { target ->
-                    val accessibleCount = cache.accessibleCount(playlist.id, kind, includeAdultContent())
-                    updateContentCount(target, ContentCountState.Ready(accessibleCount))
                 }
             }
             result
@@ -2357,7 +2387,11 @@ class MainActivity : AppCompatActivity() {
         binding.stateMessage.isVisible = !loading && message.isNotBlank()
         binding.stateAction.isVisible = !loading && action
         binding.stateAction.text = actionLabel
-        binding.contentGrid.isVisible = false
+        binding.contentGrid.visibility = if (isTelevisionLayout() && section in PAGED_SECTIONS) {
+            // INVISIBLE keeps RecyclerView measured so destination children are laid out behind
+            // the loader before the next-frame reveal.
+            View.INVISIBLE
+        } else View.GONE
         // In paged destinations the header/category bar is a fixed sibling of the scrolling grid.
         // Keep it mounted through loading, empty, error, and detail-fetch states so it remains
         // sticky and D-pad reachable. Home and global Search intentionally have no category bar.
