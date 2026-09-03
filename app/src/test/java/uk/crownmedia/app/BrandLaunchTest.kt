@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
 class BrandLaunchTest {
     @Test
     @Config(sdk = [31])
-    fun launchThemeUsesWhiteBackgroundAndSafeSquareLogo() {
+    fun launchThemeUsesDarkBackgroundAndSafeSquareLogo() {
         val context = RuntimeEnvironment.getApplication()
         val activityInfo = context.packageManager.getActivityInfo(
             ComponentName(context, MainActivity::class.java),
@@ -29,7 +29,7 @@ class BrandLaunchTest {
 
         assertEquals(R.style.Theme_CrownMedia_Starting, activityInfo.theme)
         assertTrue(theme.resolveAttribute(androidx.core.splashscreen.R.attr.windowSplashScreenBackground, background, true))
-        assertEquals(R.color.white, background.resourceId)
+        assertEquals(R.color.crown_background, background.resourceId)
         assertTrue(theme.resolveAttribute(androidx.core.splashscreen.R.attr.windowSplashScreenAnimatedIcon, icon, true))
         assertEquals(R.drawable.crown_media_logo, icon.resourceId)
     }

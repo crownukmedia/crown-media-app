@@ -80,15 +80,37 @@ class AppStoreTest {
         assertNull(store.savedLoginDetails(CrownService.EIGHT_K))
     }
 
+    @Test
+    fun repeatedStartupReadsReuseTheDecryptedPlaylistSnapshot() {
+        val secureStore = FakeSecureStore()
+        AppStore(secureStore).save("Saved", credentials, null, "ACTIVE", null, null, persist = true)
+        secureStore.resetReadCounts()
+        val restored = AppStore(secureStore)
+
+        repeat(20) {
+            assertNotNull(restored.selected())
+            assertEquals(1, restored.playlists().size)
+        }
+
+        assertEquals(1, secureStore.readCount("playlists"))
+        assertEquals(1, secureStore.readCount("selected"))
+    }
+
     private class FakeSecureStore : CrownSecureStore {
         private val strings = mutableMapOf<String, String?>()
         private val sets = mutableMapOf<String, Set<String>>()
+        private val reads = mutableMapOf<String, Int>()
 
-        override fun getString(key: String, fallback: String?): String? =
-            if (strings.containsKey(key)) strings[key] else fallback
+        override fun getString(key: String, fallback: String?): String? {
+            reads[key] = reads.getOrDefault(key, 0) + 1
+            return if (strings.containsKey(key)) strings[key] else fallback
+        }
 
         override fun putString(key: String, value: String?) { strings[key] = value }
         override fun getStringSet(key: String): Set<String> = sets[key].orEmpty()
         override fun putStringSet(key: String, value: Set<String>) { sets[key] = value }
+
+        fun resetReadCounts() = reads.clear()
+        fun readCount(key: String): Int = reads.getOrDefault(key, 0)
     }
 }

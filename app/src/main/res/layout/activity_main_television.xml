@@ -1,24 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="match_parent" android:layout_height="match_parent">
+    android:layout_width="match_parent" android:layout_height="match_parent" android:clipChildren="false">
 
-    <LinearLayout android:id="@+id/side_nav" android:layout_width="320dp" android:layout_height="0dp"
-        android:background="#E60A0D14" android:gravity="center_horizontal" android:orientation="vertical" android:paddingHorizontal="16dp" android:paddingVertical="12dp"
+    <LinearLayout android:id="@+id/side_nav" android:layout_width="88dp" android:layout_height="0dp"
+        android:clipChildren="false" android:clipToPadding="false" android:orientation="vertical"
         app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent">
-        <ImageView android:id="@+id/brand_logo" android:layout_width="72dp" android:layout_height="54dp" android:layout_marginBottom="10dp" android:background="@drawable/bg_logo_surface" android:contentDescription="@string/app_name" android:adjustViewBounds="true" android:padding="5dp" android:scaleType="fitCenter" android:src="@drawable/crown_media_logo_header" />
-        <Button android:id="@+id/nav_home" style="@style/Widget.Crown.NavButton" android:text="@string/nav_home" />
-        <Button android:id="@+id/nav_live" style="@style/Widget.Crown.NavButton" android:text="@string/nav_live" />
-        <Button android:id="@+id/nav_movies" style="@style/Widget.Crown.NavButton" android:text="@string/nav_movies" />
-        <Button android:id="@+id/nav_series" style="@style/Widget.Crown.NavButton" android:text="@string/nav_series" />
-        <Button android:id="@+id/nav_search" style="@style/Widget.Crown.NavButton" android:text="@string/nav_search" />
-        <Space android:layout_width="1dp" android:layout_height="0dp" android:layout_weight="1" />
-        <Button android:id="@+id/nav_account" style="@style/Widget.Crown.NavButton" android:text="@string/account" />
-        <Button android:id="@+id/nav_settings" style="@style/Widget.Crown.NavButton" android:text="@string/settings" />
-        <Button android:id="@+id/nav_exit" style="@style/Widget.Crown.NavButton" android:text="@string/exit" />
+        <LinearLayout android:id="@+id/tv_nav_panel" android:layout_width="match_parent" android:layout_height="match_parent"
+            android:background="#F20A0D14" android:gravity="center_horizontal" android:orientation="vertical"
+            android:paddingHorizontal="12dp" android:paddingVertical="12dp">
+            <ImageView android:id="@+id/brand_logo" android:layout_width="56dp" android:layout_height="54dp" android:layout_marginBottom="10dp" android:background="@drawable/bg_logo_surface" android:contentDescription="@string/app_name" android:adjustViewBounds="true" android:padding="5dp" android:scaleType="fitCenter" android:src="@drawable/crown_media_logo_header" />
+            <Button android:id="@+id/nav_home" style="@style/Widget.Crown.NavButton" android:text="@string/nav_home" app:icon="@drawable/ic_nav_home" />
+            <Button android:id="@+id/nav_live" style="@style/Widget.Crown.NavButton" android:text="@string/nav_live" app:icon="@drawable/ic_nav_live" />
+            <Button android:id="@+id/nav_movies" style="@style/Widget.Crown.NavButton" android:text="@string/nav_movies" app:icon="@drawable/ic_nav_movies" />
+            <Button android:id="@+id/nav_series" style="@style/Widget.Crown.NavButton" android:text="@string/nav_series" app:icon="@drawable/ic_nav_series" />
+            <Button android:id="@+id/nav_search" style="@style/Widget.Crown.NavButton" android:text="@string/nav_search" app:icon="@drawable/ic_nav_search" />
+            <Space android:layout_width="1dp" android:layout_height="0dp" android:layout_weight="1" />
+            <Button android:id="@+id/nav_account" style="@style/Widget.Crown.NavButton" android:text="@string/account" app:icon="@drawable/ic_nav_account" />
+            <Button android:id="@+id/nav_settings" style="@style/Widget.Crown.NavButton" android:text="@string/settings" app:icon="@drawable/ic_nav_settings" />
+            <Button android:id="@+id/nav_exit" style="@style/Widget.Crown.NavButton" android:text="@string/exit" app:icon="@drawable/ic_nav_exit" />
+        </LinearLayout>
     </LinearLayout>
 
-    <LinearLayout android:id="@+id/top_bar" android:layout_width="0dp" android:layout_height="76dp" android:gravity="center_vertical"
+    <LinearLayout android:id="@+id/top_bar" android:layout_width="0dp" android:layout_height="76dp" android:background="@color/crown_background" android:elevation="16dp" android:gravity="center_vertical"
         android:orientation="horizontal" android:paddingStart="28dp" android:paddingEnd="40dp" app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toEndOf="@id/side_nav" app:layout_constraintTop_toTopOf="parent">
         <LinearLayout android:id="@+id/title_block" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
@@ -34,7 +38,7 @@
         <ImageButton android:id="@+id/action_more" style="@style/Widget.Crown.IconButton" android:contentDescription="@string/more_options" android:src="@drawable/ic_more_vert" android:visibility="gone" />
     </LinearLayout>
 
-    <LinearLayout android:id="@+id/category_bar" android:layout_width="0dp" android:layout_height="62dp" android:layout_marginTop="4dp"
+    <LinearLayout android:id="@+id/category_bar" android:layout_width="0dp" android:layout_height="62dp" android:layout_marginTop="4dp" android:background="@color/crown_background" android:elevation="16dp"
         android:gravity="center_vertical" android:orientation="horizontal" android:paddingStart="24dp" android:paddingEnd="40dp"
         app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toEndOf="@id/side_nav" app:layout_constraintTop_toBottomOf="@id/top_bar">
         <ImageButton android:id="@+id/category_menu_button" android:layout_width="48dp" android:layout_height="46dp" android:layout_marginEnd="8dp"
@@ -49,11 +53,11 @@
         android:indeterminateTint="@color/crown_primary_bright" android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintEnd_toEndOf="parent" />
 
-    <LinearLayout android:id="@+id/state_panel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:gravity="center" android:orientation="vertical"
-        app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toEndOf="@id/side_nav" app:layout_constraintTop_toBottomOf="@id/category_bar">
+    <LinearLayout android:id="@+id/state_panel" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_marginHorizontal="32dp" android:gravity="center" android:orientation="vertical"
+        app:layout_constraintWidth_max="480dp" app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toEndOf="@id/side_nav" app:layout_constraintTop_toBottomOf="@id/category_bar">
         <TextView android:id="@+id/state_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:gravity="center" android:textColor="@color/white" android:textSize="24sp" android:textStyle="bold" />
         <ProgressBar android:id="@+id/progress" android:layout_width="48dp" android:layout_height="48dp" android:layout_marginTop="12dp" android:indeterminateTint="@color/crown_primary_bright" />
-        <TextView android:id="@+id/state_message" android:layout_width="480dp" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:gravity="center" android:textColor="@color/crown_text_secondary" android:textSize="16sp" />
+        <TextView android:id="@+id/state_message" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:gravity="center" android:textColor="@color/crown_text_secondary" android:textSize="16sp" />
         <Button android:id="@+id/state_action" style="@style/Widget.Crown.PrimaryButton" android:layout_marginTop="20dp" android:text="@string/try_again" />
     </LinearLayout>
     <include

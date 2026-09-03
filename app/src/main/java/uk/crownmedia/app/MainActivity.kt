@@ -1,7 +1,10 @@
 package uk.crownmedia.app
 
 import android.app.AlertDialog
+import android.animation.ValueAnimator
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
@@ -12,6 +15,8 @@ import android.util.Log
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
+import android.view.Gravity
+import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -39,6 +44,7 @@ import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
@@ -46,8 +52,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -80,6 +88,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var analytics: UsageAnalytics
     private lateinit var layoutSelection: LayoutSelection
     private lateinit var activeLayout: AppLayout
+    private var detectedDeviceClass: DeviceClass = DeviceClass.PHONE
     private val api = XtreamClient()
     private lateinit var categoriesAdapter: CategoryAdapter
     private lateinit var catalogAdapter: CatalogAdapter
@@ -92,6 +101,7 @@ class MainActivity : AppCompatActivity() {
     private var scopedSearchJob: Job? = null
     private var countJob: Job? = null
     private var categoryCountJob: Job? = null
+    private var categoryCountJobKey: String? = null
     private var healthJob: Job? = null
     private var liveRankingJob: Job? = null
     private var playlistRefreshJob: Job? = null
@@ -118,18 +128,35 @@ class MainActivity : AppCompatActivity() {
     private var contentRequestGeneration = 0L
     private var lastTrackedSearch: Int? = null
     private var categoryMenuDialog: AlertDialog? = null
+    private var tvNavigationExpanded = false
+    private var tvNavigationFocusEnabled = false
+    private var tvNavigationAnimator: ValueAnimator? = null
+    private val tvNavigationLabels = mutableMapOf<Int, CharSequence>()
+    private val pendingTvFocusMoves = mutableSetOf<Int>()
+
+    override fun attachBaseContext(newBase: Context) {
+        detectedDeviceClass = newBase.deviceClass()
+        val selectedLayout = LayoutSelection(newBase).resolve(detectedDeviceClass)
+        val configuration = Configuration(newBase.resources.configuration).apply {
+            val selectedUiMode = when (selectedLayout) {
+                AppLayout.MOBILE -> Configuration.UI_MODE_TYPE_NORMAL
+                AppLayout.TELEVISION -> Configuration.UI_MODE_TYPE_TELEVISION
+            }
+            uiMode = (uiMode and Configuration.UI_MODE_TYPE_MASK.inv()) or selectedUiMode
+        }
+        super.attachBaseContext(newBase.createConfigurationContext(configuration))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        val detectedDeviceClass = deviceClass()
         layoutSelection = LayoutSelection(this)
         activeLayout = layoutSelection.resolve(detectedDeviceClass)
         val launchLayout = layoutInflater.inflate(activeLayout.startupLayoutResource(), null, false)
         binding = ActivityMainBinding.bind(launchLayout)
         setContentView(binding.root)
         analytics = (application as CrownMediaApplication).usageAnalytics
-        analytics.setDeviceClass(deviceClass())
+        analytics.setDeviceClass(detectedDeviceClass)
         store = storeFactory(this)
         cache = CatalogCache(CrownDatabase.get(this).catalogDao())
         streamAvailability = StreamAvailability(this)
@@ -140,7 +167,12 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.setAccessibilityHeading(binding.stateTitle, true)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (binding.loginPanel.root.isVisible && store.selected() != null) {
+                if (categoryMenuDialog?.isShowing == true) {
+                    categoryMenuDialog?.dismiss()
+                } else if (tvNavigationExpanded) {
+                    setTvNavigationExpanded(false)
+                    focusCurrentSectionContent()
+                } else if (binding.loginPanel.root.isVisible && store.selected() != null) {
                     cancelLogin()
                     open(Section.HOME)
                 } else if (nestedSeries != null) {
@@ -151,14 +183,16 @@ class MainActivity : AppCompatActivity() {
                 } else if (section == Section.SEARCH) {
                     hideKeyboard()
                     open(Section.HOME)
+                } else if (section in PAGED_SECTIONS) {
+                    open(Section.HOME)
                 } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+                    confirmExit()
                 }
             }
         })
-        if (store.selected() == null) showWelcome() else {
-            refreshPlaybackCapabilitiesIfNeeded()
+        val selectedPlaylist = store.selected()
+        if (selectedPlaylist == null) showWelcome() else {
+            refreshPlaybackCapabilitiesIfNeeded(selectedPlaylist)
             open(Section.HOME)
         }
         confirmDetectedTelevisionLayout(detectedDeviceClass)
@@ -186,13 +220,15 @@ class MainActivity : AppCompatActivity() {
     private fun isTelevisionLayout(): Boolean = activeLayout == AppLayout.TELEVISION
 
     private fun configureLists() {
-        categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory)
+        categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory, ::handleCategoryDpad)
         binding.categoryList.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false).apply {
             initialPrefetchItemCount = 12
         }
         binding.categoryList.adapter = categoriesAdapter
-        binding.categoryMenuButton.setOnClickListener { showCategoryMenu() }
-        catalogAdapter = CatalogAdapter(::openCard, ::cardOptions)
+        binding.categoryMenuButton.setOnClickListener {
+            if (nestedSeries != null) closeSeriesDetails() else showCategoryMenu()
+        }
+        catalogAdapter = CatalogAdapter(::openCard, ::cardOptions, ::handleCatalogDpad)
         val television = isTelevisionLayout()
         val initialColumns = when {
             television -> 5
@@ -204,6 +240,10 @@ class MainActivity : AppCompatActivity() {
         binding.contentGrid.adapter = catalogAdapter
         binding.contentGrid.setHasFixedSize(true)
         binding.contentGrid.setItemViewCacheSize(8)
+        // RecyclerView's default change/removal animations can keep outgoing Home holders drawn
+        // after a destination list has committed on slower TVs. The TV shell uses immediate,
+        // frame-synchronised route swaps instead; Mobile retains its existing animations.
+        if (television) binding.contentGrid.itemAnimator = null
         contentLayoutManager.initialPrefetchItemCount = 8
         binding.contentGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
@@ -222,11 +262,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureNavigation() {
-        binding.navHome.setOnClickListener { open(Section.HOME) }
-        binding.navLive.setOnClickListener { open(Section.LIVE) }
-        binding.navMovies.setOnClickListener { open(Section.MOVIES) }
-        binding.navSeries.setOnClickListener { open(Section.SERIES) }
-        binding.navSearch.setOnClickListener { open(Section.SEARCH) }
+        binding.navHome.setOnClickListener { openFromNavigation(Section.HOME) }
+        binding.navLive.setOnClickListener { openFromNavigation(Section.LIVE) }
+        binding.navMovies.setOnClickListener { openFromNavigation(Section.MOVIES) }
+        binding.navSeries.setOnClickListener { openFromNavigation(Section.SERIES) }
+        binding.navSearch.setOnClickListener { openFromNavigation(Section.SEARCH) }
         binding.navAccount.setOnClickListener { showAccount() }
         binding.navSettings.setOnClickListener { showSettings() }
         binding.navExit.setOnClickListener { confirmExit() }
@@ -244,17 +284,169 @@ class MainActivity : AppCompatActivity() {
             if (retry != null) retry() else if (store.selected() == null) showManualPlaylist() else load(true)
         }
         if (isTelevisionLayout()) {
-            listOf(binding.navHome, binding.navLive, binding.navMovies, binding.navSeries, binding.navSearch, binding.navAccount, binding.navSettings, binding.navExit)
-                .forEach { button ->
-                    button.setOnFocusChangeListener { view, focused ->
-                        (view as? com.google.android.material.button.MaterialButton)?.strokeWidth =
-                            ((if (focused) 3 else 1) * resources.displayMetrics.density).toInt().coerceAtLeast(1)
-                        view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
-                            .translationZ(if (focused) 10f else 0f).setDuration(120).start()
-                    }
-                }
+            configureTvNavigationRail()
         }
     }
+
+    private fun openFromNavigation(target: Section) {
+        open(target)
+        if (!isTelevisionLayout()) return
+        setTvNavigationExpanded(false)
+        binding.root.post(::focusCurrentSectionContent)
+    }
+
+    private fun configureTvNavigationRail() {
+        val buttons = tvNavigationButtons()
+        buttons.forEach { button ->
+            tvNavigationLabels[button.id] = button.text
+            button.contentDescription = button.text
+            button.setOnFocusChangeListener { view, focused ->
+                (view as? MaterialButton)?.strokeWidth =
+                    ((if (focused) 3 else 1) * resources.displayMetrics.density).toInt().coerceAtLeast(1)
+                view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
+                    .translationZ(if (focused) 10f else 0f).setDuration(120).start()
+                if (focused && tvNavigationFocusEnabled) {
+                    setTvNavigationExpanded(true)
+                } else {
+                    binding.root.post {
+                        if (buttons.none(View::hasFocus)) setTvNavigationExpanded(false)
+                    }
+                }
+            }
+        }
+        applyTvNavigationLabels(expanded = false)
+    }
+
+    private fun setTvNavigationExpanded(expanded: Boolean) {
+        if (!isTelevisionLayout() || tvNavigationExpanded == expanded) return
+        val rail = binding.sideNav
+        tvNavigationExpanded = expanded
+        applyTvNavigationLabels(expanded)
+        tvNavigationAnimator?.cancel()
+        val collapsedWidth = dp(TV_NAV_COLLAPSED_WIDTH_DP)
+        val responsiveExpandedDp = responsiveTvNavigationWidthDp(resources.configuration.screenWidthDp)
+        val targetWidth = if (expanded) dp(responsiveExpandedDp) else collapsedWidth
+        tvNavigationAnimator = ValueAnimator.ofInt(rail.width.takeIf { it > 0 } ?: rail.layoutParams.width, targetWidth).apply {
+            duration = TV_NAV_ANIMATION_MS
+            addUpdateListener { animator ->
+                rail.layoutParams = rail.layoutParams.apply { width = animator.animatedValue as Int }
+            }
+            start()
+        }
+    }
+
+    private fun applyTvNavigationLabels(expanded: Boolean) {
+        tvNavigationButtons().forEach { button ->
+            button.text = if (expanded) tvNavigationLabels[button.id] ?: "" else ""
+            button.gravity = if (expanded) Gravity.START or Gravity.CENTER_VERTICAL else Gravity.CENTER
+            button.iconPadding = if (expanded) dp(TV_NAV_ICON_PADDING_DP) else 0
+            val horizontalPadding = if (expanded) dp(TV_NAV_BUTTON_PADDING_DP) else 0
+            button.setPadding(horizontalPadding, button.paddingTop, horizontalPadding, button.paddingBottom)
+            button.contentDescription = tvNavigationLabels[button.id] ?: ""
+        }
+    }
+
+    private fun focusCurrentSectionContent() {
+        when {
+            binding.contentGrid.isVisible && catalogAdapter.itemCount > 0 -> restoreCardFocus(sectionState(section).focusedCardKey)
+            section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
+            section == Section.SEARCH -> binding.searchBox.requestFocus()
+            binding.searchBox.isVisible -> binding.searchBox.requestFocus()
+            binding.stateAction.isVisible -> binding.stateAction.requestFocus()
+            else -> binding.contentGrid.requestFocus()
+        }
+    }
+
+    private fun handleCatalogDpad(view: View, position: Int, keyCode: Int, event: KeyEvent): Boolean {
+        if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
+        if (keyCode !in TV_DPAD_KEYS) return false
+        // Held remotes can deliver repeats faster than RecyclerView can lay out the next row.
+        // Consume repeats while one frame-bounded focus transition is pending instead of stacking
+        // scroll/focus callbacks against stale adapter positions.
+        if (binding.contentGrid.id in pendingTvFocusMoves) return true
+        val move = tvContentFocusMove(
+            position,
+            catalogAdapter.itemCount,
+            contentLayoutManager.spanCount,
+            keyCode,
+            section in PAGED_SECTIONS && binding.categoryBar.isVisible,
+        )
+        when (move.region) {
+            TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.contentGrid, move.position)
+            TvFocusRegion.SIDEBAR -> navigationView(section).requestFocus()
+            TvFocusRegion.CATEGORIES -> restoreCategoryFocus(currentCategory)
+            else -> view.requestFocus()
+        }
+        return true
+    }
+
+    private fun handleCategoryDpad(view: View, position: Int, keyCode: Int, event: KeyEvent): Boolean {
+        if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
+        if (keyCode !in TV_DPAD_KEYS) return false
+        if (binding.categoryList.id in pendingTvFocusMoves) return true
+        val move = tvCategoryFocusMove(
+            position,
+            categoriesAdapter.itemCount,
+            keyCode,
+            binding.searchBox.isVisible,
+            catalogAdapter.itemCount > 0,
+        )
+        when (move.region) {
+            TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.categoryList, move.position)
+            TvFocusRegion.CATEGORY_MENU -> binding.categoryMenuButton.requestFocus()
+            TvFocusRegion.SEARCH -> binding.searchBox.requestFocus()
+            TvFocusRegion.CONTENT -> restoreCardFocus(sectionState(section).focusedCardKey)
+            else -> view.requestFocus()
+        }
+        return true
+    }
+
+    private fun requestRecyclerItemFocus(recyclerView: RecyclerView, position: Int) {
+        val itemCount = recyclerView.adapter?.itemCount ?: 0
+        if (itemCount == 0 || position !in 0 until itemCount) return
+        if (!pendingTvFocusMoves.add(recyclerView.id)) return
+        val target = position
+
+        fun focusAfterLayout(remainingAttempts: Int) {
+            recyclerView.postOnAnimation {
+                val currentCount = recyclerView.adapter?.itemCount ?: 0
+                if (!recyclerView.isAttachedToWindow || currentCount == 0) {
+                    pendingTvFocusMoves.remove(recyclerView.id)
+                    return@postOnAnimation
+                }
+                val safeTarget = target.coerceIn(0, currentCount - 1)
+                recyclerView.scrollToPosition(safeTarget)
+                val focused = recyclerView.findViewHolderForAdapterPosition(safeTarget)
+                    ?.itemView
+                    ?.requestFocus() == true
+                if (focused || remainingAttempts == 0) {
+                    pendingTvFocusMoves.remove(recyclerView.id)
+                } else {
+                    focusAfterLayout(remainingAttempts - 1)
+                }
+            }
+        }
+
+        focusAfterLayout(2)
+    }
+
+    private fun restoreCategoryFocus(categoryId: String) {
+        val position = sectionState(section).categories.indexOfFirst { it.id == categoryId }.coerceAtLeast(0)
+        requestRecyclerItemFocus(binding.categoryList, position)
+    }
+
+    private fun tvNavigationButtons(): List<MaterialButton> = listOf(
+        binding.navHome,
+        binding.navLive,
+        binding.navMovies,
+        binding.navSeries,
+        binding.navSearch,
+        binding.navAccount,
+        binding.navSettings,
+        binding.navExit,
+    ).mapNotNull { it as? MaterialButton }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun showMobileMenu(anchor: View) {
         if (store.selected() == null) return
@@ -364,9 +556,11 @@ class MainActivity : AppCompatActivity() {
             liveRankingJob?.cancel()
         }
         val navigationStarted = SystemClock.elapsedRealtime()
-        val enteringAuthenticatedShell = binding.loginPanel.root.isVisible
         showAuthenticatedShell()
         section = value
+        // Supersede any pending AsyncListDiffer commit from a Home count update before the
+        // destination begins loading. Otherwise the old Home tiles can flash over the new route.
+        if (changingTopLevelSection && value != Section.HOME) catalogAdapter.submit(emptyList())
         binding.pageProgress.isVisible = false
         val state = sectionState(value)
         currentCategory = state.categoryId
@@ -389,6 +583,12 @@ class MainActivity : AppCompatActivity() {
         binding.screenSubtitle.text = store.selected()?.name ?: "Your world. One screen."
         updateSelectedNavigation(value)
         configureTvPresentation(value)
+        if (changingTopLevelSection && value in PAGED_SECTIONS) {
+            // Keep the previous route hidden until AsyncListDiffer commits the destination rows.
+            // Showing the destination loader here prevents Home/last-section cards flashing while
+            // the background diff is still replacing them.
+            showState("Loading", "", true, false, keepCategories = true)
+        }
         if (value == Section.SEARCH) {
             val query = binding.searchBox.text.toString()
             if (query.trim().length >= 2) search(query)
@@ -410,9 +610,6 @@ class MainActivity : AppCompatActivity() {
             load()
         }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "tab_${value.name.lowercase()}_render_ms=${SystemClock.elapsedRealtime() - navigationStarted}")
-        if (enteringAuthenticatedShell && isTelevisionLayout()) {
-            navigationView(value).post { navigationView(value).requestFocus() }
-        }
         analytics.trackScreen(value.name.lowercase())
     }
 
@@ -476,7 +673,7 @@ class MainActivity : AppCompatActivity() {
         loadJob?.cancel()
         val requestGeneration = contentRequestGeneration
         val requestedCategory = state.categoryId
-        if (state.cards.isEmpty()) showState("Loading", "", true, false)
+        if (state.cards.isEmpty()) showState("Loading", "", true, false, keepCategories = target in PAGED_SECTIONS)
         loadJob = lifecycleScope.launch {
             val cacheStarted = SystemClock.elapsedRealtime()
             val cachedResult = runCatching {
@@ -531,6 +728,7 @@ class MainActivity : AppCompatActivity() {
             scrollCategoryIntoView(category.id)
             return
         }
+        val restoreTvCategoryFocus = isTelevisionLayout() && binding.categoryList.hasFocus()
         contentRequestGeneration++
         val state = sectionState(section)
         state.searchQuery = ""
@@ -546,7 +744,9 @@ class MainActivity : AppCompatActivity() {
         currentCategory = category.id
         categoriesAdapter.submit(state.categories, currentCategory) {
             scrollCategoryIntoView(currentCategory)
+            if (restoreTvCategoryFocus) restoreCategoryFocus(currentCategory)
         }
+        if (restoreTvCategoryFocus) setTvNavigationExpanded(false)
         cancelSectionRefreshes(section)
         analytics.trackCategorySelected(section.name.lowercase())
         load()
@@ -593,6 +793,7 @@ class MainActivity : AppCompatActivity() {
         scopedSearchJob?.cancel()
         countJob?.cancel()
         categoryCountJob?.cancel()
+        categoryCountJobKey = null
         catalogWarmJobs.values.forEach { it.cancel() }
         catalogWarmJobs.clear()
         sectionStates.clear()
@@ -620,18 +821,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSectionState(state: SectionState, restoreScroll: Boolean) {
         if (section in PAGED_SECTIONS && sectionStates[section] !== state) return
+        val target = section
         categoriesAdapter.submit(state.categories, state.categoryId) {
             if (restoreScroll) state.categoryScrollState?.let { binding.categoryList.layoutManager?.onRestoreInstanceState(it) }
         }
-        store.selected()?.let { loadCategoryCounts(it, section) }
-        hideState()
+        store.selected()?.let { loadCategoryCounts(it, target) }
         catalogAdapter.submit(state.cards) {
-            if (restoreScroll) state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
-            val focusKey = pendingContentFocusKey ?: if (binding.contentGrid.hasFocus()) focusedCardKey() else null
-            pendingContentFocusKey = null
-            if (focusKey != null && isTelevisionLayout()) {
-                restoreCardFocus(focusKey)
+            if (section != target || sectionStates[target] !== state) return@submit
+            val revealDestination = reveal@{
+                if (section != target || sectionStates[target] !== state) return@reveal
+                hideState()
+                if (restoreScroll) state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
+                val focusKey = pendingContentFocusKey ?: if (binding.contentGrid.hasFocus()) focusedCardKey() else null
+                pendingContentFocusKey = null
+                if (focusKey != null && isTelevisionLayout()) restoreCardFocus(focusKey)
             }
+            // AsyncListDiffer commits before RecyclerView completes the layout/draw frame. Keep
+            // the TV grid invisible for that frame so outgoing Home/last-route holders can never
+            // flash between the loader and destination content.
+            if (isTelevisionLayout() && binding.contentGrid.visibility != View.VISIBLE) {
+                binding.contentGrid.postOnAnimation { revealDestination() }
+            } else revealDestination()
         }
         if (section in PAGED_SECTIONS && isTelevisionLayout()) {
             binding.screenSubtitle.text = "${store.selected()?.name.orEmpty()}  •  ${getString(R.string.tv_content_hint)}"
@@ -834,8 +1044,14 @@ class MainActivity : AppCompatActivity() {
         cache.finishItemRefresh(playlist.id, target.cardKind, actualCategory, refreshMarker, received)
         state.lastRefreshAt = System.currentTimeMillis()
         if (received > 0) store.markCatalogRefreshed(playlist.id, target.cardKind, actualCategory, state.lastRefreshAt)
+        if (section == target) loadCategoryCounts(playlist, target, force = true)
         if (actualCategory == null || store.catalogComplete(playlist.id, target.cardKind, null)) {
-            updateContentCount(target, ContentCountState.Ready(cache.count(playlist.id, target.cardKind)))
+            updateContentCount(
+                target,
+                ContentCountState.Ready(
+                    cache.accessibleCount(playlist.id, target.cardKind, includeAdultContent()),
+                ),
+            )
         }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "${target.name.lowercase()}_refresh_total_ms=${SystemClock.elapsedRealtime() - refreshStarted};items=$received")
         if (state.categoryId == refreshCategory) {
@@ -918,11 +1134,12 @@ class MainActivity : AppCompatActivity() {
         hideState()
         categoriesAdapter.submit(emptyList())
         val p = store.selected() ?: return
-        renderHome(p)
+        PAGED_SECTIONS.forEach { contentCounts.putIfAbsent(it, ContentCountState.Loading) }
+        renderHome(p, focusContent = isTelevisionLayout())
         loadContentCounts(p)
     }
 
-    private fun renderHome(p: SavedPlaylist) {
+    private fun renderHome(p: SavedPlaylist, focusContent: Boolean = false) {
         val expiry = p.expiresAt?.let { DateFormat.getDateInstance().format(Date(it * 1000)) } ?: "No expiry reported"
         val cards = listOf(
             CatalogCard("live", "home", "Live TV", null, "${countState(Section.LIVE).homeDescription("channels")} • EPG & catch-up", "WATCH", localArtwork = R.drawable.home_live_icon),
@@ -935,6 +1152,10 @@ class MainActivity : AppCompatActivity() {
         val state = sectionState(Section.HOME).apply { this.cards = cards; categories = emptyList() }
         catalogAdapter.submit(cards) {
             state.scrollState?.let { binding.contentGrid.layoutManager?.onRestoreInstanceState(it) }
+            if (focusContent && section == Section.HOME && isTelevisionLayout()) {
+                restoreCardFocus(state.focusedCardKey)
+                binding.contentGrid.post { tvNavigationFocusEnabled = true }
+            }
         }
     }
 
@@ -944,14 +1165,29 @@ class MainActivity : AppCompatActivity() {
     private fun updateCountNavigation() {
         if (!::binding.isInitialized) return
         val television = isTelevisionLayout()
-        binding.navLive.text = countState(Section.LIVE).navigationLabel(getString(R.string.nav_live), television = television)
-        binding.navMovies.text = countState(Section.MOVIES).navigationLabel(getString(R.string.nav_movies), television = television)
-        binding.navSeries.text = countState(Section.SERIES).navigationLabel(getString(R.string.nav_series), television = television)
+        updateNavigationText(binding.navLive, countState(Section.LIVE).navigationLabel(getString(R.string.nav_live), television = television))
+        updateNavigationText(binding.navMovies, countState(Section.MOVIES).navigationLabel(getString(R.string.nav_movies), television = television))
+        updateNavigationText(binding.navSeries, countState(Section.SERIES).navigationLabel(getString(R.string.nav_series), television = television))
+    }
+
+    private fun updateNavigationText(view: TextView, label: CharSequence) {
+        if (!isTelevisionLayout()) {
+            view.text = label
+            return
+        }
+        tvNavigationLabels[view.id] = label
+        view.contentDescription = label
+        view.text = if (tvNavigationExpanded) label else ""
     }
 
     private fun updateContentCount(target: Section, value: ContentCountState) {
-        if (contentCounts[target] == value) return
-        contentCounts[target] = value
+        updateContentCounts(mapOf(target to value))
+    }
+
+    /** Publishes a count snapshot with one navigation update and at most one Home list diff. */
+    private fun updateContentCounts(values: Map<Section, ContentCountState>) {
+        if (values.none { (target, value) -> contentCounts[target] != value }) return
+        values.forEach { (target, value) -> contentCounts[target] = value }
         updateCountNavigation()
         if (section == Section.HOME) store.selected()?.let(::renderHome)
     }
@@ -960,42 +1196,84 @@ class MainActivity : AppCompatActivity() {
         countJob?.cancel()
         countJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                coroutineScope {
+                val includeAdult = includeAdultContent()
+                val cachedSnapshot = coroutineScope {
                     PAGED_SECTIONS.map { target ->
                         async {
-                            val cachedCount = runCatching { cache.count(playlist.id, target.cardKind) }.getOrDefault(0)
-                            if (store.catalogComplete(playlist.id, target.cardKind, null)) {
-                                updateContentCount(target, ContentCountState.Ready(cachedCount))
-                                return@async
-                            }
-                            updateContentCount(target, ContentCountState.Loading)
-                            val result = warmCatalogKind(playlist, target.cardKind).await()
-                            if (activePlaylistId != playlist.id) return@async
-                            updateContentCount(
-                                target,
-                                result.fold(
-                                    onSuccess = { ContentCountState.Ready(it) },
-                                    onFailure = { ContentCountState.Unavailable },
-                                ),
-                            )
+                            val complete = store.catalogComplete(playlist.id, target.cardKind, null)
+                            val count = if (complete) {
+                                runCatching {
+                                    cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
+                                }.getOrDefault(0)
+                            } else 0
+                            target to if (complete) ContentCountState.Ready(count) else ContentCountState.Loading
                         }
-                    }.awaitAll()
+                    }.awaitAll().toMap()
                 }
+                if (activePlaylistId != playlist.id) return@repeatOnLifecycle
+                // Complete Room catalogs render all three totals immediately in one frame.
+                updateContentCounts(cachedSnapshot)
+
+                val missing = PAGED_SECTIONS.filter { cachedSnapshot[it] == ContentCountState.Loading }
+                if (missing.isEmpty()) return@repeatOnLifecycle
+                val warmResults = coroutineScope {
+                    missing.map { target ->
+                        async { target to awaitCatalogWarmResult(playlist, target.cardKind) }
+                    }.awaitAll().toMap()
+                }
+                if (activePlaylistId != playlist.id) return@repeatOnLifecycle
+
+                val finalSnapshot = cachedSnapshot.toMutableMap()
+                missing.forEach { target ->
+                    val completed = warmResults[target]?.isSuccess == true ||
+                        store.catalogComplete(playlist.id, target.cardKind, null)
+                    finalSnapshot[target] = if (completed) {
+                        val count = runCatching {
+                            cache.accessibleCount(playlist.id, target.cardKind, includeAdultContent())
+                        }.getOrDefault(0)
+                        ContentCountState.Ready(count)
+                    } else ContentCountState.Unavailable
+                }
+                // Do not make Home visibly count Live, then Movies, then Series. Publish the
+                // completed provider snapshot atomically once all parallel requests settle.
+                updateContentCounts(finalSnapshot)
             }
         }
     }
 
+    private suspend fun awaitCatalogWarmResult(playlist: SavedPlaylist, kind: String): Result<Int> = try {
+        warmCatalogKind(playlist, kind).await()
+    } catch (error: CancellationException) {
+        if (!currentCoroutineContext().isActive) throw error
+        // An interactive visit intentionally supersedes the same background warm-up. Other
+        // catalog counts must continue rather than losing the whole three-kind snapshot.
+        Result.failure(error)
+    }
+
     /** TV-004: load per-category counts on a background dispatcher, independent of catalog indexing. */
-    private fun loadCategoryCounts(playlist: SavedPlaylist, target: Section) {
+    private fun loadCategoryCounts(playlist: SavedPlaylist, target: Section, force: Boolean = false) {
         if (target !in PAGED_SECTIONS) return
+        val includeAdult = includeAdultContent()
+        val key = "${playlist.id}:${target.cardKind}:$includeAdult"
+        if (!force && categoryCountJobKey == key && categoryCountJob?.isActive == true) return
         categoryCountJob?.cancel()
         val playlistId = playlist.id
-        categoryCountJob = lifecycleScope.launch {
+        categoryCountJobKey = key
+        val job = lifecycleScope.launch {
             val counts = withContext(Dispatchers.Default) {
-                runCatching { cache.categoryCounts(playlistId, target.cardKind) }.getOrDefault(emptyMap())
+                runCatching {
+                    cache.accessibleCategoryCounts(playlistId, target.cardKind, includeAdult)
+                }.getOrDefault(emptyMap())
             }
             if (section == target && activePlaylistId == playlistId) {
                 categoriesAdapter.updateCounts(counts)
+            }
+        }
+        categoryCountJob = job
+        job.invokeOnCompletion {
+            if (categoryCountJob === job) {
+                categoryCountJob = null
+                categoryCountJobKey = null
             }
         }
     }
@@ -1011,7 +1289,9 @@ class MainActivity : AppCompatActivity() {
     private fun openCardUnlocked(card: CatalogCard) {
         if (card.kind == "home") {
             when (card.id) {
-                "live" -> open(Section.LIVE); "movies" -> open(Section.MOVIES); "series" -> open(Section.SERIES)
+                "live" -> openFromNavigation(Section.LIVE)
+                "movies" -> openFromNavigation(Section.MOVIES)
+                "series" -> openFromNavigation(Section.SERIES)
                 "account" -> showAccount(); "reload" -> refreshAllCatalogs(); "playlist" -> showPlaylists()
             }; return
         }
@@ -1116,30 +1396,34 @@ class MainActivity : AppCompatActivity() {
         detailJob = lifecycleScope.launch {
             runCatching { api.seriesInfo(playlist.credentials, card.id) }.onSuccess { details ->
                 if (section != Section.SERIES || store.selected()?.id != playlist.id) return@onSuccess
-                hideState()
-                if (details.episodes.values.all { it.isEmpty() }) {
-                    val builder = AlertDialog.Builder(this@MainActivity).setTitle(details.name)
-                    if (isTelevisionLayout()) builder.setView(contentDetailsView(card, details.plot ?: "No episodes supplied."))
-                    else builder.setMessage(details.plot ?: "No episodes supplied.")
-                    builder.setPositiveButton("Close", null).showCrown()
-                } else {
-                    val openEpisodes = {
-                        nestedSeries = SeriesDetailState(card, details, details.episodes.keys.minOrNull() ?: 1)
-                        renderSeriesDetails()
-                    }
-                    if (isTelevisionLayout()) {
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle(details.name)
-                            .setView(contentDetailsView(card, listOfNotNull(details.genre, details.plot).joinToString("\n\n")))
-                            .setPositiveButton("Browse episodes") { _, _ -> openEpisodes() }
-                            .setNegativeButton("Back", null)
-                            .showCrown()
-                    } else openEpisodes()
-                }
+                showSeriesOverview(card, details)
             }.onFailure { error ->
                 if (error !is CancellationException && section == Section.SERIES) showOperationFailure(error) { showSeries(card) }
             }
         }
+    }
+
+    private fun showSeriesOverview(card: CatalogCard, details: XtreamSeriesDetails) {
+        hideState()
+        if (details.episodes.values.all { it.isEmpty() }) {
+            val builder = AlertDialog.Builder(this).setTitle(details.name)
+            if (isTelevisionLayout()) builder.setView(contentDetailsView(card, details.plot ?: "No episodes supplied."))
+            else builder.setMessage(details.plot ?: "No episodes supplied.")
+            builder.setPositiveButton("Close", null).showCrown()
+            return
+        }
+        val openEpisodes = {
+            nestedSeries = SeriesDetailState(card, details, details.episodes.keys.minOrNull() ?: 1)
+            renderSeriesDetails()
+        }
+        if (isTelevisionLayout()) {
+            AlertDialog.Builder(this)
+                .setTitle(details.name)
+                .setView(contentDetailsView(card, listOfNotNull(details.genre, details.plot).joinToString("\n\n")))
+                .setPositiveButton("Browse episodes") { _, _ -> openEpisodes() }
+                .setNegativeButton("Back", null)
+                .showCrown()
+        } else openEpisodes()
     }
 
     private fun renderSeriesDetails() {
@@ -1153,9 +1437,8 @@ class MainActivity : AppCompatActivity() {
         binding.screenSubtitle.text = listOfNotNull(nested.details.genre, "Season ${nested.season}", "Back returns to Series").joinToString("  •  ")
         setCategoryNavigationVisible(true)
         categoriesAdapter.submit(seasons, "season:${nested.season}")
-        hideState()
-        catalogAdapter.submit(episodes) { if (isTelevisionLayout() && episodes.isNotEmpty()) restoreCardFocus(null) }
         if (episodes.isEmpty()) {
+            catalogAdapter.submit(emptyList())
             stateRetry = { closeSeriesDetails() }
             showState(
                 "No episodes",
@@ -1165,6 +1448,12 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.back_to_series),
                 keepCategories = true,
             )
+        } else {
+            catalogAdapter.submit(episodes) {
+                if (nestedSeries !== nested || section != Section.SERIES) return@submit
+                hideState()
+                if (isTelevisionLayout()) restoreCardFocus(null)
+            }
         }
     }
 
@@ -1175,12 +1464,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun closeSeriesDetails() {
+        val previous = nestedSeries ?: return
         nestedSeries = null
         detailJob?.cancel()
         detailJob = null
         binding.screenTitle.text = "Series"
         binding.screenSubtitle.text = store.selected()?.name.orEmpty()
+        setCategoryNavigationVisible(true)
+        pendingContentFocusKey = "${previous.card.kind}:${previous.card.id}"
         renderSectionState(sectionState(Section.SERIES), restoreScroll = true)
+        if (isTelevisionLayout()) {
+            binding.root.post {
+                if (section == Section.SERIES && nestedSeries == null && !isFinishing) {
+                    showSeriesOverview(previous.card, previous.details)
+                }
+            }
+        }
     }
 
     private fun showEpg(card: CatalogCard) {
@@ -1427,9 +1726,6 @@ class MainActivity : AppCompatActivity() {
                     if (received > 0) store.markCatalogRefreshed(playlist.id, kind, null)
                     cache.count(playlist.id, kind)
                 }
-            }
-            result.onSuccess { count ->
-                PAGED_SECTIONS.firstOrNull { it.cardKind == kind }?.let { updateContentCount(it, ContentCountState.Ready(count)) }
             }
             result
         }
@@ -1686,8 +1982,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshPlaybackCapabilitiesIfNeeded() {
-        val playlist = store.selected()?.takeIf {
+    private fun refreshPlaybackCapabilitiesIfNeeded(selectedPlaylist: SavedPlaylist? = store.selected()) {
+        val playlist = selectedPlaylist?.takeIf {
             it.allowedFormats.isEmpty() || it.serverTimezone.isNullOrBlank()
         } ?: return
         lifecycleScope.launch {
@@ -1724,6 +2020,7 @@ class MainActivity : AppCompatActivity() {
             "Parental controls  •  ${if (store.parentalPin == null) "Off" else "On"}",
             "Restore hidden categories",
             "Share usage and playback error  •  ${when { !analytics.isConfigured -> "Unavailable"; analytics.isEnabled -> "On"; else -> "Off" }}",
+            getString(R.string.app_layout_setting, getString(layoutSelection.preference.labelResource)),
         )
         AlertDialog.Builder(this).setTitle("Settings").setItems(labels) { _, which ->
             when (which) {
@@ -1737,8 +2034,25 @@ class MainActivity : AppCompatActivity() {
                     showSettings()
                 }
                 5 -> showUsageAnalyticsChoice()
+                6 -> showLayoutChoice()
             }
         }.setNegativeButton("Close", null).showCrown(preferredButton = null)
+    }
+
+    private fun showLayoutChoice() {
+        val preferences = AppLayoutPreference.entries
+        val labels = preferences.map { getString(it.labelResource) }.toTypedArray()
+        val selected = preferences.indexOf(layoutSelection.preference).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.app_layout)
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                val preference = preferences.getOrNull(which) ?: return@setSingleChoiceItems
+                layoutSelection.select(preference)
+                dialog.dismiss()
+                recreate()
+            }
+            .setNegativeButton(R.string.back, null)
+            .showCrown(preferredButton = null)
     }
 
     private fun showUsageAnalyticsChoice() {
@@ -1835,6 +2149,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requiresPin(name: String): Boolean = store.parentalPin != null && !adultSessionUnlocked() && listOf("adult", "xxx", "18+").any { name.contains(it, true) }
     private fun adultSessionUnlocked(): Boolean = System.currentTimeMillis() < adultUnlockedUntil
+    private fun includeAdultContent(): Boolean = store.parentalPin == null || adultSessionUnlocked()
     private fun verifyPin(after: () -> Unit) {
         val input = EditText(this).apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD }
         val dialog = AlertDialog.Builder(this).setTitle("Enter parental PIN").setView(input).setPositiveButton("Unlock", null).setNegativeButton("Cancel", null).create()
@@ -1851,7 +2166,14 @@ class MainActivity : AppCompatActivity() {
         prepareCrownDialog(dialog)
     }
 
-    private fun confirmExit() { AlertDialog.Builder(this).setTitle("Exit Crown Media?").setPositiveButton("Exit") { _, _ -> finishAffinity() }.setNegativeButton("Stay", null).showCrown() }
+    private fun confirmExit() {
+        AlertDialog.Builder(this)
+            .setTitle("Exit Crown Media?")
+            .setMessage("Are you sure you want to exit the app?")
+            .setPositiveButton("Exit") { _, _ -> finishAffinity() }
+            .setNegativeButton("Cancel", null)
+            .showCrown()
+    }
     private fun openTrailer(value: String) {
         val url = if (value.startsWith("http")) value else "https://www.youtube.com/watch?v=$value"
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { Toast.makeText(this, "No browser or YouTube app found", Toast.LENGTH_LONG).show() }
@@ -2050,6 +2372,13 @@ class MainActivity : AppCompatActivity() {
     ) {
         if (isTelevisionLayout() && binding.contentGrid.hasFocus()) {
             pendingContentFocusKey = focusedCardKey()
+            // Explicitly transfer focus before hiding the focused grid. Otherwise Android's
+            // spatial fallback can choose the navigation rail and expand it during details,
+            // playback preparation, or a route transition.
+            when {
+                section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
+                binding.searchBox.isVisible -> binding.searchBox.requestFocus()
+            }
         }
         binding.statePanel.isVisible = true
         binding.progress.isVisible = loading
@@ -2058,8 +2387,15 @@ class MainActivity : AppCompatActivity() {
         binding.stateMessage.isVisible = !loading && message.isNotBlank()
         binding.stateAction.isVisible = !loading && action
         binding.stateAction.text = actionLabel
-        binding.contentGrid.isVisible = false
-        setCategoryNavigationVisible(keepCategories && section != Section.HOME && section != Section.SEARCH)
+        binding.contentGrid.visibility = if (isTelevisionLayout() && section in PAGED_SECTIONS) {
+            // INVISIBLE keeps RecyclerView measured so destination children are laid out behind
+            // the loader before the next-frame reveal.
+            View.INVISIBLE
+        } else View.GONE
+        // In paged destinations the header/category bar is a fixed sibling of the scrolling grid.
+        // Keep it mounted through loading, empty, error, and detail-fetch states so it remains
+        // sticky and D-pad reachable. Home and global Search intentionally have no category bar.
+        setCategoryNavigationVisible((keepCategories || section in PAGED_SECTIONS) && section != Section.HOME && section != Section.SEARCH)
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         if (action && isTelevisionLayout()) binding.stateAction.post { binding.stateAction.requestFocus() }
     }
@@ -2072,12 +2408,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun setCategoryNavigationVisible(visible: Boolean) {
         binding.categoryBar.isVisible = visible
-        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS && nestedSeries == null
+        val nested = nestedSeries != null
+        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS
+        binding.categoryMenuButton.setImageResource(if (nested) R.drawable.ic_arrow_back else R.drawable.ic_categories_menu)
+        binding.categoryMenuButton.contentDescription = getString(
+            when {
+                !nested -> R.string.open_all_categories
+                isTelevisionLayout() -> R.string.back_to_series_details
+                else -> R.string.back_to_series_listing
+            },
+        )
     }
     private fun showFailure(error: Throwable) {
         if (error is CancellationException) return
         stateRetry = null
-        showState("Couldn’t load content", friendly(error), false, true)
+        showState(
+            "Couldn’t load content",
+            friendly(error),
+            false,
+            true,
+            keepCategories = section in PAGED_SECTIONS,
+        )
     }
     private fun showOperationFailure(error: Throwable, retry: () -> Unit) {
         stateRetry = null
@@ -2103,7 +2454,13 @@ class MainActivity : AppCompatActivity() {
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE),
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL),
         )
+        val textColors = ContextCompat.getColorStateList(this, R.color.tv_button_text)
+        val backgroundColors = ContextCompat.getColorStateList(this, R.color.tv_button_background)
+        val strokeColors = ContextCompat.getColorStateList(this, R.color.tv_button_stroke)
         buttons.forEach { button ->
+            button.setTextColor(textColors)
+            ViewCompat.setBackgroundTintList(button, backgroundColors)
+            (button as? MaterialButton)?.strokeColor = strokeColors
             button.setOnFocusChangeListener { view, focused ->
                 view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
                     .translationZ(if (focused) 10f else 0f).setDuration(120).start()
@@ -2191,7 +2548,23 @@ class MainActivity : AppCompatActivity() {
         private const val MIN_SEARCH_LENGTH = 2
         private const val SEARCH_RESULT_LIMIT = 500
         private const val QR_CONNECT_UI_ENABLED = false
+        private const val TV_NAV_COLLAPSED_WIDTH_DP = 88
+        private const val TV_NAV_MIN_EXPANDED_WIDTH_DP = 220
+        private const val TV_NAV_MAX_EXPANDED_WIDTH_DP = 260
+        private const val TV_NAV_ANIMATION_MS = 180L
+        private const val TV_NAV_ICON_PADDING_DP = 16
+        private const val TV_NAV_BUTTON_PADDING_DP = 16
+        private val TV_DPAD_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+        )
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
+
+        internal fun responsiveTvNavigationWidthDp(screenWidthDp: Int): Int =
+            (screenWidthDp * 0.32f).toInt()
+                .coerceIn(TV_NAV_MIN_EXPANDED_WIDTH_DP, TV_NAV_MAX_EXPANDED_WIDTH_DP)
     }
 }

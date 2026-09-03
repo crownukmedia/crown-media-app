@@ -46,6 +46,14 @@ class CatalogCache(private val dao: CatalogDao) {
                 .associate { it.categoryId to it.itemCount }
         }
 
+    /** Counts the same distinct, parental-accessible rows that catalog rendering can expose. */
+    suspend fun accessibleCategoryCounts(playlistId: String, kind: String, includeAdult: Boolean): Map<String, Int> =
+        withContext(Dispatchers.Default) {
+            dao.accessibleCategoryItemCounts(playlistId, kind, includeAdult)
+                .filter { it.itemCount > 0 && it.categoryId.isNotBlank() }
+                .associate { it.categoryId to it.itemCount }
+        }
+
     /** Aggregate per-category counts from SQL; avoids materializing the full catalog into memory. */
     suspend fun nonEmptyCategoryIds(playlistId: String, kind: String): Set<String> = withContext(Dispatchers.Default) {
         dao.categoryItemCounts(playlistId, kind)
@@ -90,6 +98,9 @@ class CatalogCache(private val dao: CatalogDao) {
     }
 
     suspend fun count(playlistId: String, kind: String): Int = dao.itemCount(playlistId, kind)
+
+    suspend fun accessibleCount(playlistId: String, kind: String, includeAdult: Boolean): Int =
+        withContext(Dispatchers.Default) { dao.accessibleItemCount(playlistId, kind, includeAdult) }
 
     suspend fun saveCategories(playlistId: String, kind: String, values: List<XtreamCategory>) {
         dao.replaceCategories(playlistId, kind, values.mapIndexed { index, value ->
