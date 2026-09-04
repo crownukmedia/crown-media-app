@@ -200,9 +200,10 @@ class TvUiRegressionTest {
         assertEquals(null, grid.itemAnimator)
         assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
         assertTrue(
-            activity.findViewById<View>(R.id.category_menu_button).hasFocus() ||
+            activity.findViewById<View>(R.id.category_list).hasFocus() ||
                 activity.findViewById<View>(R.id.search_box).hasFocus(),
         )
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_menu_button).visibility)
         assertTrue(listOf(R.id.nav_home, R.id.nav_live, R.id.nav_movies, R.id.nav_series, R.id.nav_search).none {
             activity.findViewById<View>(it).hasFocus()
         })
@@ -219,7 +220,7 @@ class TvUiRegressionTest {
         assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
         assertTrue(
             activity.findViewById<View>(R.id.search_box).hasFocus() ||
-                activity.findViewById<View>(R.id.category_menu_button).hasFocus() ||
+                activity.findViewById<View>(R.id.category_list).hasFocus() ||
                 activity.findViewById<View>(R.id.content_grid).hasFocus() ||
                 activity.findViewById<View>(R.id.state_action).hasFocus(),
         )
@@ -236,20 +237,22 @@ class TvUiRegressionTest {
         val menu = activity.findViewById<View>(R.id.category_menu_button)
         val navHome = activity.findViewById<Button>(R.id.nav_home)
 
-        assertEquals(5, (grid.layoutManager as GridLayoutManager).spanCount)
-        assertEquals(R.id.nav_live, grid.nextFocusLeftId)
-        assertEquals(R.id.category_menu_button, categories.nextFocusLeftId)
+        assertEquals(4, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(R.id.category_list, grid.nextFocusLeftId)
+        assertEquals(R.id.nav_live, categories.nextFocusLeftId)
+        assertEquals(R.id.content_grid, categories.nextFocusRightId)
         assertEquals(R.id.nav_live, menu.nextFocusLeftId)
-        assertEquals(R.id.category_list, menu.nextFocusRightId)
-        assertEquals(R.id.content_grid, categories.nextFocusDownId)
-        assertEquals(R.id.search_box, navHome.nextFocusRightId)
+        assertEquals(R.id.content_grid, menu.nextFocusRightId)
+        assertEquals(R.id.category_list, menu.nextFocusDownId)
+        assertEquals(R.id.category_list, navHome.nextFocusRightId)
         val search = activity.findViewById<EditText>(R.id.search_box)
         assertEquals("Search live channels", search.hint.toString())
-        assertEquals(R.id.category_menu_button, search.nextFocusDownId)
-        assertEquals(R.id.search_box, categories.nextFocusUpId)
-        assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as LinearLayoutManager).orientation)
-        assertEquals(dp(62), activity.findViewById<View>(R.id.category_bar).layoutParams.height)
-        assertEquals(dp(46), categories.layoutParams.height)
+        assertEquals(R.id.category_list, search.nextFocusDownId)
+        assertEquals(RecyclerView.VERTICAL, (categories.layoutManager as LinearLayoutManager).orientation)
+        assertEquals(dp(211), activity.findViewById<View>(R.id.category_bar).layoutParams.width)
+        assertEquals(0, activity.findViewById<View>(R.id.category_bar).layoutParams.height)
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, categories.layoutParams.width)
+        assertEquals(0, categories.layoutParams.height)
         assertFalse(activity.findViewById<TextView>(R.id.nav_live).text.contains('\n'))
         val scaledDensity = activity.resources.displayMetrics.density * activity.resources.configuration.fontScale
         assertEquals(14f, navHome.textSize / scaledDensity, 0.1f)
@@ -264,14 +267,14 @@ class TvUiRegressionTest {
         assertEquals(dp(54), logo.layoutParams.height)
         assertEquals(dp(5), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
-        assertEquals(dp(46), category.layoutParams.height)
-        assertEquals(ViewGroup.LayoutParams.WRAP_CONTENT, category.layoutParams.width)
+        assertEquals(dp(54), category.layoutParams.height)
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, category.layoutParams.width)
         assertEquals(0, category.minimumWidth)
-        assertEquals(dp(14), category.findViewById<TextView>(R.id.category_name).paddingStart)
-        assertEquals(dp(14), category.findViewById<TextView>(R.id.category_name).paddingEnd)
-        assertEquals(dp(48), activity.findViewById<View>(R.id.category_menu_button).layoutParams.width)
-        assertEquals(dp(46), activity.findViewById<View>(R.id.category_menu_button).layoutParams.height)
-        assertEquals(dp(46), activity.findViewById<View>(R.id.category_list).layoutParams.height)
+        assertEquals(dp(14), category.paddingStart)
+        assertEquals(dp(12), category.paddingEnd)
+        assertEquals(dp(44), activity.findViewById<View>(R.id.category_menu_button).layoutParams.width)
+        assertEquals(dp(44), activity.findViewById<View>(R.id.category_menu_button).layoutParams.height)
+        assertEquals(0, activity.findViewById<View>(R.id.category_list).layoutParams.height)
     }
 
     @Test
@@ -281,8 +284,9 @@ class TvUiRegressionTest {
         val message = activity.findViewById<View>(R.id.state_message)
         val stateParams = state.layoutParams as ConstraintLayout.LayoutParams
 
-        assertEquals(dp(4), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
-        assertEquals(R.id.category_bar, stateParams.topToBottom)
+        assertEquals(0, (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
+        assertEquals(R.id.top_bar, stateParams.topToBottom)
+        assertEquals(R.id.category_bar, stateParams.startToEnd)
         assertEquals(0, stateParams.width)
         assertEquals(dp(480), stateParams.matchConstraintMaxWidth)
         assertEquals(dp(32), stateParams.marginStart)
@@ -300,9 +304,10 @@ class TvUiRegressionTest {
 
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, (topBar.layoutParams as ConstraintLayout.LayoutParams).topToTop)
         assertEquals(R.id.top_bar, categoryParams.topToBottom)
-        assertEquals(R.id.category_bar, gridParams.topToBottom)
+        assertEquals(R.id.category_bar, gridParams.startToEnd)
+        assertEquals(R.id.top_bar, gridParams.topToBottom)
         assertEquals(dp(16).toFloat(), topBar.elevation, 0.1f)
-        assertEquals(dp(16).toFloat(), categories.elevation, 0.1f)
+        assertEquals(dp(12).toFloat(), categories.elevation, 0.1f)
         assertNotNull(topBar.background)
         assertNotNull(categories.background)
 
@@ -321,10 +326,13 @@ class TvUiRegressionTest {
         val home = activity.findViewById<MaterialButton>(R.id.nav_home)
         val content = activity.findViewById<View>(R.id.content_grid)
         val topBar = activity.findViewById<View>(R.id.top_bar)
+        val categories = activity.findViewById<View>(R.id.category_bar)
 
         assertEquals(dp(88), rail.layoutParams.width)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, panel.layoutParams.width)
         assertEquals(R.id.side_nav, (topBar.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
+        assertEquals(R.id.side_nav, (categories.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
+        assertEquals(R.id.category_bar, (content.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         content.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
         assertEquals(dp(88), rail.layoutParams.width)

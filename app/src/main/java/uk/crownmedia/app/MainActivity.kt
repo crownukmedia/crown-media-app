@@ -73,6 +73,7 @@ import uk.crownmedia.player.PlayerActivity
 import java.security.MessageDigest
 import java.text.DateFormat
 import java.util.Date
+import kotlin.math.roundToInt
 import java.util.EnumMap
 
 class MainActivity : AppCompatActivity() {
@@ -220,18 +221,27 @@ class MainActivity : AppCompatActivity() {
     private fun isTelevisionLayout(): Boolean = activeLayout == AppLayout.TELEVISION
 
     private fun configureLists() {
+        val television = isTelevisionLayout()
         categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory, ::handleCategoryDpad)
-        binding.categoryList.layoutManager = LinearLayoutManager(this, RecyclerView.HORIZONTAL, false).apply {
-            initialPrefetchItemCount = 12
+        binding.categoryList.layoutManager = LinearLayoutManager(
+            this,
+            if (television) RecyclerView.VERTICAL else RecyclerView.HORIZONTAL,
+            false,
+        ).apply {
+            initialPrefetchItemCount = if (television) 8 else 12
         }
         binding.categoryList.adapter = categoriesAdapter
+        if (television) {
+            binding.categoryBar.layoutParams = binding.categoryBar.layoutParams.apply {
+                width = dp(responsiveTvCategoryNavigationWidthDp(resources.configuration.screenWidthDp))
+            }
+        }
         binding.categoryMenuButton.setOnClickListener {
             if (nestedSeries != null) closeSeriesDetails() else showCategoryMenu()
         }
         catalogAdapter = CatalogAdapter(::openCard, ::cardOptions, ::handleCatalogDpad)
-        val television = isTelevisionLayout()
         val initialColumns = when {
-            television -> 5
+            television -> responsiveTvContentColumnCount(resources.configuration.screenWidthDp)
             resources.configuration.smallestScreenWidthDp >= 600 -> 4
             else -> 1
         }
@@ -276,6 +286,7 @@ class MainActivity : AppCompatActivity() {
         binding.actionSearchClear.setOnClickListener {
             if (binding.searchBox.text.isNotEmpty()) binding.searchBox.text.clear()
             else if (section == Section.SEARCH) open(Section.HOME)
+            else if (isTelevisionLayout()) restoreCategoryFocus(currentCategory)
             else binding.categoryList.requestFocus()
         }
         binding.stateAction.setOnClickListener {
@@ -313,6 +324,19 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            button.setOnKeyListener { _, keyCode, event ->
+                if (
+                    event.action == KeyEvent.ACTION_DOWN &&
+                    keyCode == KeyEvent.KEYCODE_DPAD_RIGHT &&
+                    section in PAGED_SECTIONS &&
+                    binding.categoryBar.isVisible &&
+                    categoriesAdapter.itemCount > 0
+                ) {
+                    setTvNavigationExpanded(false)
+                    restoreCategoryFocus(currentCategory)
+                    true
+                } else false
+            }
         }
         applyTvNavigationLabels(expanded = false)
     }
@@ -349,6 +373,7 @@ class MainActivity : AppCompatActivity() {
     private fun focusCurrentSectionContent() {
         when {
             binding.contentGrid.isVisible && catalogAdapter.itemCount > 0 -> restoreCardFocus(sectionState(section).focusedCardKey)
+            section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(currentCategory)
             section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
             section == Section.SEARCH -> binding.searchBox.requestFocus()
             binding.searchBox.isVisible -> binding.searchBox.requestFocus()
@@ -370,11 +395,13 @@ class MainActivity : AppCompatActivity() {
             contentLayoutManager.spanCount,
             keyCode,
             section in PAGED_SECTIONS && binding.categoryBar.isVisible,
+            binding.searchBox.isVisible,
         )
         when (move.region) {
             TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.contentGrid, move.position)
             TvFocusRegion.SIDEBAR -> navigationView(section).requestFocus()
             TvFocusRegion.CATEGORIES -> restoreCategoryFocus(currentCategory)
+            TvFocusRegion.SEARCH -> binding.searchBox.requestFocus()
             else -> view.requestFocus()
         }
         return true
@@ -388,13 +415,13 @@ class MainActivity : AppCompatActivity() {
             position,
             categoriesAdapter.itemCount,
             keyCode,
-            binding.searchBox.isVisible,
+            binding.categoryMenuButton.isVisible,
             catalogAdapter.itemCount > 0,
         )
         when (move.region) {
             TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.categoryList, move.position)
             TvFocusRegion.CATEGORY_MENU -> binding.categoryMenuButton.requestFocus()
-            TvFocusRegion.SEARCH -> binding.searchBox.requestFocus()
+            TvFocusRegion.SIDEBAR -> navigationView(section).requestFocus()
             TvFocusRegion.CONTENT -> restoreCardFocus(sectionState(section).focusedCardKey)
             else -> view.requestFocus()
         }
@@ -625,30 +652,32 @@ class MainActivity : AppCompatActivity() {
 
     private fun configureTvPresentation(value: Section) {
         if (!isTelevisionLayout()) return
-        contentLayoutManager.spanCount = if (value == Section.HOME) 3 else 5
+        contentLayoutManager.spanCount = if (value == Section.HOME) 3 else {
+            responsiveTvContentColumnCount(resources.configuration.screenWidthDp)
+        }
         catalogAdapter.setUniformLandscapeCards(value == Section.HOME || value == Section.SEARCH)
         val activeNav = navigationView(value)
         val primaryTarget = when (value) {
             Section.HOME -> binding.contentGrid
-            else -> binding.searchBox
+            Section.SEARCH -> binding.searchBox
+            else -> binding.categoryList
         }
         listOf(binding.navHome, binding.navLive, binding.navMovies, binding.navSeries, binding.navSearch).forEach {
             it.nextFocusRightId = primaryTarget.id
         }
         binding.categoryMenuButton.nextFocusLeftId = activeNav.id
-        binding.categoryMenuButton.nextFocusRightId = binding.categoryList.id
+        binding.categoryMenuButton.nextFocusRightId = binding.contentGrid.id
         binding.categoryMenuButton.nextFocusUpId = binding.searchBox.id
-        binding.categoryMenuButton.nextFocusDownId = binding.contentGrid.id
-        binding.categoryList.nextFocusLeftId = binding.categoryMenuButton.id
-        binding.categoryList.nextFocusUpId = binding.searchBox.id
-        binding.categoryList.nextFocusDownId = binding.contentGrid.id
-        binding.contentGrid.nextFocusLeftId = activeNav.id
-        binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.topBar.id
+        binding.categoryMenuButton.nextFocusDownId = binding.categoryList.id
+        binding.categoryList.nextFocusLeftId = activeNav.id
+        binding.categoryList.nextFocusRightId = binding.contentGrid.id
+        binding.contentGrid.nextFocusLeftId = if (value in PAGED_SECTIONS) binding.categoryList.id else activeNav.id
+        binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.searchBox.id else binding.topBar.id
         binding.searchBox.nextFocusLeftId = activeNav.id
-        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryMenuButton.id else binding.contentGrid.id
+        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.contentGrid.id
         binding.actionSearchClear.nextFocusLeftId = binding.searchBox.id
         binding.actionSearchClear.nextFocusDownId = binding.contentGrid.id
-        binding.stateAction.nextFocusLeftId = activeNav.id
+        binding.stateAction.nextFocusLeftId = if (value in PAGED_SECTIONS) binding.categoryList.id else activeNav.id
     }
 
     private fun navigationView(value: Section): View = when (value) {
@@ -2376,6 +2405,7 @@ class MainActivity : AppCompatActivity() {
             // spatial fallback can choose the navigation rail and expand it during details,
             // playback preparation, or a route transition.
             when {
+                section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(currentCategory)
                 section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
                 binding.searchBox.isVisible -> binding.searchBox.requestFocus()
             }
@@ -2409,7 +2439,9 @@ class MainActivity : AppCompatActivity() {
     private fun setCategoryNavigationVisible(visible: Boolean) {
         binding.categoryBar.isVisible = visible
         val nested = nestedSeries != null
-        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS
+        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS && (!isTelevisionLayout() || nested)
+        binding.root.findViewById<TextView>(R.id.category_panel_title)?.text =
+            getString(if (nested) R.string.seasons else R.string.categories)
         binding.categoryMenuButton.setImageResource(if (nested) R.drawable.ic_arrow_back else R.drawable.ic_categories_menu)
         binding.categoryMenuButton.contentDescription = getString(
             when {
@@ -2554,6 +2586,9 @@ class MainActivity : AppCompatActivity() {
         private const val TV_NAV_ANIMATION_MS = 180L
         private const val TV_NAV_ICON_PADDING_DP = 16
         private const val TV_NAV_BUTTON_PADDING_DP = 16
+        private const val TV_CATEGORY_MIN_WIDTH_DP = 180
+        private const val TV_CATEGORY_MAX_WIDTH_DP = 240
+        private const val TV_CONTENT_MIN_CARD_WIDTH_DP = 145
         private val TV_DPAD_KEYS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT,
             KeyEvent.KEYCODE_DPAD_RIGHT,
@@ -2566,5 +2601,15 @@ class MainActivity : AppCompatActivity() {
         internal fun responsiveTvNavigationWidthDp(screenWidthDp: Int): Int =
             (screenWidthDp * 0.32f).toInt()
                 .coerceIn(TV_NAV_MIN_EXPANDED_WIDTH_DP, TV_NAV_MAX_EXPANDED_WIDTH_DP)
+
+        internal fun responsiveTvCategoryNavigationWidthDp(screenWidthDp: Int): Int =
+            (screenWidthDp * 0.22f).toInt()
+                .coerceIn(TV_CATEGORY_MIN_WIDTH_DP, TV_CATEGORY_MAX_WIDTH_DP)
+
+        internal fun responsiveTvContentColumnCount(screenWidthDp: Int): Int {
+            val available = screenWidthDp - TV_NAV_COLLAPSED_WIDTH_DP -
+                responsiveTvCategoryNavigationWidthDp(screenWidthDp) - 60
+            return (available.toFloat() / TV_CONTENT_MIN_CARD_WIDTH_DP).roundToInt().coerceIn(2, 5)
+        }
     }
 }

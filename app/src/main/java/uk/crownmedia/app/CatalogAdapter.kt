@@ -107,7 +107,9 @@ class CategoryAdapter(
             if (count != null) binding.categoryCount.text = "($count)"
             binding.root.isSelected = row.selected
             binding.root.contentDescription = categoryAccessibilityLabel(binding.root.resources, value, count)
-            binding.root.nextFocusLeftId = if (bindingAdapterPosition == 0) R.id.category_menu_button else View.NO_ID
+            binding.root.nextFocusLeftId = if (
+                binding.root.context.appLayout() != AppLayout.TELEVISION && bindingAdapterPosition == 0
+            ) R.id.category_menu_button else View.NO_ID
             binding.categoryActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             binding.categoryActions.contentDescription = binding.root.context.getString(R.string.options_for, value.name)
             binding.categoryActions.setOnClickListener { onLongClick(value) }
