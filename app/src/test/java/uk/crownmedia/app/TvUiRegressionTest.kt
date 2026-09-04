@@ -159,7 +159,11 @@ class TvUiRegressionTest {
             if (focusedChild != null) {
                 assertTrue(grid.getChildAdapterPosition(focusedChild) in 0 until requireNotNull(grid.adapter).itemCount)
             } else {
-                assertTrue(activity.findViewById<View>(R.id.side_nav).hasFocus())
+                val sideNav = activity.findViewById<View>(R.id.side_nav)
+                assertTrue(
+                    "Fast key $keyCode left focus outside the content/sidebar regions: ${activity.currentFocus?.id}",
+                    grid.hasFocus() || sideNav.hasFocus(),
+                )
             }
         }
 
@@ -411,6 +415,100 @@ class TvUiRegressionTest {
         assertEquals("Test Series", shadowOf(dialog).title.toString())
         assertEquals("Browse episodes", dialog.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
         assertEquals("Back", dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text.toString())
+        assertFalse(activity.isFinishing)
+    }
+
+    @Test
+    fun nestedSeriesRailSupportsCompleteRemoteFocusAndSelectionFlow() {
+        activity.findViewById<View>(R.id.nav_series).performClick()
+        val card = CatalogCard("series-rail", "series", "Remote Series", null, "Series")
+        val details = XtreamSeriesDetails(
+            name = "Remote Series",
+            plot = "Plot",
+            cover = null,
+            backdrop = null,
+            cast = null,
+            genre = "Drama",
+            rating = null,
+            trailer = null,
+            episodes = (1..3).associateWith { season ->
+                listOf(XtreamEpisode("episode-$season", season, 1, "Season $season pilot", "mp4", null, null, "45m"))
+            },
+        )
+        val stateClass = Class.forName("uk.crownmedia.app.MainActivity\$SeriesDetailState")
+        val constructor = stateClass.declaredConstructors.single().apply { isAccessible = true }
+        val nested = constructor.newInstance(card, details, 1)
+        MainActivity::class.java.getDeclaredField("nestedSeries").apply {
+            isAccessible = true
+            set(activity, nested)
+        }
+        MainActivity::class.java.getDeclaredMethod("renderSeriesDetails").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        val content = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val back = activity.findViewById<View>(R.id.category_menu_button)
+
+        fun awaitUi(condition: () -> Boolean) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (!condition() && System.nanoTime() < deadline) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            assertTrue(condition())
+        }
+
+        awaitUi {
+            categories.adapter?.itemCount == 3 &&
+                content.adapter?.itemCount == 1 &&
+                categories.findViewHolderForAdapterPosition(0) != null &&
+                content.findViewHolderForAdapterPosition(0) != null
+        }
+
+        fun press(view: View, keyCode: Int) {
+            assertTrue("D-pad key $keyCode was not consumed by ${view.id}", view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
+            view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+            shadowOf(Looper.getMainLooper()).idleFor(100, TimeUnit.MILLISECONDS)
+        }
+
+        fun focusedSeasonPosition(): Int = categories.focusedChild
+            ?.let(categories::getChildAdapterPosition)
+            ?: RecyclerView.NO_POSITION
+
+        val firstEpisode = requireNotNull(content.findViewHolderForAdapterPosition(0)).itemView
+        firstEpisode.requestFocus()
+        press(firstEpisode, KeyEvent.KEYCODE_DPAD_LEFT)
+        awaitUi { categories.hasFocus() && focusedSeasonPosition() == 0 }
+        assertEquals(0, focusedSeasonPosition())
+        assertTrue(requireNotNull(categories.focusedChild).drawableState.contains(android.R.attr.state_focused))
+
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_UP)
+        awaitUi { back.hasFocus() }
+        press(back, KeyEvent.KEYCODE_DPAD_DOWN)
+        awaitUi { focusedSeasonPosition() == 0 }
+        assertEquals(0, focusedSeasonPosition())
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_DOWN)
+        awaitUi { focusedSeasonPosition() == 1 }
+        assertEquals(1, focusedSeasonPosition())
+
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_CENTER)
+        assertEquals(2, stateClass.getDeclaredField("season").apply { isAccessible = true }.getInt(nested))
+        awaitUi { (content.adapter as CatalogAdapter).currentItems.firstOrNull()?.id == "episode-2" }
+        assertTrue("Focus remained on ${activity.currentFocus?.id}", content.hasFocus())
+
+        press(requireNotNull(content.focusedChild), KeyEvent.KEYCODE_DPAD_LEFT)
+        awaitUi { focusedSeasonPosition() == 1 }
+        assertEquals(1, focusedSeasonPosition())
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_UP)
+        awaitUi { focusedSeasonPosition() == 0 }
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_UP)
+        awaitUi { back.hasFocus() }
+
+        press(back, KeyEvent.KEYCODE_DPAD_CENTER)
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Remote Series", shadowOf(dialog).title.toString())
         assertFalse(activity.isFinishing)
     }
 

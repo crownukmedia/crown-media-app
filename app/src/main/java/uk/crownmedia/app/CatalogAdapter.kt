@@ -90,6 +90,7 @@ class CategoryAdapter(
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(ItemCategoryBinding.inflate(LayoutInflater.from(parent.context), parent, false))
     override fun getItemCount() = differ.currentList.size
+    fun positionOf(categoryId: String): Int = differ.currentList.indexOfFirst { it.category.id == categoryId }
     override fun onBindViewHolder(holder: Holder, position: Int) = holder.bind(differ.currentList[position])
 
     inner class Holder(private val binding: ItemCategoryBinding) : RecyclerView.ViewHolder(binding.root) {

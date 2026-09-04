@@ -239,6 +239,22 @@ class MainActivity : AppCompatActivity() {
         binding.categoryMenuButton.setOnClickListener {
             if (nestedSeries != null) closeSeriesDetails() else showCategoryMenu()
         }
+        if (television) {
+            binding.categoryMenuButton.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) {
+                    false
+                } else {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> navigationView(section).requestFocus()
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> focusVisibleCatalogDestination(view)
+                        // Back is the logical first row in the nested Series rail.
+                        KeyEvent.KEYCODE_DPAD_DOWN -> requestRecyclerItemFocus(binding.categoryList, 0)
+                        else -> view.requestFocus()
+                    }
+                    true
+                }
+            }
+        }
         catalogAdapter = CatalogAdapter(::openCard, ::cardOptions, ::handleCatalogDpad)
         val initialColumns = when {
             television -> responsiveTvContentColumnCount(resources.configuration.screenWidthDp)
@@ -286,7 +302,7 @@ class MainActivity : AppCompatActivity() {
         binding.actionSearchClear.setOnClickListener {
             if (binding.searchBox.text.isNotEmpty()) binding.searchBox.text.clear()
             else if (section == Section.SEARCH) open(Section.HOME)
-            else if (isTelevisionLayout()) restoreCategoryFocus(currentCategory)
+            else if (isTelevisionLayout()) restoreCategoryFocus(activeCategoryFocusId())
             else binding.categoryList.requestFocus()
         }
         binding.stateAction.setOnClickListener {
@@ -295,6 +311,18 @@ class MainActivity : AppCompatActivity() {
             if (retry != null) retry() else if (store.selected() == null) showManualPlaylist() else load(true)
         }
         if (isTelevisionLayout()) {
+            binding.stateAction.setOnKeyListener { _, keyCode, event ->
+                if (
+                    event.action == KeyEvent.ACTION_DOWN &&
+                    keyCode == KeyEvent.KEYCODE_DPAD_LEFT &&
+                    section in PAGED_SECTIONS &&
+                    binding.categoryList.isVisible &&
+                    categoriesAdapter.itemCount > 0
+                ) {
+                    restoreCategoryFocus(activeCategoryFocusId())
+                    true
+                } else false
+            }
             configureTvNavigationRail()
         }
     }
@@ -333,7 +361,7 @@ class MainActivity : AppCompatActivity() {
                     categoriesAdapter.itemCount > 0
                 ) {
                     setTvNavigationExpanded(false)
-                    restoreCategoryFocus(currentCategory)
+                    restoreCategoryFocus(activeCategoryFocusId())
                     true
                 } else false
             }
@@ -373,7 +401,7 @@ class MainActivity : AppCompatActivity() {
     private fun focusCurrentSectionContent() {
         when {
             binding.contentGrid.isVisible && catalogAdapter.itemCount > 0 -> restoreCardFocus(sectionState(section).focusedCardKey)
-            section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(currentCategory)
+            section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(activeCategoryFocusId())
             section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
             section == Section.SEARCH -> binding.searchBox.requestFocus()
             binding.searchBox.isVisible -> binding.searchBox.requestFocus()
@@ -395,12 +423,12 @@ class MainActivity : AppCompatActivity() {
             contentLayoutManager.spanCount,
             keyCode,
             section in PAGED_SECTIONS && binding.categoryBar.isVisible,
-            binding.searchBox.isVisible,
+            binding.searchRow.isVisible,
         )
         when (move.region) {
             TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.contentGrid, move.position)
             TvFocusRegion.SIDEBAR -> navigationView(section).requestFocus()
-            TvFocusRegion.CATEGORIES -> restoreCategoryFocus(currentCategory)
+            TvFocusRegion.CATEGORIES -> restoreCategoryFocus(activeCategoryFocusId())
             TvFocusRegion.SEARCH -> binding.searchBox.requestFocus()
             else -> view.requestFocus()
         }
@@ -422,15 +450,30 @@ class MainActivity : AppCompatActivity() {
             TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.categoryList, move.position)
             TvFocusRegion.CATEGORY_MENU -> binding.categoryMenuButton.requestFocus()
             TvFocusRegion.SIDEBAR -> navigationView(section).requestFocus()
-            TvFocusRegion.CONTENT -> restoreCardFocus(sectionState(section).focusedCardKey)
+            TvFocusRegion.CONTENT -> focusVisibleCatalogDestination(view)
             else -> view.requestFocus()
         }
         return true
     }
 
+    private fun focusVisibleCatalogDestination(fallback: View) {
+        when {
+            binding.contentGrid.isVisible && catalogAdapter.itemCount > 0 -> {
+                val key = if (nestedSeries != null) null else sectionState(section).focusedCardKey
+                restoreCardFocus(key)
+            }
+            binding.stateAction.isVisible -> binding.stateAction.requestFocus()
+            else -> fallback.requestFocus()
+        }
+    }
+
     private fun requestRecyclerItemFocus(recyclerView: RecyclerView, position: Int) {
         val itemCount = recyclerView.adapter?.itemCount ?: 0
         if (itemCount == 0 || position !in 0 until itemCount) return
+        // Adjacent TV rows are normally already attached. Focus them synchronously so a second
+        // deliberate D-pad press is never mistaken for a stale repeat while waiting for another
+        // animation frame. Off-screen targets retain the bounded async scroll/layout path below.
+        if (recyclerView.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus() == true) return
         if (!pendingTvFocusMoves.add(recyclerView.id)) return
         val target = position
 
@@ -458,9 +501,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restoreCategoryFocus(categoryId: String) {
-        val position = sectionState(section).categories.indexOfFirst { it.id == categoryId }.coerceAtLeast(0)
+        // Resolve against the adapter's active list. Nested Series replaces the provider
+        // categories with seasons, so consulting SectionState here would incorrectly map every
+        // Content -> Seasons transition back to the parent category list.
+        val position = categoriesAdapter.positionOf(categoryId).coerceAtLeast(0)
         requestRecyclerItemFocus(binding.categoryList, position)
     }
+
+    private fun activeCategoryFocusId(): String =
+        nestedSeries?.let { "season:${it.season}" } ?: currentCategory
 
     private fun tvNavigationButtons(): List<MaterialButton> = listOf(
         binding.navHome,
@@ -773,7 +822,7 @@ class MainActivity : AppCompatActivity() {
         currentCategory = category.id
         categoriesAdapter.submit(state.categories, currentCategory) {
             scrollCategoryIntoView(currentCategory)
-            if (restoreTvCategoryFocus) restoreCategoryFocus(currentCategory)
+            if (restoreTvCategoryFocus) restoreCategoryFocus(activeCategoryFocusId())
         }
         if (restoreTvCategoryFocus) setTvNavigationExpanded(false)
         cancelSectionRefreshes(section)
@@ -1465,25 +1514,30 @@ class MainActivity : AppCompatActivity() {
         binding.screenTitle.text = nested.details.name
         binding.screenSubtitle.text = listOfNotNull(nested.details.genre, "Season ${nested.season}", "Back returns to Series").joinToString("  •  ")
         setCategoryNavigationVisible(true)
-        categoriesAdapter.submit(seasons, "season:${nested.season}")
-        if (episodes.isEmpty()) {
-            catalogAdapter.submit(emptyList())
-            stateRetry = { closeSeriesDetails() }
-            showState(
-                "No episodes",
-                "This season does not contain any episodes. Choose another season above or return to Series.",
-                false,
-                true,
-                getString(R.string.back_to_series),
-                keepCategories = true,
-            )
-        } else {
-            catalogAdapter.submit(episodes) {
-                if (nestedSeries !== nested || section != Section.SERIES) return@submit
-                hideState()
-                if (isTelevisionLayout()) restoreCardFocus(null)
+        // Commit the season rail before exposing/focusing its episode content. On slower TVs an
+        // immediate Left press could previously arrive while AsyncListDiffer still contained the
+        // parent Series categories, leaving the remote with no valid season target.
+        categoriesAdapter.submit(seasons, "season:${nested.season}", committed = categoryCommit@{
+            if (nestedSeries !== nested || section != Section.SERIES) return@categoryCommit
+            if (episodes.isEmpty()) {
+                catalogAdapter.submit(emptyList())
+                stateRetry = { closeSeriesDetails() }
+                showState(
+                    "No episodes",
+                    "This season does not contain any episodes. Choose another season above or return to Series.",
+                    false,
+                    true,
+                    getString(R.string.back_to_series),
+                    keepCategories = true,
+                )
+            } else {
+                catalogAdapter.submit(episodes, committed = episodeCommit@{
+                    if (nestedSeries !== nested || section != Section.SERIES) return@episodeCommit
+                    hideState()
+                    if (isTelevisionLayout()) restoreCardFocus(null)
+                })
             }
-        }
+        })
     }
 
     private fun selectSeriesSeason(season: Int) {
@@ -2405,7 +2459,7 @@ class MainActivity : AppCompatActivity() {
             // spatial fallback can choose the navigation rail and expand it during details,
             // playback preparation, or a route transition.
             when {
-                section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(currentCategory)
+                section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(activeCategoryFocusId())
                 section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
                 binding.searchBox.isVisible -> binding.searchBox.requestFocus()
             }
