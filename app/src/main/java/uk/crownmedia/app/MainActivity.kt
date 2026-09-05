@@ -78,9 +78,7 @@ import java.util.EnumMap
 
 class MainActivity : AppCompatActivity() {
     private val internalPlayer = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (::store.isInitialized && section == Section.LIVE) {
-            store.selected()?.let { playlist -> lifecycleScope.launch { renderCachedLive(playlist) } }
-        }
+        if (::store.isInitialized) restoreSearchPresentationAfterPlayback()
     }
     private lateinit var binding: ActivityMainBinding
     private lateinit var store: AppStore
@@ -116,6 +114,7 @@ class MainActivity : AppCompatActivity() {
     private val catalogWork = CatalogWorkCoordinator()
     private var activePlaylistId: String? = null
     private var nestedSeries: SeriesDetailState? = null
+    private var nestedSeriesOriginSection = Section.SERIES
     private var stateRetry: (() -> Unit)? = null
     private var loginGeneration = 0L
     private var loginService = CrownService.default
@@ -582,6 +581,24 @@ class MainActivity : AppCompatActivity() {
         else if (section in PAGED_SECTIONS) searchCategory(section, query)
     }
 
+    private fun activeSearchQuery(): String = when {
+        section == Section.SEARCH -> masterSearchQuery
+        section in PAGED_SECTIONS -> sectionState(section).searchQuery
+        else -> ""
+    }
+
+    private fun restoreSearchPresentationAfterPlayback() {
+        if (nestedSeries != null) return
+        val query = activeSearchQuery()
+        when {
+            section == Section.SEARCH && query.trim().length >= MIN_SEARCH_LENGTH -> search(query)
+            section in PAGED_SECTIONS && query.trim().length >= MIN_SEARCH_LENGTH -> searchCategory(section, query)
+            section == Section.LIVE -> store.selected()?.let { playlist ->
+                lifecycleScope.launch { renderCachedLive(playlist) }
+            }
+        }
+    }
+
     private fun bindSearchBox(target: Section) {
         val query = if (target == Section.SEARCH) masterSearchQuery else sectionState(target).searchQuery
         updatingSearchBox = true
@@ -613,6 +630,7 @@ class MainActivity : AppCompatActivity() {
         detailJob?.cancel()
         detailJob = null
         nestedSeries = null
+        nestedSeriesOriginSection = Section.SERIES
         stateRetry = null
         loadJob?.cancel()
         scopedSearchJob?.cancel()
@@ -1454,6 +1472,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun play(card: CatalogCard, live: Boolean) {
         val playlist = store.selected() ?: return
+        if (nestedSeries == null && activeSearchQuery().trim().length >= MIN_SEARCH_LENGTH) {
+            pendingContentFocusKey = "${card.kind}:${card.id}"
+        }
         healthJob?.cancel()
         liveRankingJob?.cancel()
         refreshJobs.values.forEach { it.cancel() }
@@ -1503,7 +1524,7 @@ class MainActivity : AppCompatActivity() {
         detailJob?.cancel()
         detailJob = lifecycleScope.launch {
             runCatching { api.movieInfo(playlist.credentials, card.id) }.onSuccess { movie ->
-                if (section != Section.MOVIES || store.selected()?.id != playlist.id) return@onSuccess
+                if (section !in setOf(Section.MOVIES, Section.SEARCH) || store.selected()?.id != playlist.id) return@onSuccess
                 hideState()
                 val message = listOfNotNull(
                     listOfNotNull(movie.year, movie.rating?.let { "★ $it" }, movie.duration, movie.genre).joinToString("  •  ").takeIf(String::isNotBlank),
@@ -1519,7 +1540,9 @@ class MainActivity : AppCompatActivity() {
                         movie.trailer?.takeIf { it.isNotBlank() }?.let(::openTrailer) ?: store.toggleFavorite(playlist.id, "movie:${card.id}")
                     }.setNegativeButton("Close", null).showCrown()
             }.onFailure { error ->
-                if (error !is CancellationException && section == Section.MOVIES) showOperationFailure(error) { showMovie(card) }
+                if (error !is CancellationException && section in setOf(Section.MOVIES, Section.SEARCH)) {
+                    showOperationFailure(error) { showMovie(card) }
+                }
             }
         }
     }
@@ -1530,10 +1553,12 @@ class MainActivity : AppCompatActivity() {
         detailJob?.cancel()
         detailJob = lifecycleScope.launch {
             runCatching { api.seriesInfo(playlist.credentials, card.id) }.onSuccess { details ->
-                if (section != Section.SERIES || store.selected()?.id != playlist.id) return@onSuccess
+                if (section !in setOf(Section.SERIES, Section.SEARCH) || store.selected()?.id != playlist.id) return@onSuccess
                 showSeriesOverview(card, details)
             }.onFailure { error ->
-                if (error !is CancellationException && section == Section.SERIES) showOperationFailure(error) { showSeries(card) }
+                if (error !is CancellationException && section in setOf(Section.SERIES, Section.SEARCH)) {
+                    showOperationFailure(error) { showSeries(card) }
+                }
             }
         }
     }
@@ -1548,6 +1573,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val openEpisodes = {
+            nestedSeriesOriginSection = section
             nestedSeries = SeriesDetailState(card, details, details.episodes.keys.minOrNull() ?: 1)
             renderSeriesDetails()
         }
@@ -1575,7 +1601,7 @@ class MainActivity : AppCompatActivity() {
         // immediate Left press could previously arrive while AsyncListDiffer still contained the
         // parent Series categories, leaving the remote with no valid season target.
         categoriesAdapter.submit(seasons, "season:${nested.season}", committed = categoryCommit@{
-            if (nestedSeries !== nested || section != Section.SERIES) return@categoryCommit
+            if (nestedSeries !== nested || section != nestedSeriesOriginSection) return@categoryCommit
             if (episodes.isEmpty()) {
                 catalogAdapter.submit(emptyList())
                 stateRetry = { closeSeriesDetails() }
@@ -1589,7 +1615,7 @@ class MainActivity : AppCompatActivity() {
                 )
             } else {
                 catalogAdapter.submit(episodes, committed = episodeCommit@{
-                    if (nestedSeries !== nested || section != Section.SERIES) return@episodeCommit
+                    if (nestedSeries !== nested || section != nestedSeriesOriginSection) return@episodeCommit
                     hideState()
                     if (isTelevisionLayout()) restoreCardFocus(null)
                 })
@@ -1605,17 +1631,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun closeSeriesDetails() {
         val previous = nestedSeries ?: return
+        val origin = nestedSeriesOriginSection
         nestedSeries = null
+        nestedSeriesOriginSection = Section.SERIES
         detailJob?.cancel()
         detailJob = null
-        binding.screenTitle.text = "Series"
-        binding.screenSubtitle.text = store.selected()?.name.orEmpty()
-        setCategoryNavigationVisible(true)
         pendingContentFocusKey = "${previous.card.kind}:${previous.card.id}"
-        renderSectionState(sectionState(Section.SERIES), restoreScroll = true)
+        if (origin == Section.SEARCH) {
+            binding.screenTitle.text = "Search"
+            binding.screenSubtitle.text = store.selected()?.name.orEmpty()
+            setCategoryNavigationVisible(false)
+            bindSearchBox(Section.SEARCH)
+            search(masterSearchQuery)
+        } else {
+            binding.screenTitle.text = "Series"
+            binding.screenSubtitle.text = store.selected()?.name.orEmpty()
+            setCategoryNavigationVisible(true)
+            val state = sectionState(Section.SERIES)
+            if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) {
+                searchCategory(Section.SERIES, state.searchQuery)
+            } else renderSectionState(state, restoreScroll = true)
+        }
         if (isTelevisionLayout()) {
             binding.root.post {
-                if (section == Section.SERIES && nestedSeries == null && !isFinishing) {
+                if (section == origin && nestedSeries == null && !isFinishing) {
                     showSeriesOverview(previous.card, previous.details)
                 }
             }
@@ -1737,7 +1776,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun submitSearchResults(cards: List<CatalogCard>) {
         catalogAdapter.submit(cards) {
-            if (searchShouldFocusResults && cards.isNotEmpty() && section == Section.SEARCH) {
+            val restoreKey = pendingContentFocusKey
+            if (restoreKey != null && cards.isNotEmpty() && section == Section.SEARCH) {
+                pendingContentFocusKey = null
+                restoreCardFocus(restoreKey)
+            } else if (searchShouldFocusResults && cards.isNotEmpty() && section == Section.SEARCH) {
                 searchShouldFocusResults = false
                 binding.searchBox.clearFocus()
                 restoreCardFocus(null)
@@ -1822,7 +1865,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun submitScopedSearchResults(target: Section, cards: List<CatalogCard>) {
         catalogAdapter.submit(sort(cards, target)) {
-            if (searchShouldFocusResults && cards.isNotEmpty() && section == target) {
+            val restoreKey = pendingContentFocusKey
+            if (restoreKey != null && cards.isNotEmpty() && section == target) {
+                pendingContentFocusKey = null
+                restoreCardFocus(restoreKey)
+            } else if (searchShouldFocusResults && cards.isNotEmpty() && section == target) {
                 searchShouldFocusResults = false
                 binding.searchBox.clearFocus()
                 restoreCardFocus(null)
@@ -1909,6 +1956,23 @@ class MainActivity : AppCompatActivity() {
                 connectPlaylist()
                 true
             } else false
+        }
+        if (isTelevisionLayout()) {
+            password.setOnKeyListener { _, keyCode, event ->
+                if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && event.action == KeyEvent.ACTION_DOWN) {
+                    hideKeyboard(clearFocus = false)
+                    saveLogin.requestFocus()
+                    true
+                } else false
+            }
+            saveLogin.setOnKeyListener { _, keyCode, event ->
+                if (keyCode !in setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) {
+                    false
+                } else if (event.action == KeyEvent.ACTION_UP) {
+                    saveLogin.isChecked = !saveLogin.isChecked
+                    true
+                } else true
+            }
         }
         saveLogin.setOnCheckedChangeListener { _, checked ->
             if (!updatingLoginForm && !checked) store.saveLoginDetails(loginService, null)
@@ -2451,7 +2515,11 @@ class MainActivity : AppCompatActivity() {
         state.cards = withContext(Dispatchers.Default) {
             sort(state.cards, Section.LIVE)
         }
-        if (section == Section.LIVE) catalogAdapter.submit(state.cards)
+        if (section == Section.LIVE) {
+            if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) {
+                searchCategory(Section.LIVE, state.searchQuery)
+            } else catalogAdapter.submit(state.cards)
+        }
         refreshLiveCategoryRanking(playlist)
     }
 
@@ -2630,7 +2698,11 @@ class MainActivity : AppCompatActivity() {
     }
     private fun showOperationFailure(error: Throwable, retry: () -> Unit) {
         stateRetry = null
-        if (section in PAGED_SECTIONS) renderSectionState(sectionState(section), restoreScroll = true) else hideState()
+        if (section in PAGED_SECTIONS) {
+            val state = sectionState(section)
+            if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) searchCategory(section, state.searchQuery)
+            else renderSectionState(state, restoreScroll = true)
+        } else hideState()
         AlertDialog.Builder(this)
             .setTitle("Couldn’t load content")
             .setMessage(friendly(error))

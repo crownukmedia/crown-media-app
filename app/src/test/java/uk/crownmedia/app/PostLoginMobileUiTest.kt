@@ -2,6 +2,7 @@ package uk.crownmedia.app
 
 import android.app.AlertDialog
 import android.content.res.Configuration
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -28,15 +29,18 @@ import org.robolectric.shadows.ShadowAlertDialog
 import kotlinx.coroutines.runBlocking
 import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
+import uk.crownmedia.data.xtream.XtreamItem
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "port")
 class PostLoginMobileUiTest {
     private lateinit var activity: MainActivity
+    private lateinit var testStore: AppStore
 
     @Before
     fun setUp() {
-        val store = AppStore(FakeSecureStore()).apply {
+        testStore = AppStore(FakeSecureStore()).apply {
             save(
                 "Mobile test",
                 ProviderCredentials("http://example.invalid", "user", "password"),
@@ -49,9 +53,9 @@ class PostLoginMobileUiTest {
         }
         runBlocking {
             CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
-                .deletePlaylist(store.selected()!!.id)
+                .deletePlaylist(testStore.selected()!!.id)
         }
-        MainActivity.storeFactory = { store }
+        MainActivity.storeFactory = { testStore }
         activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
     }
 
@@ -127,6 +131,65 @@ class PostLoginMobileUiTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         assertEquals("", search.text.toString())
         assertEquals("Search live channels", search.hint.toString())
+    }
+
+    @Test
+    fun mobileScopedAndMasterSearchResultsSurvivePlaybackReturn() {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        runBlocking {
+            cache.saveItems(
+                playlist.id,
+                "movie",
+                null,
+                listOf(
+                    searchItem("movie-match", "Needle movie"),
+                    searchItem("movie-other", "Unrelated movie"),
+                ),
+            )
+            listOf("live", "movie", "series").forEach {
+                testStore.markCatalogRefreshed(playlist.id, it, null)
+            }
+        }
+
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val adapter = grid.adapter as CatalogAdapter
+        val search = activity.findViewById<EditText>(R.id.search_box)
+
+        fun awaitUi(condition: () -> Boolean) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (!condition() && System.nanoTime() < deadline) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+            }
+            assertTrue(condition())
+        }
+
+        activity.findViewById<View>(R.id.nav_movies).performClick()
+        awaitUi { adapter.currentItems.size == 2 }
+        val baseCards = adapter.currentItems.toList()
+        search.setText("needle")
+        awaitUi { adapter.currentItems.map(CatalogCard::id) == listOf("movie-match") }
+        adapter.submit(baseCards)
+        awaitUi { adapter.currentItems.size == 2 }
+        MainActivity::class.java.getDeclaredMethod("restoreSearchPresentationAfterPlayback").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+        awaitUi { adapter.currentItems.map(CatalogCard::id) == listOf("movie-match") }
+        assertEquals("needle", search.text.toString())
+
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        search.setText("needle")
+        awaitUi { adapter.currentItems.map(CatalogCard::id) == listOf("movie-match") }
+        adapter.submit(listOf(CatalogCard("reset", "home", "Reset", null, "")))
+        awaitUi { adapter.currentItems.singleOrNull()?.id == "reset" }
+        MainActivity::class.java.getDeclaredMethod("restoreSearchPresentationAfterPlayback").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+        awaitUi { adapter.currentItems.map(CatalogCard::id) == listOf("movie-match") }
+        assertEquals("needle", search.text.toString())
     }
 
     @Test
@@ -208,4 +271,17 @@ class PostLoginMobileUiTest {
         override fun getStringSet(key: String): Set<String> = sets[key].orEmpty()
         override fun putStringSet(key: String, value: Set<String>) { sets[key] = value }
     }
+
+    private fun searchItem(id: String, title: String) = XtreamItem(
+        id = id,
+        categoryId = "test",
+        name = title,
+        imageUrl = null,
+        rating = null,
+        addedEpochSeconds = null,
+        extension = "mp4",
+        epgChannelId = null,
+        catchUp = false,
+        catchUpDays = 0,
+    )
 }

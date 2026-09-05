@@ -22,6 +22,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.materialswitch.MaterialSwitch
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,8 +39,10 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
+import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamEpisode
+import uk.crownmedia.data.xtream.XtreamItem
 import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import java.util.concurrent.TimeUnit
 
@@ -565,6 +569,73 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun tvScopedAndMasterSearchResultsSurvivePlaybackReturn() {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        runBlocking {
+            listOf("live", "movie", "series").forEach { kind ->
+                cache.saveItems(
+                    playlist.id,
+                    kind,
+                    null,
+                    listOf(
+                        searchItem("$kind-match", "Needle $kind"),
+                        searchItem("$kind-other", "Unrelated $kind"),
+                    ),
+                )
+                testStore.markCatalogRefreshed(playlist.id, kind, null)
+            }
+        }
+
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val search = activity.findViewById<EditText>(R.id.search_box)
+        val adapter = grid.adapter as CatalogAdapter
+
+        fun awaitUi(condition: () -> Boolean) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (!condition() && System.nanoTime() < deadline) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+            }
+            assertTrue(condition())
+        }
+
+        listOf(
+            R.id.nav_live to "live",
+            R.id.nav_movies to "movie",
+            R.id.nav_series to "series",
+        ).forEach { (navigationId, kind) ->
+            activity.findViewById<View>(navigationId).performClick()
+            awaitUi { adapter.currentItems.size == 2 && adapter.currentItems.all { it.kind == kind } }
+            val baseCards = adapter.currentItems.toList()
+            search.setText("needle")
+            awaitUi { adapter.currentItems.map(CatalogCard::id) == listOf("$kind-match") }
+
+            adapter.submit(baseCards)
+            awaitUi { adapter.currentItems.size == 2 }
+            MainActivity::class.java.getDeclaredMethod("restoreSearchPresentationAfterPlayback").apply {
+                isAccessible = true
+                invoke(activity)
+            }
+
+            awaitUi { adapter.currentItems.map(CatalogCard::id) == listOf("$kind-match") }
+            assertEquals("needle", search.text.toString())
+        }
+
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        search.setText("needle")
+        awaitUi { adapter.currentItems.size == 3 && adapter.currentItems.all { it.title.startsWith("Needle") } }
+        adapter.submit(listOf(CatalogCard("reset", "home", "Reset", null, "")))
+        awaitUi { adapter.currentItems.singleOrNull()?.id == "reset" }
+        MainActivity::class.java.getDeclaredMethod("restoreSearchPresentationAfterPlayback").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+        awaitUi { adapter.currentItems.size == 3 && adapter.currentItems.all { it.title.startsWith("Needle") } }
+        assertEquals("needle", search.text.toString())
+    }
+
+    @Test
     fun tvBackCollapsesExpandedSidebarBeforeLeavingHome() {
         val rail = activity.findViewById<View>(R.id.side_nav)
         activity.findViewById<View>(R.id.nav_home).requestFocus()
@@ -595,14 +666,20 @@ class TvUiRegressionTest {
     @Test
     fun loginPrimaryDpadPathIncludesEveryRequiredCredentialField() {
         activity.finish()
-        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        val loginStore = AppStore(FakeSecureStore()).apply {
+            saveLoginDetails(
+                CrownService.PREMIUM,
+                SavedLoginDetails("Remembered", CrownService.PREMIUM, "saved-user", "saved-password"),
+            )
+        }
+        MainActivity.storeFactory = { loginStore }
         setTelevisionMode()
         activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
 
         val service = activity.findViewById<MaterialAutoCompleteTextView>(R.id.service_dropdown)
         val username = activity.findViewById<View>(R.id.username)
         val password = activity.findViewById<View>(R.id.password)
-        val save = activity.findViewById<View>(R.id.save_login)
+        val save = activity.findViewById<MaterialSwitch>(R.id.save_login)
         val connect = activity.findViewById<View>(R.id.connect_button)
         val qr = activity.findViewById<View>(R.id.qr_button)
 
@@ -611,6 +688,20 @@ class TvUiRegressionTest {
         assertEquals(R.id.save_login, password.nextFocusDownId)
         assertEquals(R.id.connect_button, save.nextFocusDownId)
         assertEquals(R.id.save_login, connect.nextFocusUpId)
+        assertTrue(save.isFocusable)
+        assertTrue(save.background.isStateful)
+        assertTrue(save.isChecked)
+        assertEquals("saved-user", (username as EditText).text.toString())
+        assertEquals("saved-password", (password as EditText).text.toString())
+
+        password.requestFocus()
+        assertTrue(password.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(save.hasFocus())
+        assertTrue(save.drawableState.contains(android.R.attr.state_focused))
+        assertTrue(save.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertTrue(save.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertFalse(save.isChecked)
+        assertNull(loginStore.savedLoginDetails(CrownService.PREMIUM))
         assertFalse(qr.isEnabled)
         assertEquals(View.GONE, qr.visibility)
         assertEquals(View.NO_ID, connect.nextFocusDownId)
@@ -696,6 +787,19 @@ class TvUiRegressionTest {
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
+
+    private fun searchItem(id: String, title: String) = XtreamItem(
+        id = id,
+        categoryId = "test",
+        name = title,
+        imageUrl = null,
+        rating = null,
+        addedEpochSeconds = null,
+        extension = "mp4",
+        epgChannelId = null,
+        catchUp = false,
+        catchUpDays = 0,
+    )
 
     private fun setTelevisionMode() {
         val manager = RuntimeEnvironment.getApplication().getSystemService(Context.UI_MODE_SERVICE) as UiModeManager
