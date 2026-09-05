@@ -6,6 +6,16 @@ import org.junit.Test
 
 class TvFocusNavigationTest {
     @Test
+    fun sixteenEpisodeGridStopsAtEveryPositionInItsFinalRow() {
+        (12..15).forEach { position ->
+            assertEquals(
+                TvFocusMove(TvFocusRegion.STAY),
+                tvContentFocusMove(position, 16, 4, KeyEvent.KEYCODE_DPAD_DOWN, hasCategories = true),
+            )
+        }
+    }
+
+    @Test
     fun contentLeftAndRightStayInRowWithPredictableBoundaries() {
         assertEquals(TvFocusMove(TvFocusRegion.CATEGORIES), tvContentFocusMove(0, 12, 5, KeyEvent.KEYCODE_DPAD_LEFT, true))
         assertEquals(TvFocusMove(TvFocusRegion.SIDEBAR), tvContentFocusMove(0, 12, 5, KeyEvent.KEYCODE_DPAD_LEFT, false))

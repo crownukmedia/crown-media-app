@@ -26,6 +26,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -45,12 +46,13 @@ import java.util.concurrent.TimeUnit
 @Config(sdk = [28], qualifiers = "w960dp-h540dp-television-xhdpi")
 class TvUiRegressionTest {
     private lateinit var activity: MainActivity
+    private lateinit var testStore: AppStore
 
     @Before
     fun setUp() {
         setTelevisionMode()
         LayoutSelection(RuntimeEnvironment.getApplication()).select(AppLayout.TELEVISION)
-        val store = AppStore(FakeSecureStore()).apply {
+        testStore = AppStore(FakeSecureStore()).apply {
             save(
                 "TV test",
                 ProviderCredentials("http://example.invalid", "user", "password"),
@@ -61,7 +63,7 @@ class TvUiRegressionTest {
                 allowedFormats = listOf("ts", "m3u8"),
             )
         }
-        MainActivity.storeFactory = { store }
+        MainActivity.storeFactory = { testStore }
         activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
     }
 
@@ -467,6 +469,13 @@ class TvUiRegressionTest {
                 content.findViewHolderForAdapterPosition(0) != null
         }
 
+        MainActivity::class.java.getDeclaredMethod("loadNextPage").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.page_progress).visibility)
+        assertTrue((content.adapter as CatalogAdapter).currentItems.all { it.kind == "episode" })
+
         fun press(view: View, keyCode: Int) {
             assertTrue("D-pad key $keyCode was not consumed by ${view.id}", view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
             view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
@@ -509,6 +518,31 @@ class TvUiRegressionTest {
         press(back, KeyEvent.KEYCODE_DPAD_CENTER)
         val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
         assertEquals("Remote Series", shadowOf(dialog).title.toString())
+        assertFalse(activity.isFinishing)
+    }
+
+    @Test
+    fun removePlaylistRespondsImmediatelyAndReturnsToLogin() {
+        activity.findViewById<View>(R.id.nav_account).performClick()
+        val account = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Remove playlist", account.getButton(AlertDialog.BUTTON_NEUTRAL).text.toString())
+        val playlist = requireNotNull(testStore.selected())
+        MainActivity::class.java.getDeclaredMethod("confirmRemove", SavedPlaylist::class.java).apply {
+            isAccessible = true
+            invoke(activity, playlist)
+        }
+
+        val confirmation = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Remove TV test?", shadowOf(confirmation).title.toString())
+        assertEquals("Remove", confirmation.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        MainActivity::class.java.getDeclaredMethod("removePlaylist", SavedPlaylist::class.java).apply {
+            isAccessible = true
+            invoke(activity, playlist)
+        }
+
+        assertNull(testStore.selected())
+        assertTrue(activity.findViewById<View>(R.id.login_panel).isShown)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.side_nav).visibility)
         assertFalse(activity.isFinishing)
     }
 

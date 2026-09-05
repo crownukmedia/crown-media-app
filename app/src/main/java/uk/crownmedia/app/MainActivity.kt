@@ -986,6 +986,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadNextPage() {
+        // Nested Series owns the grid with its complete in-memory episode list. Running the
+        // parent Series pagination path while that grid scrolls can replace episodes with
+        // provider Series cards and lets focus escape the active season.
+        if (nestedSeries != null) return
         val target = section
         if (target !in PAGED_SECTIONS) return
         val state = sectionState(target)
@@ -2083,12 +2087,60 @@ class MainActivity : AppCompatActivity() {
 
     private fun confirmRemove(p: SavedPlaylist) {
         AlertDialog.Builder(this).setTitle("Remove ${p.name}?").setMessage("Cached preferences and credentials for this playlist will be removed from this device.")
-            .setPositiveButton("Remove") { _, _ -> lifecycleScope.launch {
-                cache.deletePlaylist(p.id)
-                store.remove(p.id)
-                if (store.selected() == null) showWelcome() else open(Section.HOME)
-            } }
+            .setPositiveButton("Remove") { _, _ -> removePlaylist(p) }
             .setNegativeButton("Cancel", null).showCrown()
+    }
+
+    private fun removePlaylist(p: SavedPlaylist) {
+        // Stop every producer before removing the selected account. Otherwise an in-flight
+        // catalog refresh can hold the Room writer, make removal appear frozen, and repopulate
+        // rows after the delete transaction completes.
+        loadJob?.cancel()
+        detailJob?.cancel()
+        searchJob?.cancel()
+        scopedSearchJob?.cancel()
+        refreshJobs.values.forEach(Job::cancel)
+        refreshJobs.clear()
+        playlistRefreshJob?.cancel()
+        healthJob?.cancel()
+        liveRankingJob?.cancel()
+        countJob?.cancel()
+        categoryCountJob?.cancel()
+        categoryCountJobKey = null
+        searchWarmJob?.cancel()
+        searchWarmJob = null
+        catalogWarmJobs.values.forEach { it.cancel() }
+        catalogWarmJobs.clear()
+        pendingTvFocusMoves.clear()
+        contentRequestGeneration++
+
+        // Credentials and selection disappear immediately; cache cleanup is secondary and must
+        // not block navigation back to Login or the next saved playlist.
+        store.remove(p.id)
+        activePlaylistId = null
+        sectionStates.clear()
+        contentCounts.clear()
+        nestedSeries = null
+        stateRetry = null
+        currentCategory = "all"
+        if (store.selected() == null) showWelcome() else open(Section.HOME)
+        Toast.makeText(this, "Playlist removed", Toast.LENGTH_SHORT).show()
+
+        lifecycleScope.launch {
+            try {
+                cache.deletePlaylist(p.id)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                if (!isFinishing) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Playlist removed. Cached content could not be cleared.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
     }
 
     private fun showSettings() {
