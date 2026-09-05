@@ -31,6 +31,8 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
     private var persistedPlaylistCache: List<SavedPlaylist>? = null
     private var selectedIdCacheInitialized = false
     private var selectedIdCache: String? = null
+    private val contentCountCache = mutableMapOf<String, Int?>()
+    private val categoryCountCache = mutableMapOf<String, Map<String, Int>?>()
 
     var selectedId: String?
         get() {
@@ -139,6 +141,7 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
         if (removedTransient) transientPlaylist = null
         val remaining = persistedPlaylists().filterNot { it.id == id }
         write(remaining)
+        clearCatalogCountSnapshots(id)
         if (selectedId == id || (removedTransient && selectedId == null)) selectedId = remaining.firstOrNull()?.id
     }
 
@@ -155,6 +158,68 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
 
     private fun refreshKey(prefix: String, playlistId: String, kind: String, categoryId: String?) =
         "catalog_${prefix}_${playlistId}_${kind}_${categoryId ?: "all"}"
+
+    fun catalogContentCountSnapshot(playlistId: String, kind: String, includeAdult: Boolean): Int? {
+        val key = countSnapshotKey("total", playlistId, kind, includeAdult)
+        if (contentCountCache.containsKey(key)) return contentCountCache[key]
+        return prefs.getString(key, null)?.toIntOrNull()?.takeIf { it >= 0 }
+            .also { contentCountCache[key] = it }
+    }
+
+    fun saveCatalogContentCountSnapshot(playlistId: String, kind: String, includeAdult: Boolean, count: Int) {
+        require(count >= 0)
+        val key = countSnapshotKey("total", playlistId, kind, includeAdult)
+        if (contentCountCache[key] == count) return
+        contentCountCache[key] = count
+        prefs.putString(key, count.toString())
+    }
+
+    fun catalogCategoryCountSnapshot(playlistId: String, kind: String, includeAdult: Boolean): Map<String, Int>? {
+        val key = countSnapshotKey("categories", playlistId, kind, includeAdult)
+        if (categoryCountCache.containsKey(key)) return categoryCountCache[key]
+        val parsed = prefs.getString(key, null)?.let { encoded ->
+            runCatching {
+                val json = JSONObject(encoded)
+                buildMap {
+                    json.keys().forEach { categoryId ->
+                        val count = json.optInt(categoryId, -1)
+                        if (categoryId.isNotBlank() && count >= 0) put(categoryId, count)
+                    }
+                }
+            }.getOrNull()
+        }
+        categoryCountCache[key] = parsed
+        return parsed
+    }
+
+    fun saveCatalogCategoryCountSnapshot(
+        playlistId: String,
+        kind: String,
+        includeAdult: Boolean,
+        counts: Map<String, Int>,
+    ) {
+        val sanitized = counts.filter { (categoryId, count) -> categoryId.isNotBlank() && count >= 0 }
+        val key = countSnapshotKey("categories", playlistId, kind, includeAdult)
+        if (categoryCountCache[key] == sanitized) return
+        categoryCountCache[key] = sanitized
+        prefs.putString(key, JSONObject(sanitized).toString())
+    }
+
+    private fun clearCatalogCountSnapshots(playlistId: String) {
+        listOf("live", "movie", "series").forEach { kind ->
+            listOf(false, true).forEach { includeAdult ->
+                val totalKey = countSnapshotKey("total", playlistId, kind, includeAdult)
+                val categoriesKey = countSnapshotKey("categories", playlistId, kind, includeAdult)
+                contentCountCache.remove(totalKey)
+                categoryCountCache.remove(categoriesKey)
+                prefs.putString(totalKey, null)
+                prefs.putString(categoriesKey, null)
+            }
+        }
+    }
+
+    private fun countSnapshotKey(scope: String, playlistId: String, kind: String, includeAdult: Boolean) =
+        "catalog_count_${scope}_${playlistId}_${kind}_${if (includeAdult) "adult" else "safe"}"
 
     fun favorites(playlistId: String): Set<String> = prefs.getStringSet("favorites_$playlistId")
     fun toggleFavorite(playlistId: String, key: String): Boolean {

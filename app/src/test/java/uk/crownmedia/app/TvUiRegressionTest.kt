@@ -109,6 +109,23 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun tvHomePublishesVerifiedSectionCountsBeforeRoomReconciliation() {
+        val playlistId = requireNotNull(testStore.selected()).id
+        testStore.saveCatalogContentCountSnapshot(playlistId, "live", includeAdult = true, count = 550)
+        testStore.saveCatalogContentCountSnapshot(playlistId, "movie", includeAdult = true, count = 320)
+        testStore.saveCatalogContentCountSnapshot(playlistId, "series", includeAdult = true, count = 140)
+
+        MainActivity::class.java.getDeclaredMethod("showHome").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+
+        assertEquals("Live (550)", activity.findViewById<View>(R.id.nav_live).contentDescription.toString())
+        assertEquals("Movies (320)", activity.findViewById<View>(R.id.nav_movies).contentDescription.toString())
+        assertEquals("Series (140)", activity.findViewById<View>(R.id.nav_series).contentDescription.toString())
+    }
+
+    @Test
     fun homeGridDpadUsesRowsAndOnlyEntersSidebarAtFirstColumn() {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val rail = activity.findViewById<View>(R.id.side_nav)
@@ -181,6 +198,7 @@ class TvUiRegressionTest {
 
         liveTile.performClick()
         shadowOf(Looper.getMainLooper()).idle()
+        shadowOf(Looper.getMainLooper()).idleFor(500, TimeUnit.MILLISECONDS)
 
         assertEquals("Live TV", activity.findViewById<TextView>(R.id.screen_title).text.toString())
         assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)

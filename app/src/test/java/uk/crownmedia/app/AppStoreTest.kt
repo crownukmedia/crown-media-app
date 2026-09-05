@@ -63,6 +63,50 @@ class AppStoreTest {
     }
 
     @Test
+    fun verifiedCatalogCountSnapshotsAreImmediatePersistentAndAccessScoped() {
+        val secureStore = FakeSecureStore()
+        AppStore(secureStore).apply {
+            saveCatalogContentCountSnapshot("p", "live", includeAdult = false, count = 55)
+            saveCatalogContentCountSnapshot("p", "live", includeAdult = true, count = 85)
+            saveCatalogCategoryCountSnapshot(
+                "p",
+                "live",
+                includeAdult = false,
+                counts = mapOf("news" to 20, "sport" to 35),
+            )
+        }
+
+        val restored = AppStore(secureStore)
+        assertEquals(55, restored.catalogContentCountSnapshot("p", "live", includeAdult = false))
+        assertEquals(85, restored.catalogContentCountSnapshot("p", "live", includeAdult = true))
+        assertEquals(
+            mapOf("news" to 20, "sport" to 35),
+            restored.catalogCategoryCountSnapshot("p", "live", includeAdult = false),
+        )
+        assertNull(restored.catalogCategoryCountSnapshot("p", "live", includeAdult = true))
+    }
+
+    @Test
+    fun removingPlaylistAlsoRemovesItsVerifiedCountSnapshots() {
+        val secureStore = FakeSecureStore()
+        val store = AppStore(secureStore)
+        val playlist = store.save("Saved", credentials, null, "ACTIVE", null, null, persist = true)
+        store.saveCatalogContentCountSnapshot(playlist.id, "series", includeAdult = true, count = 120)
+        store.saveCatalogCategoryCountSnapshot(
+            playlist.id,
+            "series",
+            includeAdult = true,
+            counts = mapOf("drama" to 120),
+        )
+
+        store.remove(playlist.id)
+        val restored = AppStore(secureStore)
+
+        assertNull(restored.catalogContentCountSnapshot(playlist.id, "series", includeAdult = true))
+        assertNull(restored.catalogCategoryCountSnapshot(playlist.id, "series", includeAdult = true))
+    }
+
+    @Test
     fun savedCredentialsAreIsolatedByCrownService() {
         val secureStore = FakeSecureStore()
         val store = AppStore(secureStore)
