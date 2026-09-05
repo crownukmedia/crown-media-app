@@ -1,8 +1,10 @@
 package uk.crownmedia.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -63,6 +65,50 @@ class AppStoreTest {
     }
 
     @Test
+    fun verifiedCatalogCountSnapshotsAreImmediatePersistentAndAccessScoped() {
+        val secureStore = FakeSecureStore()
+        AppStore(secureStore).apply {
+            saveCatalogContentCountSnapshot("p", "live", includeAdult = false, count = 55)
+            saveCatalogContentCountSnapshot("p", "live", includeAdult = true, count = 85)
+            saveCatalogCategoryCountSnapshot(
+                "p",
+                "live",
+                includeAdult = false,
+                counts = mapOf("news" to 20, "sport" to 35),
+            )
+        }
+
+        val restored = AppStore(secureStore)
+        assertEquals(55, restored.catalogContentCountSnapshot("p", "live", includeAdult = false))
+        assertEquals(85, restored.catalogContentCountSnapshot("p", "live", includeAdult = true))
+        assertEquals(
+            mapOf("news" to 20, "sport" to 35),
+            restored.catalogCategoryCountSnapshot("p", "live", includeAdult = false),
+        )
+        assertNull(restored.catalogCategoryCountSnapshot("p", "live", includeAdult = true))
+    }
+
+    @Test
+    fun removingPlaylistAlsoRemovesItsVerifiedCountSnapshots() {
+        val secureStore = FakeSecureStore()
+        val store = AppStore(secureStore)
+        val playlist = store.save("Saved", credentials, null, "ACTIVE", null, null, persist = true)
+        store.saveCatalogContentCountSnapshot(playlist.id, "series", includeAdult = true, count = 120)
+        store.saveCatalogCategoryCountSnapshot(
+            playlist.id,
+            "series",
+            includeAdult = true,
+            counts = mapOf("drama" to 120),
+        )
+
+        store.remove(playlist.id)
+        val restored = AppStore(secureStore)
+
+        assertNull(restored.catalogContentCountSnapshot(playlist.id, "series", includeAdult = true))
+        assertNull(restored.catalogCategoryCountSnapshot(playlist.id, "series", includeAdult = true))
+    }
+
+    @Test
     fun savedCredentialsAreIsolatedByCrownService() {
         val secureStore = FakeSecureStore()
         val store = AppStore(secureStore)
@@ -78,6 +124,23 @@ class AppStoreTest {
         assertEquals("premium-user", store.savedLoginDetails(CrownService.PREMIUM)?.username)
         assertEquals("pro-user", store.savedLoginDetails(CrownService.PRO)?.username)
         assertNull(store.savedLoginDetails(CrownService.EIGHT_K))
+    }
+
+    @Test
+    fun saveLoginDefaultsOnAndPersistsAnExplicitOptOutPerService() {
+        val secureStore = FakeSecureStore()
+        val store = AppStore(secureStore)
+
+        assertTrue(store.saveLoginEnabled(CrownService.PREMIUM))
+        assertTrue(store.saveLoginEnabled(CrownService.PRO))
+
+        store.setSaveLoginEnabled(CrownService.PREMIUM, false)
+        val restored = AppStore(secureStore)
+        assertFalse(restored.saveLoginEnabled(CrownService.PREMIUM))
+        assertTrue(restored.saveLoginEnabled(CrownService.PRO))
+
+        restored.setSaveLoginEnabled(CrownService.PREMIUM, true)
+        assertTrue(AppStore(secureStore).saveLoginEnabled(CrownService.PREMIUM))
     }
 
     @Test

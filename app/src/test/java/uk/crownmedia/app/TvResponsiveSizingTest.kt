@@ -12,4 +12,15 @@ class TvResponsiveSizingTest {
         assertEquals(260, MainActivity.responsiveTvNavigationWidthDp(960))
         assertEquals(260, MainActivity.responsiveTvNavigationWidthDp(1280))
     }
+
+    @Test
+    fun secondaryCategoryRailAndGridScaleAcrossTvResolutionClasses() {
+        assertEquals(180, MainActivity.responsiveTvCategoryNavigationWidthDp(640))
+        assertEquals(211, MainActivity.responsiveTvCategoryNavigationWidthDp(960))
+        assertEquals(240, MainActivity.responsiveTvCategoryNavigationWidthDp(1280))
+
+        assertEquals(2, MainActivity.responsiveTvContentColumnCount(640))
+        assertEquals(4, MainActivity.responsiveTvContentColumnCount(960))
+        assertEquals(5, MainActivity.responsiveTvContentColumnCount(1280))
+    }
 }

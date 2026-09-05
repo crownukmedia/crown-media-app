@@ -22,10 +22,13 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.materialswitch.MaterialSwitch
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -36,8 +39,10 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
+import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamEpisode
+import uk.crownmedia.data.xtream.XtreamItem
 import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import java.util.concurrent.TimeUnit
 
@@ -45,12 +50,13 @@ import java.util.concurrent.TimeUnit
 @Config(sdk = [28], qualifiers = "w960dp-h540dp-television-xhdpi")
 class TvUiRegressionTest {
     private lateinit var activity: MainActivity
+    private lateinit var testStore: AppStore
 
     @Before
     fun setUp() {
         setTelevisionMode()
         LayoutSelection(RuntimeEnvironment.getApplication()).select(AppLayout.TELEVISION)
-        val store = AppStore(FakeSecureStore()).apply {
+        testStore = AppStore(FakeSecureStore()).apply {
             save(
                 "TV test",
                 ProviderCredentials("http://example.invalid", "user", "password"),
@@ -61,7 +67,7 @@ class TvUiRegressionTest {
                 allowedFormats = listOf("ts", "m3u8"),
             )
         }
-        MainActivity.storeFactory = { store }
+        MainActivity.storeFactory = { testStore }
         activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
     }
 
@@ -104,6 +110,23 @@ class TvUiRegressionTest {
             ),
             adapter.currentItems.map { it.localArtwork },
         )
+    }
+
+    @Test
+    fun tvHomePublishesVerifiedSectionCountsBeforeRoomReconciliation() {
+        val playlistId = requireNotNull(testStore.selected()).id
+        testStore.saveCatalogContentCountSnapshot(playlistId, "live", includeAdult = true, count = 550)
+        testStore.saveCatalogContentCountSnapshot(playlistId, "movie", includeAdult = true, count = 320)
+        testStore.saveCatalogContentCountSnapshot(playlistId, "series", includeAdult = true, count = 140)
+
+        MainActivity::class.java.getDeclaredMethod("showHome").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+
+        assertEquals("Live (550)", activity.findViewById<View>(R.id.nav_live).contentDescription.toString())
+        assertEquals("Movies (320)", activity.findViewById<View>(R.id.nav_movies).contentDescription.toString())
+        assertEquals("Series (140)", activity.findViewById<View>(R.id.nav_series).contentDescription.toString())
     }
 
     @Test
@@ -159,7 +182,11 @@ class TvUiRegressionTest {
             if (focusedChild != null) {
                 assertTrue(grid.getChildAdapterPosition(focusedChild) in 0 until requireNotNull(grid.adapter).itemCount)
             } else {
-                assertTrue(activity.findViewById<View>(R.id.side_nav).hasFocus())
+                val sideNav = activity.findViewById<View>(R.id.side_nav)
+                assertTrue(
+                    "Fast key $keyCode left focus outside the content/sidebar regions: ${activity.currentFocus?.id}",
+                    grid.hasFocus() || sideNav.hasFocus(),
+                )
             }
         }
 
@@ -175,6 +202,7 @@ class TvUiRegressionTest {
 
         liveTile.performClick()
         shadowOf(Looper.getMainLooper()).idle()
+        shadowOf(Looper.getMainLooper()).idleFor(500, TimeUnit.MILLISECONDS)
 
         assertEquals("Live TV", activity.findViewById<TextView>(R.id.screen_title).text.toString())
         assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)
@@ -200,9 +228,10 @@ class TvUiRegressionTest {
         assertEquals(null, grid.itemAnimator)
         assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
         assertTrue(
-            activity.findViewById<View>(R.id.category_menu_button).hasFocus() ||
+            activity.findViewById<View>(R.id.category_list).hasFocus() ||
                 activity.findViewById<View>(R.id.search_box).hasFocus(),
         )
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_menu_button).visibility)
         assertTrue(listOf(R.id.nav_home, R.id.nav_live, R.id.nav_movies, R.id.nav_series, R.id.nav_search).none {
             activity.findViewById<View>(it).hasFocus()
         })
@@ -219,7 +248,7 @@ class TvUiRegressionTest {
         assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
         assertTrue(
             activity.findViewById<View>(R.id.search_box).hasFocus() ||
-                activity.findViewById<View>(R.id.category_menu_button).hasFocus() ||
+                activity.findViewById<View>(R.id.category_list).hasFocus() ||
                 activity.findViewById<View>(R.id.content_grid).hasFocus() ||
                 activity.findViewById<View>(R.id.state_action).hasFocus(),
         )
@@ -236,20 +265,22 @@ class TvUiRegressionTest {
         val menu = activity.findViewById<View>(R.id.category_menu_button)
         val navHome = activity.findViewById<Button>(R.id.nav_home)
 
-        assertEquals(5, (grid.layoutManager as GridLayoutManager).spanCount)
-        assertEquals(R.id.nav_live, grid.nextFocusLeftId)
-        assertEquals(R.id.category_menu_button, categories.nextFocusLeftId)
+        assertEquals(4, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(R.id.category_list, grid.nextFocusLeftId)
+        assertEquals(R.id.nav_live, categories.nextFocusLeftId)
+        assertEquals(R.id.content_grid, categories.nextFocusRightId)
         assertEquals(R.id.nav_live, menu.nextFocusLeftId)
-        assertEquals(R.id.category_list, menu.nextFocusRightId)
-        assertEquals(R.id.content_grid, categories.nextFocusDownId)
-        assertEquals(R.id.search_box, navHome.nextFocusRightId)
+        assertEquals(R.id.content_grid, menu.nextFocusRightId)
+        assertEquals(R.id.category_list, menu.nextFocusDownId)
+        assertEquals(R.id.category_list, navHome.nextFocusRightId)
         val search = activity.findViewById<EditText>(R.id.search_box)
         assertEquals("Search live channels", search.hint.toString())
-        assertEquals(R.id.category_menu_button, search.nextFocusDownId)
-        assertEquals(R.id.search_box, categories.nextFocusUpId)
-        assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as LinearLayoutManager).orientation)
-        assertEquals(dp(62), activity.findViewById<View>(R.id.category_bar).layoutParams.height)
-        assertEquals(dp(46), categories.layoutParams.height)
+        assertEquals(R.id.category_list, search.nextFocusDownId)
+        assertEquals(RecyclerView.VERTICAL, (categories.layoutManager as LinearLayoutManager).orientation)
+        assertEquals(dp(211), activity.findViewById<View>(R.id.category_bar).layoutParams.width)
+        assertEquals(0, activity.findViewById<View>(R.id.category_bar).layoutParams.height)
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, categories.layoutParams.width)
+        assertEquals(0, categories.layoutParams.height)
         assertFalse(activity.findViewById<TextView>(R.id.nav_live).text.contains('\n'))
         val scaledDensity = activity.resources.displayMetrics.density * activity.resources.configuration.fontScale
         assertEquals(14f, navHome.textSize / scaledDensity, 0.1f)
@@ -264,14 +295,14 @@ class TvUiRegressionTest {
         assertEquals(dp(54), logo.layoutParams.height)
         assertEquals(dp(5), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
-        assertEquals(dp(46), category.layoutParams.height)
-        assertEquals(ViewGroup.LayoutParams.WRAP_CONTENT, category.layoutParams.width)
+        assertEquals(dp(54), category.layoutParams.height)
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, category.layoutParams.width)
         assertEquals(0, category.minimumWidth)
-        assertEquals(dp(14), category.findViewById<TextView>(R.id.category_name).paddingStart)
-        assertEquals(dp(14), category.findViewById<TextView>(R.id.category_name).paddingEnd)
-        assertEquals(dp(48), activity.findViewById<View>(R.id.category_menu_button).layoutParams.width)
-        assertEquals(dp(46), activity.findViewById<View>(R.id.category_menu_button).layoutParams.height)
-        assertEquals(dp(46), activity.findViewById<View>(R.id.category_list).layoutParams.height)
+        assertEquals(dp(14), category.paddingStart)
+        assertEquals(dp(12), category.paddingEnd)
+        assertEquals(dp(44), activity.findViewById<View>(R.id.category_menu_button).layoutParams.width)
+        assertEquals(dp(44), activity.findViewById<View>(R.id.category_menu_button).layoutParams.height)
+        assertEquals(0, activity.findViewById<View>(R.id.category_list).layoutParams.height)
     }
 
     @Test
@@ -281,8 +312,9 @@ class TvUiRegressionTest {
         val message = activity.findViewById<View>(R.id.state_message)
         val stateParams = state.layoutParams as ConstraintLayout.LayoutParams
 
-        assertEquals(dp(4), (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
-        assertEquals(R.id.category_bar, stateParams.topToBottom)
+        assertEquals(0, (categories.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
+        assertEquals(R.id.top_bar, stateParams.topToBottom)
+        assertEquals(R.id.category_bar, stateParams.startToEnd)
         assertEquals(0, stateParams.width)
         assertEquals(dp(480), stateParams.matchConstraintMaxWidth)
         assertEquals(dp(32), stateParams.marginStart)
@@ -300,9 +332,10 @@ class TvUiRegressionTest {
 
         assertEquals(ConstraintLayout.LayoutParams.PARENT_ID, (topBar.layoutParams as ConstraintLayout.LayoutParams).topToTop)
         assertEquals(R.id.top_bar, categoryParams.topToBottom)
-        assertEquals(R.id.category_bar, gridParams.topToBottom)
+        assertEquals(R.id.category_bar, gridParams.startToEnd)
+        assertEquals(R.id.top_bar, gridParams.topToBottom)
         assertEquals(dp(16).toFloat(), topBar.elevation, 0.1f)
-        assertEquals(dp(16).toFloat(), categories.elevation, 0.1f)
+        assertEquals(dp(12).toFloat(), categories.elevation, 0.1f)
         assertNotNull(topBar.background)
         assertNotNull(categories.background)
 
@@ -321,10 +354,13 @@ class TvUiRegressionTest {
         val home = activity.findViewById<MaterialButton>(R.id.nav_home)
         val content = activity.findViewById<View>(R.id.content_grid)
         val topBar = activity.findViewById<View>(R.id.top_bar)
+        val categories = activity.findViewById<View>(R.id.category_bar)
 
         assertEquals(dp(88), rail.layoutParams.width)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, panel.layoutParams.width)
         assertEquals(R.id.side_nav, (topBar.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
+        assertEquals(R.id.side_nav, (categories.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
+        assertEquals(R.id.category_bar, (content.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         content.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
         assertEquals(dp(88), rail.layoutParams.width)
@@ -407,6 +443,199 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun nestedSeriesRailSupportsCompleteRemoteFocusAndSelectionFlow() {
+        activity.findViewById<View>(R.id.nav_series).performClick()
+        val card = CatalogCard("series-rail", "series", "Remote Series", null, "Series")
+        val details = XtreamSeriesDetails(
+            name = "Remote Series",
+            plot = "Plot",
+            cover = null,
+            backdrop = null,
+            cast = null,
+            genre = "Drama",
+            rating = null,
+            trailer = null,
+            episodes = (1..3).associateWith { season ->
+                listOf(XtreamEpisode("episode-$season", season, 1, "Season $season pilot", "mp4", null, null, "45m"))
+            },
+        )
+        val stateClass = Class.forName("uk.crownmedia.app.MainActivity\$SeriesDetailState")
+        val constructor = stateClass.declaredConstructors.single().apply { isAccessible = true }
+        val nested = constructor.newInstance(card, details, 1)
+        MainActivity::class.java.getDeclaredField("nestedSeries").apply {
+            isAccessible = true
+            set(activity, nested)
+        }
+        MainActivity::class.java.getDeclaredMethod("renderSeriesDetails").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        val content = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val back = activity.findViewById<View>(R.id.category_menu_button)
+
+        fun awaitUi(condition: () -> Boolean) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (!condition() && System.nanoTime() < deadline) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            assertTrue(condition())
+        }
+
+        awaitUi {
+            categories.adapter?.itemCount == 3 &&
+                content.adapter?.itemCount == 1 &&
+                categories.findViewHolderForAdapterPosition(0) != null &&
+                content.findViewHolderForAdapterPosition(0) != null
+        }
+
+        MainActivity::class.java.getDeclaredMethod("loadNextPage").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.page_progress).visibility)
+        assertTrue((content.adapter as CatalogAdapter).currentItems.all { it.kind == "episode" })
+
+        fun press(view: View, keyCode: Int) {
+            assertTrue("D-pad key $keyCode was not consumed by ${view.id}", view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
+            view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+            shadowOf(Looper.getMainLooper()).idleFor(100, TimeUnit.MILLISECONDS)
+        }
+
+        fun focusedSeasonPosition(): Int = categories.focusedChild
+            ?.let(categories::getChildAdapterPosition)
+            ?: RecyclerView.NO_POSITION
+
+        val firstEpisode = requireNotNull(content.findViewHolderForAdapterPosition(0)).itemView
+        firstEpisode.requestFocus()
+        press(firstEpisode, KeyEvent.KEYCODE_DPAD_LEFT)
+        awaitUi { categories.hasFocus() && focusedSeasonPosition() == 0 }
+        assertEquals(0, focusedSeasonPosition())
+        assertTrue(requireNotNull(categories.focusedChild).drawableState.contains(android.R.attr.state_focused))
+
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_UP)
+        awaitUi { back.hasFocus() }
+        press(back, KeyEvent.KEYCODE_DPAD_DOWN)
+        awaitUi { focusedSeasonPosition() == 0 }
+        assertEquals(0, focusedSeasonPosition())
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_DOWN)
+        awaitUi { focusedSeasonPosition() == 1 }
+        assertEquals(1, focusedSeasonPosition())
+
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_CENTER)
+        assertEquals(2, stateClass.getDeclaredField("season").apply { isAccessible = true }.getInt(nested))
+        awaitUi { (content.adapter as CatalogAdapter).currentItems.firstOrNull()?.id == "episode-2" }
+        assertTrue("Focus remained on ${activity.currentFocus?.id}", content.hasFocus())
+
+        press(requireNotNull(content.focusedChild), KeyEvent.KEYCODE_DPAD_LEFT)
+        awaitUi { focusedSeasonPosition() == 1 }
+        assertEquals(1, focusedSeasonPosition())
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_UP)
+        awaitUi { focusedSeasonPosition() == 0 }
+        press(requireNotNull(categories.focusedChild), KeyEvent.KEYCODE_DPAD_UP)
+        awaitUi { back.hasFocus() }
+
+        press(back, KeyEvent.KEYCODE_DPAD_CENTER)
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Remote Series", shadowOf(dialog).title.toString())
+        assertFalse(activity.isFinishing)
+    }
+
+    @Test
+    fun removePlaylistRespondsImmediatelyAndReturnsToLogin() {
+        activity.findViewById<View>(R.id.nav_account).performClick()
+        val account = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Remove playlist", account.getButton(AlertDialog.BUTTON_NEUTRAL).text.toString())
+        val playlist = requireNotNull(testStore.selected())
+        MainActivity::class.java.getDeclaredMethod("confirmRemove", SavedPlaylist::class.java).apply {
+            isAccessible = true
+            invoke(activity, playlist)
+        }
+
+        val confirmation = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertEquals("Remove TV test?", shadowOf(confirmation).title.toString())
+        assertEquals("Remove", confirmation.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        MainActivity::class.java.getDeclaredMethod("removePlaylist", SavedPlaylist::class.java).apply {
+            isAccessible = true
+            invoke(activity, playlist)
+        }
+
+        assertNull(testStore.selected())
+        assertTrue(activity.findViewById<View>(R.id.login_panel).isShown)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.side_nav).visibility)
+        assertFalse(activity.isFinishing)
+    }
+
+    @Test
+    fun tvScopedAndMasterSearchResultsSurvivePlaybackReturn() {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        runBlocking {
+            listOf("live", "movie", "series").forEach { kind ->
+                cache.saveItems(
+                    playlist.id,
+                    kind,
+                    null,
+                    listOf(
+                        searchItem("$kind-match", "Needle $kind"),
+                        searchItem("$kind-other", "Unrelated $kind"),
+                    ),
+                )
+                testStore.markCatalogRefreshed(playlist.id, kind, null)
+            }
+        }
+
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val search = activity.findViewById<EditText>(R.id.search_box)
+        val adapter = grid.adapter as CatalogAdapter
+
+        fun awaitUi(condition: () -> Boolean) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (!condition() && System.nanoTime() < deadline) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+            }
+            assertTrue(condition())
+        }
+
+        listOf(
+            R.id.nav_live to "live",
+            R.id.nav_movies to "movie",
+            R.id.nav_series to "series",
+        ).forEach { (navigationId, kind) ->
+            activity.findViewById<View>(navigationId).performClick()
+            awaitUi { adapter.currentItems.size == 2 && adapter.currentItems.all { it.kind == kind } }
+            val baseCards = adapter.currentItems.toList()
+            search.setText("needle")
+            awaitUi { adapter.currentItems.map(CatalogCard::id) == listOf("$kind-match") }
+
+            adapter.submit(baseCards)
+            awaitUi { adapter.currentItems.size == 2 }
+            MainActivity::class.java.getDeclaredMethod("restoreSearchPresentationAfterPlayback").apply {
+                isAccessible = true
+                invoke(activity)
+            }
+
+            awaitUi { adapter.currentItems.map(CatalogCard::id) == listOf("$kind-match") }
+            assertEquals("needle", search.text.toString())
+        }
+
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        search.setText("needle")
+        awaitUi { adapter.currentItems.size == 3 && adapter.currentItems.all { it.title.startsWith("Needle") } }
+        adapter.submit(listOf(CatalogCard("reset", "home", "Reset", null, "")))
+        awaitUi { adapter.currentItems.singleOrNull()?.id == "reset" }
+        MainActivity::class.java.getDeclaredMethod("restoreSearchPresentationAfterPlayback").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+        awaitUi { adapter.currentItems.size == 3 && adapter.currentItems.all { it.title.startsWith("Needle") } }
+        assertEquals("needle", search.text.toString())
+    }
+
+    @Test
     fun tvBackCollapsesExpandedSidebarBeforeLeavingHome() {
         val rail = activity.findViewById<View>(R.id.side_nav)
         activity.findViewById<View>(R.id.nav_home).requestFocus()
@@ -437,14 +666,20 @@ class TvUiRegressionTest {
     @Test
     fun loginPrimaryDpadPathIncludesEveryRequiredCredentialField() {
         activity.finish()
-        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        val loginStore = AppStore(FakeSecureStore()).apply {
+            saveLoginDetails(
+                CrownService.PREMIUM,
+                SavedLoginDetails("Remembered", CrownService.PREMIUM, "saved-user", "saved-password"),
+            )
+        }
+        MainActivity.storeFactory = { loginStore }
         setTelevisionMode()
         activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
 
         val service = activity.findViewById<MaterialAutoCompleteTextView>(R.id.service_dropdown)
         val username = activity.findViewById<View>(R.id.username)
         val password = activity.findViewById<View>(R.id.password)
-        val save = activity.findViewById<View>(R.id.save_login)
+        val save = activity.findViewById<MaterialSwitch>(R.id.save_login)
         val connect = activity.findViewById<View>(R.id.connect_button)
         val qr = activity.findViewById<View>(R.id.qr_button)
 
@@ -453,6 +688,21 @@ class TvUiRegressionTest {
         assertEquals(R.id.save_login, password.nextFocusDownId)
         assertEquals(R.id.connect_button, save.nextFocusDownId)
         assertEquals(R.id.save_login, connect.nextFocusUpId)
+        assertTrue(save.isFocusable)
+        assertTrue(save.background.isStateful)
+        assertTrue(save.isChecked)
+        assertEquals("saved-user", (username as EditText).text.toString())
+        assertEquals("saved-password", (password as EditText).text.toString())
+
+        password.requestFocus()
+        assertTrue(password.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(save.hasFocus())
+        assertTrue(save.drawableState.contains(android.R.attr.state_focused))
+        assertTrue(save.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertTrue(save.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertFalse(save.isChecked)
+        assertFalse(loginStore.saveLoginEnabled(CrownService.PREMIUM))
+        assertNull(loginStore.savedLoginDetails(CrownService.PREMIUM))
         assertFalse(qr.isEnabled)
         assertEquals(View.GONE, qr.visibility)
         assertEquals(View.NO_ID, connect.nextFocusDownId)
@@ -538,6 +788,19 @@ class TvUiRegressionTest {
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
+
+    private fun searchItem(id: String, title: String) = XtreamItem(
+        id = id,
+        categoryId = "test",
+        name = title,
+        imageUrl = null,
+        rating = null,
+        addedEpochSeconds = null,
+        extension = "mp4",
+        epgChannelId = null,
+        catchUp = false,
+        catchUpDays = 0,
+    )
 
     private fun setTelevisionMode() {
         val manager = RuntimeEnvironment.getApplication().getSystemService(Context.UI_MODE_SERVICE) as UiModeManager
