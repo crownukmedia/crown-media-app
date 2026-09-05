@@ -1,8 +1,11 @@
 package uk.crownmedia.player
 
 import android.content.Intent
+import android.view.KeyEvent
 import android.view.View
+import androidx.media3.common.Player
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -46,10 +49,31 @@ class PlayerLaunchRegressionTest {
 
             assertFalse(activity!!.isFinishing)
             assertNotNull(activity!!.findViewById<View>(R.id.player_view))
+            val player = PlayerActivity::class.java.getDeclaredField("player").apply { isAccessible = true }
+                .get(activity) as Player
+            assertEquals(PlayerActivity.SEEK_INCREMENT_MS, player.seekBackIncrement)
+            assertEquals(PlayerActivity.SEEK_INCREMENT_MS, player.seekForwardIncrement)
             activity!!.onBackPressedDispatcher.onBackPressed()
             assertTrue(activity!!.isFinishing)
             controller.pause().stop().destroy()
             activity = null
         }
+    }
+
+    @Test
+    fun visibleControllerOwnsCompleteDpadControlSequenceButNotMediaSeekKeys() {
+        listOf(
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+        ).forEach { keyCode ->
+            assertTrue(playerControllerOwnsKey(controllerFullyVisible = true, keyCode))
+            assertFalse(playerControllerOwnsKey(controllerFullyVisible = false, keyCode))
+        }
+        assertFalse(playerControllerOwnsKey(true, KeyEvent.KEYCODE_MEDIA_REWIND))
+        assertFalse(playerControllerOwnsKey(true, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD))
     }
 }

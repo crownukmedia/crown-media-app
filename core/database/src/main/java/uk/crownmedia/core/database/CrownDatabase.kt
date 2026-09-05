@@ -99,7 +99,9 @@ interface CatalogDao {
     @Query("SELECT categoryId, COUNT(*) AS itemCount FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind GROUP BY categoryId")
     suspend fun categoryItemCounts(playlistId: String, kind: String): List<CategoryCount>
 
-    @Query("SELECT categoryId, COUNT(DISTINCT contentId) AS itemCount FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:includeAdult = 1 OR isAdult = 0) GROUP BY categoryId")
+    // contentId is already unique for each playlist/kind via the table primary key, so COUNT(*)
+    // is exact and avoids SQLite's temporary DISTINCT aggregation on large TV catalogs.
+    @Query("SELECT categoryId, COUNT(*) AS itemCount FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:includeAdult = 1 OR isAdult = 0) GROUP BY categoryId")
     suspend fun accessibleCategoryItemCounts(playlistId: String, kind: String, includeAdult: Boolean): List<CategoryCount>
 
     data class CategoryCount(val categoryId: String, val itemCount: Int)
@@ -113,7 +115,7 @@ interface CatalogDao {
     @Query("SELECT COUNT(*) FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind")
     suspend fun itemCount(playlistId: String, kind: String): Int
 
-    @Query("SELECT COUNT(DISTINCT contentId) FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:includeAdult = 1 OR isAdult = 0)")
+    @Query("SELECT COUNT(*) FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:includeAdult = 1 OR isAdult = 0)")
     suspend fun accessibleItemCount(playlistId: String, kind: String, includeAdult: Boolean): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

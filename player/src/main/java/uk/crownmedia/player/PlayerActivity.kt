@@ -133,6 +133,8 @@ class PlayerActivity : AppCompatActivity() {
         val instance = ExoPlayer.Builder(this, renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setSeekBackIncrementMs(SEEK_INCREMENT_MS)
+            .setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
             .build()
         player = instance
         playerView.player = instance
@@ -340,7 +342,10 @@ class PlayerActivity : AppCompatActivity() {
         // TV-008: when the Media3 controller is visible/focused, let it own D-pad navigation
         // so the user can move between play/pause, seek, and back controls. Only fall back to
         // global shortcuts when the controller is hidden.
-        if (event.action == KeyEvent.ACTION_DOWN && playerView.isControllerFullyVisible) {
+        // Delegate the complete down/up pair for controller navigation. Previously only key-down
+        // reached Media3; the matching OK/Enter key-up fell through to the global play/pause
+        // shortcut, so activating ±15-second controls also paused playback.
+        if (playerControllerOwnsKey(playerView.isControllerFullyVisible, event.keyCode)) {
             return super.dispatchKeyEvent(event)
         }
         when (event.keyCode) {
@@ -387,6 +392,15 @@ class PlayerActivity : AppCompatActivity() {
         private const val STARTUP_TIMEOUT_MS = 25_000L
         private const val LIVE_REBUFFER_TIMEOUT_MS = 20_000L
         private const val STABLE_PLAYBACK_RESET_MS = 30_000L
+        internal const val SEEK_INCREMENT_MS = 15_000L
+        internal val CONTROLLER_NAVIGATION_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+        )
         private val PLAYBACK_HTTP_CLIENT = OkHttpClient.Builder()
             .dispatcher(Dispatcher().apply {
                 maxRequests = 8
@@ -433,3 +447,6 @@ class PlayerActivity : AppCompatActivity() {
             .digest(input.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
     }
 }
+
+internal fun playerControllerOwnsKey(controllerFullyVisible: Boolean, keyCode: Int): Boolean =
+    controllerFullyVisible && keyCode in PlayerActivity.CONTROLLER_NAVIGATION_KEYS
