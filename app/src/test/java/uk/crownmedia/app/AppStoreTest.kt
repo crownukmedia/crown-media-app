@@ -1,8 +1,10 @@
 package uk.crownmedia.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -122,6 +124,23 @@ class AppStoreTest {
         assertEquals("premium-user", store.savedLoginDetails(CrownService.PREMIUM)?.username)
         assertEquals("pro-user", store.savedLoginDetails(CrownService.PRO)?.username)
         assertNull(store.savedLoginDetails(CrownService.EIGHT_K))
+    }
+
+    @Test
+    fun saveLoginDefaultsOnAndPersistsAnExplicitOptOutPerService() {
+        val secureStore = FakeSecureStore()
+        val store = AppStore(secureStore)
+
+        assertTrue(store.saveLoginEnabled(CrownService.PREMIUM))
+        assertTrue(store.saveLoginEnabled(CrownService.PRO))
+
+        store.setSaveLoginEnabled(CrownService.PREMIUM, false)
+        val restored = AppStore(secureStore)
+        assertFalse(restored.saveLoginEnabled(CrownService.PREMIUM))
+        assertTrue(restored.saveLoginEnabled(CrownService.PRO))
+
+        restored.setSaveLoginEnabled(CrownService.PREMIUM, true)
+        assertTrue(AppStore(secureStore).saveLoginEnabled(CrownService.PREMIUM))
     }
 
     @Test

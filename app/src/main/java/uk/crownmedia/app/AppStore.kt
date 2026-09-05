@@ -98,7 +98,15 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
         if (service == CrownService.PREMIUM) prefs.putString(LEGACY_SAVED_LOGIN_KEY, null)
     }
 
+    fun saveLoginEnabled(service: CrownService): Boolean =
+        prefs.getString(saveLoginEnabledKey(service), null)?.toBooleanStrictOrNull() ?: true
+
+    fun setSaveLoginEnabled(service: CrownService, enabled: Boolean) {
+        prefs.putString(saveLoginEnabledKey(service), enabled.toString())
+    }
+
     private fun savedLoginKey(service: CrownService) = "saved_login_${service.name}"
+    private fun saveLoginEnabledKey(service: CrownService) = "save_login_enabled_${service.name}"
 
     private fun persistedPlaylists(): List<SavedPlaylist> = persistedPlaylistCache ?: try {
         val array = JSONArray(prefs.getString("playlists", "[]"))

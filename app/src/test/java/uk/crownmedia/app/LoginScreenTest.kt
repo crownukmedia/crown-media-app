@@ -2,6 +2,7 @@ package uk.crownmedia.app
 
 import android.view.View
 import android.widget.ImageView
+import com.google.android.material.materialswitch.MaterialSwitch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -62,6 +63,17 @@ class LoginScreenTest {
         assertEquals("Crown Premium", service.text.toString())
         assertTrue(screen.findViewById<View>(R.id.playlist_name).isEnabled)
         assertTrue(screen.findViewById<View>(R.id.connect_button).isEnabled)
+    }
+
+    @Test
+    fun mobileAutoSaveDefaultsToEnabled() {
+        assertTrue(requireNotNull(activity).findViewById<MaterialSwitch>(R.id.save_login).isChecked)
+    }
+
+    @Test
+    @Config(sdk = [28], qualifiers = "sw600dp")
+    fun tabletAutoSaveDefaultsToEnabled() {
+        assertTrue(requireNotNull(activity).findViewById<MaterialSwitch>(R.id.save_login).isChecked)
     }
 
     @Test

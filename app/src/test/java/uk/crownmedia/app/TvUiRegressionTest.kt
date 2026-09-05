@@ -701,6 +701,7 @@ class TvUiRegressionTest {
         assertTrue(save.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER)))
         assertTrue(save.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER)))
         assertFalse(save.isChecked)
+        assertFalse(loginStore.saveLoginEnabled(CrownService.PREMIUM))
         assertNull(loginStore.savedLoginDetails(CrownService.PREMIUM))
         assertFalse(qr.isEnabled)
         assertEquals(View.GONE, qr.visibility)

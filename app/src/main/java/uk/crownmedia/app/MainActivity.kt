@@ -1975,7 +1975,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
         saveLogin.setOnCheckedChangeListener { _, checked ->
-            if (!updatingLoginForm && !checked) store.saveLoginDetails(loginService, null)
+            if (!updatingLoginForm) {
+                store.setSaveLoginEnabled(loginService, checked)
+                if (!checked) store.saveLoginDetails(loginService, null)
+            }
         }
         restoreSavedLoginDetails(loginService)
         updateSelectedService()
@@ -1987,7 +1990,7 @@ class MainActivity : AppCompatActivity() {
         playlistName.setText(saved?.playlistName.orEmpty())
         username.setText(saved?.username.orEmpty())
         password.setText(saved?.password.orEmpty())
-        saveLogin.isChecked = saved != null
+        saveLogin.isChecked = store.saveLoginEnabled(service)
         updatingLoginForm = false
     }
 
@@ -2069,6 +2072,7 @@ class MainActivity : AppCompatActivity() {
                     formError.isVisible = true
                 } else {
                     analytics.trackLogin("success", service)
+                    store.setSaveLoginEnabled(service, saveLogin.isChecked)
                     if (saveLogin.isChecked) {
                         store.saveLoginDetails(
                             service,
