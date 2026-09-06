@@ -996,7 +996,7 @@ class MainActivity : AppCompatActivity() {
                 val parentalSafe = if (store.parentalPin != null && !adultSessionUnlocked()) mapped.filterNot { it.isAdult } else mapped
                 // Health affects rank only. Every stream remains directly playable, including
                 // unknown and repeatedly failed content, because provider failures can recover.
-                if (target == Section.LIVE) sort(parentalSafe, target) else parentalSafe
+                if (target == Section.LIVE) sort(parentalSafe) else parentalSafe
             }
             cards += usable
         }
@@ -1027,7 +1027,7 @@ class MainActivity : AppCompatActivity() {
             if (page.cards.isNotEmpty()) {
                 val known = state.cards.asSequence().mapTo(HashSet()) { "${it.kind}:${it.id}" }
                 val combined = state.cards + page.cards.filter { known.add("${it.kind}:${it.id}") }
-                state.cards = if (target == Section.LIVE) sort(combined, Section.LIVE) else combined
+                state.cards = if (target == Section.LIVE) sort(combined) else combined
                 if (section == target && currentCategory == categoryId) catalogAdapter.submit(state.cards)
             }
         }
@@ -1126,7 +1126,7 @@ class MainActivity : AppCompatActivity() {
                         "${it.kind}:${it.id}" in favorites
                     } else mapped
                     val parentalSafe = if (store.parentalPin != null && !adultSessionUnlocked()) selected.filterNot { it.isAdult } else selected
-                    (if (target == Section.LIVE) sort(parentalSafe, target) else parentalSafe).take(PAGE_SIZE)
+                    (if (target == Section.LIVE) sort(parentalSafe) else parentalSafe).take(PAGE_SIZE)
                 }
                 if (firstCards.isNotEmpty()) {
                     state.cards = firstCards
@@ -1864,7 +1864,7 @@ class MainActivity : AppCompatActivity() {
         section == target && sectionState(target).searchQuery.trim() == query
 
     private fun submitScopedSearchResults(target: Section, cards: List<CatalogCard>) {
-        catalogAdapter.submit(sort(cards, target)) {
+        catalogAdapter.submit(sort(cards)) {
             val restoreKey = pendingContentFocusKey
             if (restoreKey != null && cards.isNotEmpty() && section == target) {
                 pendingContentFocusKey = null
@@ -2442,16 +2442,10 @@ class MainActivity : AppCompatActivity() {
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { Toast.makeText(this, "No browser or YouTube app found", Toast.LENGTH_LONG).show() }
     }
 
-    private fun sort(cards: List<CatalogCard>, target: Section = section): List<CatalogCard> {
-        val ordered = when (store.sort) {
-            "asc" -> cards.sortedBy { it.title.lowercase() }
-            "desc" -> cards.sortedByDescending { it.title.lowercase() }
-            else -> cards
-        }
-        val playlistId = store.selected()?.id
-        return if (target == Section.LIVE && playlistId != null) {
-            prioritizeLiveCards(ordered) { streamAvailability.status(playlistId, it.id) }
-        } else ordered
+    private fun sort(cards: List<CatalogCard>): List<CatalogCard> {
+        // Stream health remains recorded for diagnostics and recovery, but it must never mutate
+        // visible channel order while a user is browsing.
+        return orderedCatalogCards(cards, store.sort)
     }
 
     private fun scheduleLiveHealthRefresh(
@@ -2471,10 +2465,10 @@ class MainActivity : AppCompatActivity() {
             lastBroadHealthSampleAt = now
         }
         healthJob?.cancel()
-        val ranked = sort(visibleCards).filter { streamAvailability.shouldProbe(playlist.id, it.id) }
+        val orderedCandidates = sort(visibleCards).filter { streamAvailability.shouldProbe(playlist.id, it.id) }
         val connectionLimit = (maximumConnections - 1).coerceIn(1, 2)
         val maximumProbes = if (connectionLimit == 1) 8 else 18
-        val leading = ranked.take(if (connectionLimit == 1) 6 else 12)
+        val leading = orderedCandidates.take(if (connectionLimit == 1) 6 else 12)
         val leadingIds = leading.mapTo(mutableSetOf()) { it.id }
         val rotationBucket = System.currentTimeMillis() / (24L * 60 * 60 * 1000)
         val categorySamples = categoryPool.asSequence()
@@ -2498,7 +2492,8 @@ class MainActivity : AppCompatActivity() {
                         }
                     }.awaitAll()
                 }
-                if (section == Section.LIVE && store.selected()?.id == playlist.id) renderCachedLive(playlist)
+                // Health observations are intentionally not rendered back into the catalog.
+                // Repainting here previously reordered active channels/categories after a probe.
             }
         }
     }
@@ -2517,7 +2512,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun renderCachedLive(playlist: SavedPlaylist) {
         val state = sectionState(Section.LIVE)
         state.cards = withContext(Dispatchers.Default) {
-            sort(state.cards, Section.LIVE)
+            sort(state.cards)
         }
         if (section == Section.LIVE) {
             if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) {
@@ -2546,74 +2541,27 @@ class MainActivity : AppCompatActivity() {
                     cache.categorySamples(playlist.id, Section.LIVE.cardKind, perCategory = 8)
                         .map { it.toCard(Section.LIVE.cardKind, favorites) }
                 }
-                val ranked = withContext(Dispatchers.Default) {
-                    displayedCategoriesRanked(
-                        playlist,
-                        providerCategories,
+                val displayed = withContext(Dispatchers.Default) {
+                    displayedCategoryList(
+                        availableCategoriesInProviderOrder(
+                            providerCategories,
+                            nonEmpty,
+                            store.catalogComplete(playlist.id, Section.LIVE.cardKind, null),
+                        ),
                         store.hiddenCategories(playlist.id),
-                        nonEmpty,
-                        sampleCards,
-                        catalogComplete = store.catalogComplete(playlist.id, Section.LIVE.cardKind, null),
                     )
                 }
                 val state = sectionState(Section.LIVE)
-                state.categories = ranked
+                state.categories = displayed
                 if (state.categories.none { it.id == state.categoryId }) state.categoryId = "all"
                 if (section == Section.LIVE) {
                     currentCategory = state.categoryId
-                    categoriesAdapter.submit(ranked, currentCategory)
+                    categoriesAdapter.submit(displayed, currentCategory)
                     loadCategoryCounts(playlist, Section.LIVE)
                     scheduleLiveHealthRefresh(playlist, visibleCards, sampleCards + visibleCards)
                 }
             }
         }
-    }
-
-    private fun displayedCategoriesRanked(
-        playlist: SavedPlaylist,
-        providerCategories: List<XtreamCategory>,
-        manuallyHidden: Set<String>,
-        nonEmptyCategories: Set<String>,
-        sampleCards: List<CatalogCard>,
-        catalogComplete: Boolean = false,
-    ): List<XtreamCategory> {
-        val playlistId = playlist.id
-        val sampleCardsByCategory = sampleCards.groupBy { it.categoryId }
-        val visibleProviderCategories = providerCategories.filter { category ->
-            // Only hide categories that are genuinely empty in a complete catalog. The SQL
-            // aggregate (nonEmptyCategories) drives this without materializing the full catalog.
-            if (!catalogComplete) true
-            else category.id in nonEmptyCategories
-        }.let { visible ->
-            val quality = sampleCardsByCategory.mapValues { (_, cards) -> categoryQuality(playlistId, cards) }
-            visible.withIndex().sortedWith(
-                compareBy<IndexedValue<XtreamCategory>> { indexed ->
-                    quality[indexed.value.id]?.healthRank ?: 3
-                }.thenBy { indexed ->
-                    quality[indexed.value.id]?.failureWeight ?: Int.MAX_VALUE
-                }.thenBy { it.index }
-            ).map { it.value }
-        }
-        return displayedCategoryList(visibleProviderCategories, manuallyHidden)
-    }
-
-    private fun categoryQuality(playlistId: String, cards: List<CatalogCard>): CategoryQuality {
-        val statuses = cards.map { streamAvailability.status(playlistId, it.id) }
-        val healthRank = when {
-            StreamAvailability.Status.HEALTHY in statuses -> 0
-            StreamAvailability.Status.UNKNOWN in statuses -> 1
-            StreamAvailability.Status.TEMPORARILY_FAILED in statuses -> 2
-            else -> 3
-        }
-        val weight = statuses.fold(0) { total, status -> total +
-            when (status) {
-                StreamAvailability.Status.REPEATEDLY_FAILED -> 2
-                StreamAvailability.Status.TEMPORARILY_FAILED -> 1
-                else -> 0
-            }
-        }
-        val failureWeight = if (statuses.isEmpty()) Int.MAX_VALUE else weight * 100 / (statuses.size * 2)
-        return CategoryQuality(healthRank, failureWeight)
     }
 
     private fun XtreamItem.toCard(kind: String, favorites: Set<String>): CatalogCard {
@@ -2772,7 +2720,6 @@ class MainActivity : AppCompatActivity() {
         HOME("", "", "Home"), LIVE("live", "live", "Live TV"), MOVIES("vod", "movie", "Movies"), SERIES("series", "series", "Series"), SEARCH("", "", "Search")
     }
 
-    private data class CategoryQuality(val healthRank: Int, val failureWeight: Int)
 
     private data class SeriesDetailState(
         val card: CatalogCard,
