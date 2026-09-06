@@ -33,6 +33,7 @@ data class CatalogCard(
     val localArtwork: Int? = null,
     val healthHint: Int = 0,
     val isAdult: Boolean = false,
+    val catchUpDays: Int = 0,
 )
 
 internal fun CatalogCard.preferredArtworkSource(): Any {

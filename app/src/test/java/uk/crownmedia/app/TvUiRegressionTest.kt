@@ -79,14 +79,14 @@ class TvUiRegressionTest {
     }
 
     @Test
-    fun homeUsesBalancedThreeByTwoCompositionAndPersistentSelection() {
+    fun homeUsesBalancedThreeColumnCompositionAndPersistentSelection() {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val sideNav = activity.findViewById<View>(R.id.side_nav)
 
         shadowOf(Looper.getMainLooper()).idle()
 
         assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
-        assertEquals(6, grid.adapter?.itemCount)
+        assertEquals(9, grid.adapter?.itemCount)
         assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
         assertEquals(dp(88), sideNav.layoutParams.width)
         assertTrue(grid.hasFocus())
@@ -104,12 +104,64 @@ class TvUiRegressionTest {
                 R.drawable.home_live_icon,
                 R.drawable.home_movies_icon,
                 R.drawable.home_series_icon,
+                R.drawable.home_epg_icon,
+                R.drawable.home_favorites_icon,
+                R.drawable.home_catch_up_icon,
                 R.drawable.home_account_icon,
                 R.drawable.home_reload_icon,
                 R.drawable.home_playlist_icon,
             ),
             adapter.currentItems.map { it.localArtwork },
         )
+    }
+
+    @Test
+    fun newHomeTilesUseExistingTvCategoryAndContentNavigationStructure() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val adapter = grid.adapter as CatalogAdapter
+        val openCard = MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply { isAccessible = true }
+
+        listOf(
+            "epg" to "EPG / TV Guide",
+            "favorites" to "Favourites",
+            "catch_up" to "Catch Up",
+        ).forEach { (id, title) ->
+            openCard.invoke(activity, requireNotNull(adapter.currentItems.firstOrNull { it.id == id }))
+            assertEquals(title, activity.findViewById<TextView>(R.id.screen_title).text.toString())
+            assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_bar).visibility)
+            assertEquals(R.id.category_list, activity.findViewById<View>(R.id.content_grid).nextFocusLeftId)
+            activity.findViewById<View>(R.id.nav_home).performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+    }
+
+    @Test
+    fun favouritesTileUsesExistingStoreAndGroupsAllThreeContentKinds() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        listOf("live", "movie", "series").forEach { kind ->
+            cache.saveCategories(playlist.id, kind, listOf(uk.crownmedia.data.xtream.XtreamCategory("test", "Test category")))
+            cache.saveItems(playlist.id, kind, null, listOf(searchItem("$kind-favourite", "$kind favourite").copy(extension = if (kind == "live") "ts" else "mp4")))
+            testStore.markCatalogRefreshed(playlist.id, kind, null)
+            testStore.toggleFavorite(playlist.id, "$kind:$kind-favourite")
+        }
+        MainActivity::class.java.getDeclaredMethod("showHome").apply { isAccessible = true; invoke(activity) }
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val homeAdapter = grid.adapter as CatalogAdapter
+        MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply {
+            isAccessible = true
+            invoke(activity, requireNotNull(homeAdapter.currentItems.firstOrNull { it.id == "favorites" }))
+        }
+
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.size != 3 && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
+
+        assertEquals("Favourites", activity.findViewById<TextView>(R.id.screen_title).text.toString())
+        assertEquals(setOf("live", "movie", "series"), (grid.adapter as CatalogAdapter).currentItems.map { it.kind }.toSet())
+        assertEquals(7, requireNotNull(activity.findViewById<RecyclerView>(R.id.category_list).adapter).itemCount)
     }
 
     @Test

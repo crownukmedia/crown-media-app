@@ -67,6 +67,7 @@ import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamCategory
 import uk.crownmedia.data.xtream.XtreamClient
 import uk.crownmedia.data.xtream.XtreamItem
+import uk.crownmedia.data.xtream.XtreamProgramme
 import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import uk.crownmedia.data.xtream.preferredLiveExtension
 import uk.crownmedia.player.PlayerActivity
@@ -133,6 +134,7 @@ class MainActivity : AppCompatActivity() {
     private var tvNavigationAnimator: ValueAnimator? = null
     private val tvNavigationLabels = mutableMapOf<Int, CharSequence>()
     private val pendingTvFocusMoves = mutableSetOf<Int>()
+    private val epgCache = mutableMapOf<String, List<XtreamProgramme>>()
 
     override fun attachBaseContext(newBase: Context) {
         detectedDeviceClass = newBase.deviceClass()
@@ -183,7 +185,7 @@ class MainActivity : AppCompatActivity() {
                 } else if (section == Section.SEARCH) {
                     hideKeyboard()
                     open(Section.HOME)
-                } else if (section in PAGED_SECTIONS) {
+                } else if (section in PAGED_SECTIONS || section in FEATURE_SECTIONS) {
                     open(Section.HOME)
                 } else {
                     confirmExit()
@@ -272,9 +274,11 @@ class MainActivity : AppCompatActivity() {
         contentLayoutManager.initialPrefetchItemCount = 8
         binding.contentGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                if (dy <= 0 || section !in PAGED_SECTIONS) return
+                if (dy <= 0 || section !in (PAGED_SECTIONS + PAGINATED_FEATURE_SECTIONS)) return
                 val lastVisible = contentLayoutManager.findLastVisibleItemPosition()
-                if (lastVisible >= catalogAdapter.itemCount - PREFETCH_DISTANCE) loadNextPage()
+                if (lastVisible >= catalogAdapter.itemCount - PREFETCH_DISTANCE) {
+                    if (section in PAGED_SECTIONS) loadNextPage() else loadNextFeaturePage()
+                }
             }
         })
         binding.categoryList.setHasFixedSize(true)
@@ -314,7 +318,7 @@ class MainActivity : AppCompatActivity() {
                 if (
                     event.action == KeyEvent.ACTION_DOWN &&
                     keyCode == KeyEvent.KEYCODE_DPAD_LEFT &&
-                    section in PAGED_SECTIONS &&
+                    section in CATEGORY_SECTIONS &&
                     binding.categoryList.isVisible &&
                     categoriesAdapter.itemCount > 0
                 ) {
@@ -355,7 +359,7 @@ class MainActivity : AppCompatActivity() {
                 if (
                     event.action == KeyEvent.ACTION_DOWN &&
                     keyCode == KeyEvent.KEYCODE_DPAD_RIGHT &&
-                    section in PAGED_SECTIONS &&
+                    section in CATEGORY_SECTIONS &&
                     binding.categoryBar.isVisible &&
                     categoriesAdapter.itemCount > 0
                 ) {
@@ -400,8 +404,8 @@ class MainActivity : AppCompatActivity() {
     private fun focusCurrentSectionContent() {
         when {
             binding.contentGrid.isVisible && catalogAdapter.itemCount > 0 -> restoreCardFocus(sectionState(section).focusedCardKey)
-            section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(activeCategoryFocusId())
-            section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
+            section in CATEGORY_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(activeCategoryFocusId())
+            section in CATEGORY_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
             section == Section.SEARCH -> binding.searchBox.requestFocus()
             binding.searchBox.isVisible -> binding.searchBox.requestFocus()
             binding.stateAction.isVisible -> binding.stateAction.requestFocus()
@@ -421,7 +425,7 @@ class MainActivity : AppCompatActivity() {
             catalogAdapter.itemCount,
             contentLayoutManager.spanCount,
             keyCode,
-            section in PAGED_SECTIONS && binding.categoryBar.isVisible,
+            section in CATEGORY_SECTIONS && binding.categoryBar.isVisible,
             binding.searchRow.isVisible,
         )
         when (move.region) {
@@ -666,18 +670,21 @@ class MainActivity : AppCompatActivity() {
         binding.actionMore.isVisible = !television && value != Section.SEARCH
         binding.actionReload.isVisible = !television
         binding.actionPlaylist.isVisible = !television
-        setCategoryNavigationVisible(value != Section.HOME && value != Section.SEARCH)
+        setCategoryNavigationVisible(value in CATEGORY_SECTIONS)
         binding.screenTitle.text = when (value) {
             Section.HOME -> "Welcome to Crown Media"
             Section.LIVE -> "Live TV"
             Section.MOVIES -> "Movies"
             Section.SERIES -> "Series"
             Section.SEARCH -> "Search"
+            Section.EPG -> "EPG / TV Guide"
+            Section.FAVORITES -> "Favourites"
+            Section.CATCH_UP -> "Catch Up"
         }
         binding.screenSubtitle.text = store.selected()?.name ?: "Your world. One screen."
         updateSelectedNavigation(value)
         configureTvPresentation(value)
-        if (changingTopLevelSection && value in PAGED_SECTIONS) {
+        if (changingTopLevelSection && value in CATEGORY_SECTIONS) {
             // Keep the previous route hidden until AsyncListDiffer commits the destination rows.
             // Showing the destination loader here prevents Home/last-section cards flashing while
             // the background diff is still replacing them.
@@ -696,6 +703,8 @@ class MainActivity : AppCompatActivity() {
             }
         } else if (value == Section.HOME) {
             showHome()
+        } else if (value in FEATURE_SECTIONS) {
+            loadFeatureSection()
         } else if (state.cards.isNotEmpty()) {
             if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) searchCategory(value, state.searchQuery)
             else renderSectionState(state, restoreScroll = true)
@@ -708,7 +717,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateSelectedNavigation(value: Section) {
-        binding.navHome.isSelected = value == Section.HOME
+        binding.navHome.isSelected = value == Section.HOME || value in FEATURE_SECTIONS
         binding.navLive.isSelected = value == Section.LIVE
         binding.navMovies.isSelected = value == Section.MOVIES
         binding.navSeries.isSelected = value == Section.SERIES
@@ -738,13 +747,13 @@ class MainActivity : AppCompatActivity() {
         binding.categoryMenuButton.nextFocusDownId = binding.categoryList.id
         binding.categoryList.nextFocusLeftId = activeNav.id
         binding.categoryList.nextFocusRightId = binding.contentGrid.id
-        binding.contentGrid.nextFocusLeftId = if (value in PAGED_SECTIONS) binding.categoryList.id else activeNav.id
+        binding.contentGrid.nextFocusLeftId = if (value in CATEGORY_SECTIONS) binding.categoryList.id else activeNav.id
         binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.searchBox.id else binding.topBar.id
         binding.searchBox.nextFocusLeftId = activeNav.id
         binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.contentGrid.id
         binding.actionSearchClear.nextFocusLeftId = binding.searchBox.id
         binding.actionSearchClear.nextFocusDownId = binding.contentGrid.id
-        binding.stateAction.nextFocusLeftId = if (value in PAGED_SECTIONS) binding.categoryList.id else activeNav.id
+        binding.stateAction.nextFocusLeftId = if (value in CATEGORY_SECTIONS) binding.categoryList.id else activeNav.id
     }
 
     private fun navigationView(value: Section): View = when (value) {
@@ -753,12 +762,14 @@ class MainActivity : AppCompatActivity() {
         Section.MOVIES -> binding.navMovies
         Section.SERIES -> binding.navSeries
         Section.SEARCH -> binding.navSearch
+        Section.EPG, Section.FAVORITES, Section.CATCH_UP -> binding.navHome
     }
 
     private fun load(force: Boolean = false) {
         val playlist = store.selected() ?: run { showWelcome(); return }
         if (section == Section.HOME) { showHome(); return }
         if (section == Section.SEARCH) { search(binding.searchBox.text.toString()); return }
+        if (section in FEATURE_SECTIONS) { loadFeatureSection(); return }
         val target = section
         val state = sectionState(target)
         if (force && state.cards.isNotEmpty()) {
@@ -855,7 +866,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showCategoryMenu() {
-        if (section !in PAGED_SECTIONS || nestedSeries != null || isFinishing) return
+        if (section !in CATEGORY_SECTIONS || nestedSeries != null || isFinishing) return
         val choices = sectionState(section).categories
         if (choices.isEmpty()) {
             Toast.makeText(this, "No categories available", Toast.LENGTH_SHORT).show()
@@ -897,6 +908,7 @@ class MainActivity : AppCompatActivity() {
         searchWarmJob = null
         searchWarmCompletedFor = null
         masterSearchQuery = ""
+        epgCache.clear()
         activePlaylistId = playlistId
         updateCountNavigation()
     }
@@ -906,7 +918,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun captureSectionState() {
         if (nestedSeries != null) return
-        if (section !in PAGED_SECTIONS && section != Section.HOME) return
+        if (section !in CATEGORY_SECTIONS && section != Section.HOME) return
         sectionState(section).apply {
             categoryId = currentCategory
             scrollState = binding.contentGrid.layoutManager?.onSaveInstanceState()
@@ -916,12 +928,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderSectionState(state: SectionState, restoreScroll: Boolean) {
-        if (section in PAGED_SECTIONS && sectionStates[section] !== state) return
+        if (section in CATEGORY_SECTIONS && sectionStates[section] !== state) return
         val target = section
         categoriesAdapter.submit(state.categories, state.categoryId) {
             if (restoreScroll) state.categoryScrollState?.let { binding.categoryList.layoutManager?.onRestoreInstanceState(it) }
         }
-        store.selected()?.let { loadCategoryCounts(it, target) }
+        if (target in PAGED_SECTIONS) store.selected()?.let { loadCategoryCounts(it, target) }
         catalogAdapter.submit(state.cards) {
             if (section != target || sectionStates[target] !== state) return@submit
             val revealDestination = reveal@{
@@ -939,7 +951,7 @@ class MainActivity : AppCompatActivity() {
                 binding.contentGrid.postOnAnimation { revealDestination() }
             } else revealDestination()
         }
-        if (section in PAGED_SECTIONS && isTelevisionLayout()) {
+        if (section in CATEGORY_SECTIONS && isTelevisionLayout()) {
             binding.screenSubtitle.text = "${store.selected()?.name.orEmpty()}  •  ${getString(R.string.tv_content_hint)}"
         }
     }
@@ -1216,6 +1228,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hideCategory(category: XtreamCategory) {
+        if (section in FEATURE_SECTIONS) return
         if (category.id == "all" || category.id == "favorites") return
         val playlist = store.selected() ?: return
         AlertDialog.Builder(this).setTitle("Hide ${category.name}?")
@@ -1245,6 +1258,9 @@ class MainActivity : AppCompatActivity() {
             CatalogCard("live", "home", "Live TV", null, "${countState(Section.LIVE).homeDescription("channels")} • EPG & catch-up", "WATCH", localArtwork = R.drawable.home_live_icon),
             CatalogCard("movies", "home", "Movies", null, "${countState(Section.MOVIES).homeDescription("movies")} • Details & resume", "EXPLORE", localArtwork = R.drawable.home_movies_icon),
             CatalogCard("series", "home", "Series", null, "${countState(Section.SERIES).homeDescription("series")} • Seasons & episodes", "BINGE", localArtwork = R.drawable.home_series_icon),
+            CatalogCard("epg", "home", "EPG / TV Guide", null, "Current and upcoming Live TV programmes", "GUIDE", localArtwork = R.drawable.home_epg_icon),
+            CatalogCard("favorites", "home", "Favourites", null, "Live TV, movies and series in one place", "SAVED", localArtwork = R.drawable.home_favorites_icon),
+            CatalogCard("catch_up", "home", "Catch Up", null, "Provider TV archive and replay", "REPLAY", localArtwork = R.drawable.home_catch_up_icon),
             CatalogCard("account", "home", "${p.name} account", null, "${p.status} • $expiry", "ACTIVE", localArtwork = R.drawable.home_account_icon),
             CatalogCard("reload", "home", "Reload content", null, "Refresh provider catalogs", "SYNC", localArtwork = R.drawable.home_reload_icon),
             CatalogCard("playlist", "home", "Change playlist", null, "${store.playlists().size} playlist(s)", "SWITCH", localArtwork = R.drawable.home_playlist_icon),
@@ -1257,6 +1273,293 @@ class MainActivity : AppCompatActivity() {
                 binding.contentGrid.post { tvNavigationFocusEnabled = true }
             }
         }
+    }
+
+    /** Reuses the existing category rail and catalog grid for the three v0.4 destinations. */
+    private fun loadFeatureSection() {
+        val playlist = store.selected() ?: return
+        val target = section.takeIf { it in FEATURE_SECTIONS } ?: return
+        val state = sectionState(target)
+        val requestedCategory = state.categoryId
+        val requestGeneration = ++contentRequestGeneration
+        loadJob?.cancel()
+        showState(getString(R.string.loading), "", true, false, keepCategories = true)
+        loadJob = lifecycleScope.launch {
+            runCatching {
+                ensureFeatureCatalogs(playlist, target)
+                when (target) {
+                    Section.EPG -> loadEpgFeature(playlist, state, requestedCategory)
+                    Section.FAVORITES -> loadFavoritesFeature(playlist, state, requestedCategory)
+                    Section.CATCH_UP -> loadCatchUpFeature(playlist, state, requestedCategory)
+                    else -> error("Unsupported feature section")
+                }
+            }.onFailure { error ->
+                if (error !is CancellationException && section == target && requestGeneration == contentRequestGeneration) {
+                    showFailure(error)
+                }
+            }
+        }
+    }
+
+    private suspend fun ensureFeatureCatalogs(playlist: SavedPlaylist, target: Section) {
+        val requiredKinds = when (target) {
+            Section.EPG, Section.CATCH_UP -> listOf("live")
+            Section.FAVORITES -> store.favorites(playlist.id)
+                .mapNotNull { key -> key.substringBefore(':').takeIf { it in setOf("live", "movie", "series") } }
+                .distinct()
+            else -> emptyList()
+        }
+        coroutineScope {
+            requiredKinds.filterNot { store.catalogComplete(playlist.id, it, null) }
+                .map { kind -> async { awaitCatalogWarmResult(playlist, kind).getOrThrow() } }
+                .awaitAll()
+        }
+    }
+
+    private suspend fun loadEpgFeature(playlist: SavedPlaylist, state: SectionState, requestedCategory: String) {
+        val includeAdult = store.parentalPin == null || adultSessionUnlocked()
+        val providerCategories = cache.categories(playlist.id, Section.LIVE.cardKind)
+        val available = cache.accessibleCategoryCounts(playlist.id, Section.LIVE.cardKind, includeAdult)
+        val categories = displayedCategoryList(
+            providerCategories = availableCategoriesInProviderOrder(
+                providerCategories,
+                available.keys,
+                store.catalogComplete(playlist.id, Section.LIVE.cardKind, null),
+            ),
+            hiddenIds = store.hiddenCategories(playlist.id),
+            includeFavorites = false,
+        )
+        val selected = requestedCategory.takeIf { id -> categories.any { it.id == id } } ?: "all"
+        val items = cache.accessibleItemPage(
+            playlist.id,
+            Section.LIVE.cardKind,
+            selected.takeUnless { it == "all" },
+            includeAdult,
+            FEATURE_PAGE_SIZE,
+            0,
+            store.sort,
+        )
+        val favorites = store.favorites(playlist.id)
+        val initialCards = items.map { item ->
+            item.toCard(Section.LIVE.cardKind, favorites).copy(meta = getString(R.string.loading_programme_guide))
+        }
+        publishFeatureState(state, categories, selected, initialCards, available)
+        state.nextOffset = items.size
+        state.endReached = items.size < FEATURE_PAGE_SIZE
+
+        val limiter = Semaphore(EPG_CONCURRENCY)
+        val guides = coroutineScope {
+            items.map { item ->
+                async {
+                    limiter.withPermit {
+                        item.id to epgFor(playlist, item.id)
+                    }
+                }
+            }.awaitAll().toMap()
+        }
+        if (section != Section.EPG || sectionState(Section.EPG) !== state || state.categoryId != selected) return
+        state.cards = items.map { item ->
+            val guide = guides[item.id].orEmpty()
+            val card = item.toCard(Section.LIVE.cardKind, favorites)
+            card.copy(
+                meta = epgSummary(guide, playlist.serverTimezone),
+                badge = if (guide.any(::isCurrentProgramme)) getString(R.string.now).uppercase(java.util.Locale.ROOT) else card.badge,
+            )
+        }
+        renderSectionState(state, restoreScroll = false)
+    }
+
+    private suspend fun loadFavoritesFeature(playlist: SavedPlaylist, state: SectionState, requestedCategory: String) {
+        val favoriteKeys = store.favorites(playlist.id)
+        val includeAdult = store.parentalPin == null || adultSessionUnlocked()
+        val kindLabels = linkedMapOf("live" to "Live TV", "movie" to "Movies", "series" to "Series")
+        val categoryNames = kindLabels.keys.associateWith { kind ->
+            cache.categories(playlist.id, kind).associate { it.id to it.name }
+        }
+        val itemsByKind = kindLabels.keys.associateWith { kind ->
+            val ids = favoriteKeys.asSequence()
+                .filter { it.startsWith("$kind:") }
+                .map { it.substringAfter(':') }
+                .toList()
+            cache.favoriteItemPage(playlist.id, kind, ids, FEATURE_FAVORITES_LIMIT, 0, store.sort)
+                .filterNot { it.isAdult && !includeAdult }
+        }
+        val categories = buildList {
+            add(XtreamCategory("all", "All favourites"))
+            kindLabels.forEach { (kind, label) ->
+                val values = itemsByKind[kind].orEmpty()
+                if (values.isNotEmpty()) add(XtreamCategory("favorite:$kind", label))
+                values.map { it.categoryId }.distinct().forEach categoryLoop@{ categoryId ->
+                    val name = categoryNames[kind]?.get(categoryId) ?: return@categoryLoop
+                    add(XtreamCategory("favorite:$kind:$categoryId", "$label — $name"))
+                }
+            }
+        }
+        val selected = requestedCategory.takeIf { id -> categories.any { it.id == id } } ?: "all"
+        val selectedParts = selected.split(':', limit = 3)
+        val cards = kindLabels.keys.flatMap { kind ->
+            itemsByKind[kind].orEmpty()
+                .asSequence()
+                .filter { selected == "all" || (selectedParts.getOrNull(1) == kind && (selectedParts.size < 3 || it.categoryId == selectedParts[2])) }
+                .map { it.toCard(kind, favoriteKeys) }
+                .toList()
+        }
+        val counts = categories.associate { category ->
+            category.id to when {
+                category.id == "all" -> cards.size.takeIf { selected == "all" } ?: itemsByKind.values.sumOf(List<XtreamItem>::size)
+                category.id.count { it == ':' } == 1 -> itemsByKind[category.id.substringAfter(':')].orEmpty().size
+                else -> {
+                    val parts = category.id.split(':', limit = 3)
+                    itemsByKind[parts[1]].orEmpty().count { it.categoryId == parts[2] }
+                }
+            }
+        }
+        publishFeatureState(state, categories, selected, cards, counts)
+    }
+
+    private fun loadNextFeaturePage() {
+        val target = section.takeIf { it in PAGINATED_FEATURE_SECTIONS } ?: return
+        val state = sectionState(target)
+        if (state.loadingPage || state.endReached) return
+        val playlist = store.selected() ?: return
+        val category = state.categoryId.takeUnless { it == "all" }
+        state.loadingPage = true
+        binding.pageProgress.isVisible = true
+        lifecycleScope.launch {
+            try {
+                val includeAdult = store.parentalPin == null || adultSessionUnlocked()
+                val items = when (target) {
+                    Section.EPG -> cache.accessibleItemPage(playlist.id, "live", category, includeAdult, FEATURE_PAGE_SIZE, state.nextOffset, store.sort)
+                    Section.CATCH_UP -> cache.catchUpItemPage(playlist.id, category, includeAdult, FEATURE_PAGE_SIZE, state.nextOffset)
+                    else -> emptyList()
+                }
+                if (section != target || state.categoryId.takeUnless { it == "all" } != category) return@launch
+                val favorites = store.favorites(playlist.id)
+                val nextCards = if (target == Section.EPG) {
+                    val limiter = Semaphore(EPG_CONCURRENCY)
+                    val guides = coroutineScope {
+                        items.map { item -> async { limiter.withPermit { item.id to epgFor(playlist, item.id) } } }.awaitAll().toMap()
+                    }
+                    items.map { item ->
+                        val card = item.toCard("live", favorites)
+                        val guide = guides[item.id].orEmpty()
+                        card.copy(
+                            meta = epgSummary(guide, playlist.serverTimezone),
+                            badge = if (guide.any(::isCurrentProgramme)) getString(R.string.now).uppercase(java.util.Locale.ROOT) else card.badge,
+                        )
+                    }
+                } else {
+                    items.map { item ->
+                        item.toCard("live", favorites).copy(
+                            meta = resources.getQuantityString(R.plurals.catch_up_days_available, item.catchUpDays, item.catchUpDays),
+                            badge = getString(R.string.catch_up_badge),
+                        )
+                    }
+                }
+                state.cards = state.cards + nextCards
+                state.nextOffset += items.size
+                state.endReached = items.size < FEATURE_PAGE_SIZE
+                catalogAdapter.submit(state.cards)
+            } finally {
+                state.loadingPage = false
+                if (section == target) binding.pageProgress.isVisible = false
+            }
+        }
+    }
+
+    private suspend fun loadCatchUpFeature(playlist: SavedPlaylist, state: SectionState, requestedCategory: String) {
+        val includeAdult = store.parentalPin == null || adultSessionUnlocked()
+        val counts = cache.catchUpCategoryCounts(playlist.id, includeAdult)
+        val providerCategories = cache.categories(playlist.id, Section.LIVE.cardKind)
+        val categories = displayedCategoryList(
+            providerCategories = providerCategories.filter { it.id in counts },
+            hiddenIds = store.hiddenCategories(playlist.id),
+            includeFavorites = false,
+        )
+        val selected = requestedCategory.takeIf { id -> categories.any { it.id == id } } ?: "all"
+        val items = cache.catchUpItemPage(
+            playlist.id,
+            selected.takeUnless { it == "all" },
+            includeAdult,
+            FEATURE_PAGE_SIZE,
+            0,
+        )
+        val favorites = store.favorites(playlist.id)
+        val cards = items.map { item ->
+            item.toCard(Section.LIVE.cardKind, favorites).copy(
+                meta = resources.getQuantityString(R.plurals.catch_up_days_available, item.catchUpDays, item.catchUpDays),
+                badge = getString(R.string.catch_up_badge),
+            )
+        }
+        publishFeatureState(state, categories, selected, cards, counts)
+        state.endReached = items.size < FEATURE_PAGE_SIZE
+    }
+
+    private fun publishFeatureState(
+        state: SectionState,
+        categories: List<XtreamCategory>,
+        selected: String,
+        cards: List<CatalogCard>,
+        counts: Map<String, Int>,
+    ) {
+        if (section !in FEATURE_SECTIONS || sectionStates[section] !== state) return
+        state.categories = categories
+        state.categoryId = selected
+        state.cards = cards
+        state.nextOffset = cards.size
+        state.endReached = true
+        currentCategory = selected
+        categoriesAdapter.updateCounts(counts)
+        if (cards.isEmpty()) {
+            categoriesAdapter.submit(categories, selected)
+            catalogAdapter.submit(emptyList())
+            showState(
+                getString(R.string.no_content_available),
+                getString(
+                    when (section) {
+                        Section.EPG -> R.string.no_epg_channels
+                        Section.FAVORITES -> R.string.no_favourites
+                        Section.CATCH_UP -> R.string.no_catch_up_channels
+                        else -> R.string.no_content_available
+                    },
+                ),
+                false,
+                false,
+                keepCategories = true,
+            )
+        } else renderSectionState(state, restoreScroll = false)
+    }
+
+    private suspend fun epgFor(playlist: SavedPlaylist, streamId: String): List<XtreamProgramme> {
+        val key = "${playlist.id}:$streamId"
+        epgCache[key]?.let { return it }
+        return runCatching { api.shortEpg(playlist.credentials, streamId, EPG_ENTRY_LIMIT) }
+            .getOrDefault(emptyList())
+            .also { epgCache[key] = it }
+    }
+
+    private fun epgSummary(entries: List<XtreamProgramme>, providerTimezone: String?): String {
+        val now = System.currentTimeMillis() / 1000
+        val current = entries.firstOrNull(::isCurrentProgramme)
+        val next = entries.firstOrNull { (it.startTimestamp ?: Long.MIN_VALUE) > now }
+        if (current == null && next == null) return getString(R.string.epg_unavailable)
+        return listOfNotNull(
+            current?.let { "${getString(R.string.now)} ${programmeTime(it.startTimestamp, providerTimezone)}  ${it.title}" },
+            next?.let { "${getString(R.string.next)} ${programmeTime(it.startTimestamp, providerTimezone)}  ${it.title}" },
+        ).joinToString("  •  ")
+    }
+
+    private fun isCurrentProgramme(programme: XtreamProgramme): Boolean {
+        val start = programme.startTimestamp ?: return false
+        val stop = programme.stopTimestamp ?: return false
+        return System.currentTimeMillis() / 1000 in start until stop
+    }
+
+    private fun programmeTime(epochSeconds: Long?, providerTimezone: String?): String {
+        val value = epochSeconds ?: return ""
+        val formatter = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+        val zone = runCatching { java.time.ZoneId.of(providerTimezone) }.getOrDefault(java.time.ZoneId.systemDefault())
+        return java.time.Instant.ofEpochSecond(value).atZone(zone).format(formatter)
     }
 
     private fun countState(target: Section): ContentCountState =
@@ -1445,12 +1748,19 @@ class MainActivity : AppCompatActivity() {
                 "live" -> openFromNavigation(Section.LIVE)
                 "movies" -> openFromNavigation(Section.MOVIES)
                 "series" -> openFromNavigation(Section.SERIES)
+                "epg" -> open(Section.EPG)
+                "favorites" -> open(Section.FAVORITES)
+                "catch_up" -> open(Section.CATCH_UP)
                 "account" -> showAccount(); "reload" -> refreshAllCatalogs(); "playlist" -> showPlaylists()
             }; return
         }
         analytics.trackContentOpened(card.kind)
         when (card.kind) {
-            "live" -> play(card, live = true)
+            "live" -> when (section) {
+                Section.EPG -> showEpg(card)
+                Section.CATCH_UP -> showCatchUp(card)
+                else -> play(card, live = true)
+            }
             "movie" -> showMovie(card)
             "series" -> showSeries(card)
             "episode" -> play(card, live = false)
@@ -1524,7 +1834,7 @@ class MainActivity : AppCompatActivity() {
         detailJob?.cancel()
         detailJob = lifecycleScope.launch {
             runCatching { api.movieInfo(playlist.credentials, card.id) }.onSuccess { movie ->
-                if (section !in setOf(Section.MOVIES, Section.SEARCH) || store.selected()?.id != playlist.id) return@onSuccess
+                if (section !in setOf(Section.MOVIES, Section.SEARCH, Section.FAVORITES) || store.selected()?.id != playlist.id) return@onSuccess
                 hideState()
                 val message = listOfNotNull(
                     listOfNotNull(movie.year, movie.rating?.let { "★ $it" }, movie.duration, movie.genre).joinToString("  •  ").takeIf(String::isNotBlank),
@@ -1537,10 +1847,13 @@ class MainActivity : AppCompatActivity() {
                 builder
                     .setPositiveButton("Play") { _, _ -> play(card.copy(extension = movie.extension), false) }
                     .setNeutralButton(if (movie.trailer.isNullOrBlank()) "Favorite" else "Trailer") { _, _ ->
-                        movie.trailer?.takeIf { it.isNotBlank() }?.let(::openTrailer) ?: store.toggleFavorite(playlist.id, "movie:${card.id}")
+                        movie.trailer?.takeIf { it.isNotBlank() }?.let(::openTrailer) ?: run {
+                            store.toggleFavorite(playlist.id, "movie:${card.id}")
+                            if (section == Section.FAVORITES) loadFeatureSection()
+                        }
                     }.setNegativeButton("Close", null).showCrown()
             }.onFailure { error ->
-                if (error !is CancellationException && section in setOf(Section.MOVIES, Section.SEARCH)) {
+                if (error !is CancellationException && section in setOf(Section.MOVIES, Section.SEARCH, Section.FAVORITES)) {
                     showOperationFailure(error) { showMovie(card) }
                 }
             }
@@ -1553,10 +1866,10 @@ class MainActivity : AppCompatActivity() {
         detailJob?.cancel()
         detailJob = lifecycleScope.launch {
             runCatching { api.seriesInfo(playlist.credentials, card.id) }.onSuccess { details ->
-                if (section !in setOf(Section.SERIES, Section.SEARCH) || store.selected()?.id != playlist.id) return@onSuccess
+                if (section !in setOf(Section.SERIES, Section.SEARCH, Section.FAVORITES) || store.selected()?.id != playlist.id) return@onSuccess
                 showSeriesOverview(card, details)
             }.onFailure { error ->
-                if (error !is CancellationException && section in setOf(Section.SERIES, Section.SEARCH)) {
+                if (error !is CancellationException && section in setOf(Section.SERIES, Section.SEARCH, Section.FAVORITES)) {
                     showOperationFailure(error) { showSeries(card) }
                 }
             }
@@ -1643,6 +1956,11 @@ class MainActivity : AppCompatActivity() {
             setCategoryNavigationVisible(false)
             bindSearchBox(Section.SEARCH)
             search(masterSearchQuery)
+        } else if (origin == Section.FAVORITES) {
+            binding.screenTitle.text = getString(R.string.favourites)
+            binding.screenSubtitle.text = store.selected()?.name.orEmpty()
+            setCategoryNavigationVisible(true)
+            loadFeatureSection()
         } else {
             binding.screenTitle.text = "Series"
             binding.screenSubtitle.text = store.selected()?.name.orEmpty()
@@ -1665,25 +1983,81 @@ class MainActivity : AppCompatActivity() {
         val playlist = store.selected() ?: return
         detailJob?.cancel()
         detailJob = lifecycleScope.launch {
-            runCatching { api.shortEpg(playlist.credentials, card.id) }.onSuccess { entries ->
-                if (section != Section.LIVE || store.selected()?.id != playlist.id) return@onSuccess
-                val labels = entries.map { "${it.start.orEmpty()}  ${it.title}\n${it.description.orEmpty()}" }.toTypedArray()
-                AlertDialog.Builder(this@MainActivity).setTitle("${card.title} programme guide")
+            runCatching { epgFor(playlist, card.id) }.onSuccess { entries ->
+                if (section !in setOf(Section.LIVE, Section.EPG) || store.selected()?.id != playlist.id) return@onSuccess
+                val labels = entries.map { entry ->
+                    "${entry.start.orEmpty()}–${entry.end.orEmpty()}  ${entry.title}\n${entry.description.orEmpty()}"
+                }.toTypedArray()
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("${card.title} programme guide")
                     .setItems(if (labels.isEmpty()) arrayOf("No EPG supplied") else labels) { _, which ->
                         val entry = entries.getOrNull(which) ?: return@setItems
                         val startTimestamp = entry.startTimestamp
                         val stopTimestamp = entry.stopTimestamp
-                        if (card.badge.contains("CATCH", true) && startTimestamp != null && stopTimestamp != null) {
-                            val duration = ((stopTimestamp - startTimestamp) / 60).toInt().coerceAtLeast(1)
-                            val start = formatCatchUpStart(startTimestamp, playlist.serverTimezone)
-                            val url = api.catchUpUrl(playlist.credentials, card.id, start, duration)
-                            startActivity(PlayerActivity.internalIntent(this@MainActivity, url, entry.title, false, store.buffer))
-                        }
-                    }.setNegativeButton("Close", null).showCrown()
+                        if (
+                            card.catchUpDays > 0 && startTimestamp != null && stopTimestamp != null &&
+                            stopTimestamp <= System.currentTimeMillis() / 1000
+                        ) playCatchUp(playlist, card, entry)
+                        else play(card, live = true)
+                    }
+                    .setPositiveButton(R.string.play_channel) { _, _ -> play(card, live = true) }
+                    .setNegativeButton("Close", null)
+                    .showCrown()
             }.onFailure { error ->
-                if (error !is CancellationException && section == Section.LIVE) showOperationFailure(error) { showEpg(card) }
+                if (error !is CancellationException && section in setOf(Section.LIVE, Section.EPG)) showOperationFailure(error) { showEpg(card) }
             }
         }
+    }
+
+    private fun showCatchUp(card: CatalogCard) {
+        val playlist = store.selected() ?: return
+        detailJob?.cancel()
+        detailJob = lifecycleScope.launch {
+            runCatching { api.catchUpEpg(playlist.credentials, card.id) }.onSuccess { entries ->
+                if (section != Section.CATCH_UP || store.selected()?.id != playlist.id) return@onSuccess
+                val now = System.currentTimeMillis() / 1000
+                val archiveFloor = now - card.catchUpDays.coerceAtLeast(1) * 86_400L
+                val archived = entries.filter { entry ->
+                    val start = entry.startTimestamp
+                    val stop = entry.stopTimestamp
+                    start != null && stop != null && stop <= now && start >= archiveFloor
+                }.sortedByDescending { it.startTimestamp }
+                val labels = archived.map { entry ->
+                    val duration = (((entry.stopTimestamp ?: 0) - (entry.startTimestamp ?: 0)) / 60).coerceAtLeast(1)
+                    "${entry.start.orEmpty()}  ${entry.title}\n${resources.getQuantityString(R.plurals.minutes_duration, duration.toInt(), duration.toInt())}"
+                }.toTypedArray()
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("${card.title} catch up")
+                    .setItems(if (labels.isEmpty()) arrayOf(getString(R.string.catch_up_programmes_unavailable)) else labels) { _, which ->
+                        val entry = archived.getOrNull(which) ?: return@setItems
+                        playCatchUp(playlist, card, entry)
+                    }
+                    .setNegativeButton("Close", null)
+                    .showCrown(preferredButton = null)
+            }.onFailure { error ->
+                if (error !is CancellationException && section == Section.CATCH_UP) showOperationFailure(error) { showCatchUp(card) }
+            }
+        }
+    }
+
+    private fun playCatchUp(playlist: SavedPlaylist, card: CatalogCard, entry: XtreamProgramme) {
+        val startTimestamp = entry.startTimestamp ?: return
+        val stopTimestamp = entry.stopTimestamp ?: return
+        val duration = ((stopTimestamp - startTimestamp) / 60).toInt().coerceAtLeast(1)
+        val start = formatCatchUpStart(startTimestamp, playlist.serverTimezone)
+        val url = api.catchUpUrl(playlist.credentials, card.id, start, duration)
+        internalPlayer.launch(
+            PlayerActivity.internalIntent(
+                this,
+                url,
+                entry.title,
+                false,
+                store.buffer,
+                playlist.id,
+                card.id,
+                "live",
+            ),
+        )
     }
 
     private fun contentDetailsView(card: CatalogCard, body: String): View {
@@ -2573,7 +2947,7 @@ class MainActivity : AppCompatActivity() {
             id, itemKind, name, imageUrl,
             listOfNotNull(year, genre, rating?.let { "Rating $it" }).joinToString(" • ").ifBlank { itemKind.uppercase() },
             badge, extension, categoryId, healthHint = healthHint,
-            isAdult = isAdult,
+            isAdult = isAdult, catchUpDays = catchUpDays,
         )
     }
 
@@ -2591,8 +2965,8 @@ class MainActivity : AppCompatActivity() {
             // spatial fallback can choose the navigation rail and expand it during details,
             // playback preparation, or a route transition.
             when {
-                section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(activeCategoryFocusId())
-                section in PAGED_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
+                section in CATEGORY_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0 -> restoreCategoryFocus(activeCategoryFocusId())
+                section in CATEGORY_SECTIONS && binding.categoryMenuButton.isVisible -> binding.categoryMenuButton.requestFocus()
                 binding.searchBox.isVisible -> binding.searchBox.requestFocus()
             }
         }
@@ -2603,7 +2977,7 @@ class MainActivity : AppCompatActivity() {
         binding.stateMessage.isVisible = !loading && message.isNotBlank()
         binding.stateAction.isVisible = !loading && action
         binding.stateAction.text = actionLabel
-        binding.contentGrid.visibility = if (isTelevisionLayout() && section in PAGED_SECTIONS) {
+        binding.contentGrid.visibility = if (isTelevisionLayout() && section in CATEGORY_SECTIONS) {
             // INVISIBLE keeps RecyclerView measured so destination children are laid out behind
             // the loader before the next-frame reveal.
             View.INVISIBLE
@@ -2611,7 +2985,7 @@ class MainActivity : AppCompatActivity() {
         // In paged destinations the header/category bar is a fixed sibling of the scrolling grid.
         // Keep it mounted through loading, empty, error, and detail-fetch states so it remains
         // sticky and D-pad reachable. Home and global Search intentionally have no category bar.
-        setCategoryNavigationVisible((keepCategories || section in PAGED_SECTIONS) && section != Section.HOME && section != Section.SEARCH)
+        setCategoryNavigationVisible((keepCategories || section in CATEGORY_SECTIONS) && section != Section.HOME && section != Section.SEARCH)
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         if (action && isTelevisionLayout()) binding.stateAction.post { binding.stateAction.requestFocus() }
     }
@@ -2625,7 +2999,7 @@ class MainActivity : AppCompatActivity() {
     private fun setCategoryNavigationVisible(visible: Boolean) {
         binding.categoryBar.isVisible = visible
         val nested = nestedSeries != null
-        binding.categoryMenuButton.isVisible = visible && section in PAGED_SECTIONS && (!isTelevisionLayout() || nested)
+        binding.categoryMenuButton.isVisible = visible && section in CATEGORY_SECTIONS && (!isTelevisionLayout() || nested)
         binding.root.findViewById<TextView>(R.id.category_panel_title)?.text =
             getString(if (nested) R.string.seasons else R.string.categories)
         binding.categoryMenuButton.setImageResource(if (nested) R.drawable.ic_arrow_back else R.drawable.ic_categories_menu)
@@ -2645,7 +3019,7 @@ class MainActivity : AppCompatActivity() {
             friendly(error),
             false,
             true,
-            keepCategories = section in PAGED_SECTIONS,
+            keepCategories = section in CATEGORY_SECTIONS,
         )
     }
     private fun showOperationFailure(error: Throwable, retry: () -> Unit) {
@@ -2654,7 +3028,7 @@ class MainActivity : AppCompatActivity() {
             val state = sectionState(section)
             if (state.searchQuery.trim().length >= MIN_SEARCH_LENGTH) searchCategory(section, state.searchQuery)
             else renderSectionState(state, restoreScroll = true)
-        } else hideState()
+        } else if (section in FEATURE_SECTIONS) loadFeatureSection() else hideState()
         AlertDialog.Builder(this)
             .setTitle("Couldn’t load content")
             .setMessage(friendly(error))
@@ -2717,7 +3091,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private enum class Section(val apiKind: String, val cardKind: String, val displayName: String) {
-        HOME("", "", "Home"), LIVE("live", "live", "Live TV"), MOVIES("vod", "movie", "Movies"), SERIES("series", "series", "Series"), SEARCH("", "", "Search")
+        HOME("", "", "Home"),
+        LIVE("live", "live", "Live TV"),
+        MOVIES("vod", "movie", "Movies"),
+        SERIES("series", "series", "Series"),
+        SEARCH("", "", "Search"),
+        EPG("", "live", "EPG / TV Guide"),
+        FAVORITES("", "", "Favourites"),
+        CATCH_UP("", "live", "Catch Up"),
     }
 
 
@@ -2785,6 +3166,13 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_DOWN,
         )
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
+        private val FEATURE_SECTIONS = setOf(Section.EPG, Section.FAVORITES, Section.CATCH_UP)
+        private val CATEGORY_SECTIONS = PAGED_SECTIONS + FEATURE_SECTIONS
+        private val PAGINATED_FEATURE_SECTIONS = setOf(Section.EPG, Section.CATCH_UP)
+        private const val FEATURE_PAGE_SIZE = 48
+        private const val FEATURE_FAVORITES_LIMIT = 2_000
+        private const val EPG_ENTRY_LIMIT = 24
+        private const val EPG_CONCURRENCY = 6
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
 
         internal fun responsiveTvNavigationWidthDp(screenWidthDp: Int): Int =

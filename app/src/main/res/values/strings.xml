@@ -64,4 +64,26 @@
     <string name="app_layout_auto">Auto-detect</string>
     <string name="app_layout_mobile">Mobile</string>
     <string name="app_layout_tv">TV</string>
+    <string name="epg_tv_guide">EPG / TV Guide</string>
+    <string name="favourites">Favourites</string>
+    <string name="catch_up">Catch Up</string>
+    <string name="loading_programme_guide">Loading programme guide…</string>
+    <string name="epg_unavailable">EPG unavailable</string>
+    <string name="play_channel">Play channel</string>
+    <string name="now">Now</string>
+    <string name="next">Next</string>
+    <string name="catch_up_badge">CATCH UP</string>
+    <string name="no_content_available">No content available</string>
+    <string name="no_epg_channels">No Live TV channels with guide data are currently available.</string>
+    <string name="no_favourites">You have not added any Live TV, movie, or series favourites yet.</string>
+    <string name="no_catch_up_channels">Your provider has not marked any Live TV channels as Catch Up enabled.</string>
+    <string name="catch_up_programmes_unavailable">No archived programmes were supplied for this channel.</string>
+    <plurals name="catch_up_days_available">
+        <item quantity="one">%d day of provider archive</item>
+        <item quantity="other">%d days of provider archive</item>
+    </plurals>
+    <plurals name="minutes_duration">
+        <item quantity="one">%d minute</item>
+        <item quantity="other">%d minutes</item>
+    </plurals>
 </resources>
