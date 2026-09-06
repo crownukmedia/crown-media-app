@@ -173,11 +173,15 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
-                        if (isLive && hasReachedReady && instance.playWhenReady && !userPaused) {
-                            playbackLoadingMessage.setText(R.string.reconnecting_channel)
+                        if (hasReachedReady && instance.playWhenReady && !userPaused) {
+                            playbackLoadingMessage.setText(
+                                if (isLive) R.string.reconnecting_channel else R.string.opening_video,
+                            )
                             playbackLoading.isVisible = true
-                            timeoutHandler.removeCallbacks(rebufferTimeout)
-                            timeoutHandler.postDelayed(rebufferTimeout, LIVE_REBUFFER_TIMEOUT_MS)
+                            if (isLive) {
+                                timeoutHandler.removeCallbacks(rebufferTimeout)
+                                timeoutHandler.postDelayed(rebufferTimeout, LIVE_REBUFFER_TIMEOUT_MS)
+                            }
                         }
                     }
                     Player.STATE_READY -> {
