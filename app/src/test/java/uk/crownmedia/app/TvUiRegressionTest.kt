@@ -97,6 +97,7 @@ class TvUiRegressionTest {
 
     @Test
     fun homeUsesDedicatedCategoryIconsInExistingTileOrder() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val adapter = activity.findViewById<RecyclerView>(R.id.content_grid).adapter as CatalogAdapter
 
         assertEquals(
@@ -113,6 +114,11 @@ class TvUiRegressionTest {
             ),
             adapter.currentItems.map { it.localArtwork },
         )
+        shadowOf(Looper.getMainLooper()).idle()
+        val artwork = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView)
+            .findViewById<ImageView>(R.id.artwork)
+        assertEquals(ImageView.ScaleType.FIT_CENTER, artwork.scaleType)
+        assertTrue(artwork.paddingStart > 0)
     }
 
     @Test
@@ -133,7 +139,52 @@ class TvUiRegressionTest {
             assertEquals(R.id.nav_home, activity.findViewById<View>(R.id.content_grid).nextFocusLeftId)
             activity.findViewById<View>(R.id.nav_home).performClick()
             shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
+            assertEquals(9, (grid.adapter as CatalogAdapter).currentItems.size)
         }
+    }
+
+    @Test
+    fun favouriteAddedAfterHubWasOpenedAppearsWithoutRestart() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        cache.saveCategories(playlist.id, "live", listOf(uk.crownmedia.data.xtream.XtreamCategory("news", "News")))
+        cache.saveItems(
+            playlist.id,
+            "live",
+            null,
+            listOf(searchItem("new-favourite", "New favourite").copy(categoryId = "news", extension = "ts")),
+        )
+        testStore.markCatalogRefreshed(playlist.id, "live", null)
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val openCard = MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply { isAccessible = true }
+
+        openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == "favorites" }))
+        waitForTitles(grid, setOf("Live Favourites", "Movie Favourites", "Series Favourites"))
+        activity.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val liveCard = searchItem("new-favourite", "New favourite").copy(categoryId = "news", extension = "ts")
+            .let { item ->
+                CatalogCard(item.id, "live", item.name, item.imageUrl, "LIVE", categoryId = item.categoryId, extension = item.extension)
+            }
+        MainActivity::class.java.getDeclaredMethod("cardOptions", CatalogCard::class.java).apply {
+            isAccessible = true
+            invoke(activity, liveCard)
+        }
+        val options = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        requireNotNull(options.listView.onItemClickListener)
+            .onItemClick(options.listView, null, 2, 2L)
+        assertTrue("live:new-favourite" in testStore.favorites(playlist.id))
+
+        openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == "favorites" }))
+        waitForTitles(grid, setOf("Live Favourites", "Movie Favourites", "Series Favourites"))
+        val liveType = requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.categoryId == "favorite:live" })
+        assertTrue(liveType.meta.startsWith("1 "))
+        openCard.invoke(activity, liveType)
+        waitForTitles(grid, setOf("New favourite"))
+        assertEquals(listOf("new-favourite"), (grid.adapter as CatalogAdapter).currentItems.map { it.id })
     }
 
     @Test

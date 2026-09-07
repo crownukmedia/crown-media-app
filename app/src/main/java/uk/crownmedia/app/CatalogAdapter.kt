@@ -170,6 +170,7 @@ class CatalogAdapter(
             artworkContainer.layoutParams = artworkContainer.layoutParams.apply { height = artworkHeight }
             val artworkDensity = binding.root.resources.displayMetrics.density
             val brandInset = (12 * artworkDensity).toInt()
+            val tileInset = (8 * artworkDensity).toInt()
             val source = value.preferredArtworkSource()
             val brandFallback = source == R.drawable.crown_media_logo_header
             fun showBrandArtwork() {
@@ -192,6 +193,13 @@ class CatalogAdapter(
                     onSuccess = { _, _ ->
                         if (brandFallback) {
                             showBrandArtwork()
+                        } else if (value.localArtwork != null) {
+                            // Bundled Home/feature artwork is a complete 16:9 composition, not a
+                            // poster. Contain it on every layout so responsive card widths cannot
+                            // crop or over-zoom the icon artwork.
+                            binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, R.color.crown_surface))
+                            binding.artwork.scaleType = ImageView.ScaleType.FIT_CENTER
+                            binding.artwork.setPadding(tileInset, tileInset, tileInset, tileInset)
                         } else {
                             binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, if (value.kind == "live") R.color.white else R.color.crown_surface))
                             binding.artwork.scaleType = when (value.kind) {

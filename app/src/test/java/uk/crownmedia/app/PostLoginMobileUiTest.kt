@@ -122,12 +122,18 @@ class PostLoginMobileUiTest {
     @Test
     @Config(sdk = [28], qualifiers = "sw600dp-port")
     fun featureSelectionHubUsesTwoColumnsOnTablet() {
-        openHomeFeature("favorites")
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val homeColumns = (grid.layoutManager as GridLayoutManager).spanCount
+        openHomeFeature("favorites")
         waitForCardCount(grid, 3)
 
         assertEquals(2, (grid.layoutManager as GridLayoutManager).spanCount)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(homeColumns, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(9, (grid.adapter as CatalogAdapter).currentItems.size)
     }
 
     @Test

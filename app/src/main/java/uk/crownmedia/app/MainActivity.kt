@@ -93,6 +93,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var categoriesAdapter: CategoryAdapter
     private lateinit var catalogAdapter: CatalogAdapter
     private lateinit var contentLayoutManager: GridLayoutManager
+    private var standardContentColumnCount = 1
     private var section = Section.HOME
     private var currentCategory = "all"
     private var loadJob: Job? = null
@@ -264,6 +265,7 @@ class MainActivity : AppCompatActivity() {
             resources.configuration.smallestScreenWidthDp >= 600 -> 4
             else -> 1
         }
+        standardContentColumnCount = initialColumns
         contentLayoutManager = GridLayoutManager(this, initialColumns)
         binding.contentGrid.layoutManager = contentLayoutManager
         binding.contentGrid.adapter = catalogAdapter
@@ -288,7 +290,10 @@ class MainActivity : AppCompatActivity() {
         if (!television) binding.contentGrid.doOnLayout { grid ->
             val available = grid.width - grid.paddingStart - grid.paddingEnd
             val minimumCardWidth = (if (resources.configuration.smallestScreenWidthDp >= 600) 190 else 164) * resources.displayMetrics.density
-            contentLayoutManager.spanCount = (available / minimumCardWidth).toInt().coerceIn(1, 6)
+            if (available > 0) {
+                standardContentColumnCount = (available / minimumCardWidth).toInt().coerceIn(1, 6)
+            }
+            if (!isFeatureRoot()) contentLayoutManager.spanCount = standardContentColumnCount
         }
     }
 
@@ -724,7 +729,7 @@ class MainActivity : AppCompatActivity() {
         state.featureRoot = true
         state.categoryId = "all"
         state.categories = emptyList()
-        state.cards = emptyList()
+        state.cards = state.featureRootCards
         state.scrollState = null
         state.categoryScrollState = null
         state.focusedCardKey = null
@@ -738,7 +743,7 @@ class MainActivity : AppCompatActivity() {
         state.featureRoot = true
         state.categoryId = "all"
         state.categories = emptyList()
-        state.cards = emptyList()
+        state.cards = state.featureRootCards
         state.scrollState = null
         state.categoryScrollState = null
         currentCategory = "all"
@@ -774,15 +779,12 @@ class MainActivity : AppCompatActivity() {
         target in FEATURE_SECTIONS && state.featureRoot
 
     private fun configureFeaturePresentation(target: Section, state: SectionState) {
-        if (target !in FEATURE_SECTIONS) return
-        val root = state.featureRoot
-        if (root) {
-            contentLayoutManager.spanCount = if (isTelevisionLayout() || resources.configuration.smallestScreenWidthDp >= 600) 2 else 1
-            catalogAdapter.setUniformLandscapeCards(true)
-        } else if (!isTelevisionLayout()) {
-            contentLayoutManager.spanCount = if (resources.configuration.smallestScreenWidthDp >= 600) 4 else 1
-            catalogAdapter.setUniformLandscapeCards(false)
-        }
+        if (isTelevisionLayout()) return
+        val featureRoot = target in FEATURE_SECTIONS && state.featureRoot
+        contentLayoutManager.spanCount = if (featureRoot) {
+            if (resources.configuration.smallestScreenWidthDp >= 600) 2 else 1
+        } else standardContentColumnCount
+        catalogAdapter.setUniformLandscapeCards(target == Section.HOME || target == Section.SEARCH || featureRoot)
     }
 
     private fun updateSelectedNavigation(value: Section) {
@@ -1354,7 +1356,17 @@ class MainActivity : AppCompatActivity() {
         val requestedCategory = state.categoryId
         val requestGeneration = ++contentRequestGeneration
         loadJob?.cancel()
-        showState(getString(R.string.loading), "", true, false, keepCategories = !state.featureRoot)
+        if (state.cards.isNotEmpty()) {
+            if (state.featureRoot) {
+                categoriesAdapter.submit(emptyList())
+                setCategoryNavigationVisible(false)
+                catalogAdapter.submit(state.cards) { if (section == target && state.featureRoot) hideState() }
+            } else {
+                renderSectionState(state, restoreScroll = true)
+            }
+        } else {
+            showState(getString(R.string.loading), "", true, false, keepCategories = !state.featureRoot)
+        }
         loadJob = lifecycleScope.launch {
             runCatching {
                 ensureFeatureCatalogs(playlist, target)
@@ -1375,9 +1387,9 @@ class MainActivity : AppCompatActivity() {
     private suspend fun ensureFeatureCatalogs(playlist: SavedPlaylist, target: Section) {
         val requiredKinds = when (target) {
             Section.EPG, Section.CATCH_UP -> listOf("live")
-            Section.FAVORITES -> store.favorites(playlist.id)
-                .mapNotNull { key -> key.substringBefore(':').takeIf { it in setOf("live", "movie", "series") } }
-                .distinct()
+            // A favourite can only be created from an item already available in the local catalog.
+            // Never hold this local destination behind a complete provider catalog warm-up.
+            Section.FAVORITES -> emptyList()
             else -> emptyList()
         }
         coroutineScope {
@@ -1389,8 +1401,11 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun loadEpgFeature(playlist: SavedPlaylist, state: SectionState, requestedCategory: String) {
         val includeAdult = store.parentalPin == null || adultSessionUnlocked()
-        val providerCategories = cache.categories(playlist.id, Section.LIVE.cardKind)
-        val available = cache.accessibleCategoryCounts(playlist.id, Section.LIVE.cardKind, includeAdult)
+        val (providerCategories, available) = coroutineScope {
+            val categories = async { cache.categories(playlist.id, Section.LIVE.cardKind) }
+            val counts = async { cache.accessibleCategoryCounts(playlist.id, Section.LIVE.cardKind, includeAdult) }
+            categories.await() to counts.await()
+        }
         val categories = displayedCategoryList(
             providerCategories = availableCategoriesInProviderOrder(
                 providerCategories,
@@ -1459,17 +1474,24 @@ class MainActivity : AppCompatActivity() {
         val favoriteKeys = store.favorites(playlist.id)
         val includeAdult = store.parentalPin == null || adultSessionUnlocked()
         val kindLabels = linkedMapOf("live" to "Live TV", "movie" to "Movies", "series" to "Series")
-        val categoryNames = kindLabels.keys.associateWith { kind ->
-            cache.categories(playlist.id, kind).associate { it.id to it.name }
+        val localByKind = coroutineScope {
+            kindLabels.keys.map { kind ->
+                async {
+                    val ids = favoriteKeys.asSequence()
+                        .filter { it.startsWith("$kind:") }
+                        .map { it.substringAfter(':') }
+                        .toList()
+                    val categories = async { cache.categories(playlist.id, kind).associate { it.id to it.name } }
+                    val items = async {
+                        cache.favoriteItemPage(playlist.id, kind, ids, FEATURE_FAVORITES_LIMIT, 0, store.sort)
+                            .filterNot { it.isAdult && !includeAdult }
+                    }
+                    kind to (categories.await() to items.await())
+                }
+            }.awaitAll().toMap()
         }
-        val itemsByKind = kindLabels.keys.associateWith { kind ->
-            val ids = favoriteKeys.asSequence()
-                .filter { it.startsWith("$kind:") }
-                .map { it.substringAfter(':') }
-                .toList()
-            cache.favoriteItemPage(playlist.id, kind, ids, FEATURE_FAVORITES_LIMIT, 0, store.sort)
-                .filterNot { it.isAdult && !includeAdult }
-        }
+        val categoryNames = localByKind.mapValues { it.value.first }
+        val itemsByKind = localByKind.mapValues { it.value.second }
         if (state.featureRoot) {
             val artwork = mapOf(
                 "live" to R.drawable.home_live_icon,
@@ -1569,8 +1591,11 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun loadCatchUpFeature(playlist: SavedPlaylist, state: SectionState, requestedCategory: String) {
         val includeAdult = store.parentalPin == null || adultSessionUnlocked()
-        val counts = cache.catchUpCategoryCounts(playlist.id, includeAdult)
-        val providerCategories = cache.categories(playlist.id, Section.LIVE.cardKind)
+        val (counts, providerCategories) = coroutineScope {
+            val available = async { cache.catchUpCategoryCounts(playlist.id, includeAdult) }
+            val categories = async { cache.categories(playlist.id, Section.LIVE.cardKind) }
+            available.await() to categories.await()
+        }
         val categories = displayedCategoryList(
             providerCategories = providerCategories.filter { it.id in counts },
             hiddenIds = store.hiddenCategories(playlist.id),
@@ -1643,6 +1668,7 @@ class MainActivity : AppCompatActivity() {
         if (section !in FEATURE_SECTIONS || sectionStates[section] !== state || !state.featureRoot) return
         state.categories = emptyList()
         state.cards = cards
+        state.featureRootCards = cards
         state.categoryId = "all"
         state.nextOffset = 0
         state.endReached = true
@@ -1949,7 +1975,11 @@ class MainActivity : AppCompatActivity() {
             when {
                 which == 0 -> openCard(card)
                 card.kind == "live" && which == 1 -> showEpg(card)
-                else -> { store.toggleFavorite(playlist.id, "${card.kind}:${card.id}"); load() }
+                else -> {
+                    store.toggleFavorite(playlist.id, "${card.kind}:${card.id}")
+                    sectionStates[Section.FAVORITES]?.featureRootCards = emptyList()
+                    load()
+                }
             }
         }.showCrown(preferredButton = null)
     }
@@ -3311,6 +3341,7 @@ class MainActivity : AppCompatActivity() {
         var lastRefreshAt: Long = 0L,
         var searchQuery: String = "",
         var featureRoot: Boolean = true,
+        var featureRootCards: List<CatalogCard> = emptyList(),
     ) {
         fun resetForTopLevelEntry() {
             // TV-009: preserve category selection, cards, and scroll position when returning
