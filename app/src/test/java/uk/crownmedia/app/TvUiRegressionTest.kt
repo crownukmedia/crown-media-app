@@ -294,6 +294,32 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun heldTvOkOpensCardOptionsOnceWithoutDispatchingPlaybackClick() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        var opened: CatalogCard? = null
+        var clicked: CatalogCard? = null
+        val adapter = CatalogAdapter(
+            onClick = { clicked = it },
+            onLongClick = { opened = it },
+        )
+        val card = CatalogCard("channel", "live", "Channel", null, "LIVE")
+        grid.adapter = adapter
+        adapter.submit(listOf(card))
+        shadowOf(Looper.getMainLooper()).idle()
+        val item = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView)
+        item.requestFocus()
+
+        item.dispatchKeyEvent(KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        item.dispatchKeyEvent(KeyEvent(0L, 600L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 1))
+        item.dispatchKeyEvent(KeyEvent(0L, 700L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 2))
+
+        assertEquals(card, opened)
+        assertNull(clicked)
+        item.dispatchKeyEvent(KeyEvent(0L, 800L, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        assertNull(clicked)
+    }
+
+    @Test
     fun heldDpadRepeatsNeverQueueStaleGridFocusMoves() {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         shadowOf(Looper.getMainLooper()).idle()

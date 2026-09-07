@@ -154,7 +154,10 @@ class CatalogAdapter(
     override fun onBindViewHolder(holder: Holder, position: Int) = holder.bind(differ.currentList[position])
 
     inner class Holder(private val binding: ItemContentBinding) : RecyclerView.ViewHolder(binding.root) {
+        private var optionsOpenedFromKey = false
+
         fun bind(value: CatalogCard) {
+            optionsOpenedFromKey = false
             binding.title.text = value.title
             binding.meta.text = value.meta
             binding.badge.text = value.badge
@@ -207,17 +210,47 @@ class CatalogAdapter(
             binding.moreActions.contentDescription = binding.root.context.getString(R.string.options_for, value.title)
             binding.moreActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
-            binding.root.setOnLongClickListener { onLongClick(value); true }
+            binding.root.setOnLongClickListener {
+                // Some TV frameworks synthesize a View long-click, while others only send
+                // repeated DPAD_CENTER/Enter events. Mark this sequence handled so the explicit
+                // repeat fallback below cannot open the options dialog a second time.
+                if (television) optionsOpenedFromKey = true
+                onLongClick(value)
+                true
+            }
             binding.root.setOnKeyListener { view, keyCode, event ->
                 val position = bindingAdapterPosition
                 if (position != RecyclerView.NO_POSITION && onDpad(view, position, keyCode, event)) {
                     true
-                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.kind != "home") {
+                } else if (
+                    television &&
+                    value.kind !in setOf("home", "feature_category") &&
+                    keyCode in TV_CARD_OPTIONS_KEYS &&
+                    event.action == KeyEvent.ACTION_DOWN &&
+                    (event.repeatCount > 0 || event.isLongPress)
+                ) {
+                    if (!optionsOpenedFromKey) {
+                        optionsOpenedFromKey = true
+                        onLongClick(value)
+                    }
+                    true
+                } else if (
+                    television &&
+                    keyCode in TV_CARD_OPTIONS_KEYS &&
+                    event.action == KeyEvent.ACTION_UP &&
+                    optionsOpenedFromKey
+                ) {
+                    // Consume the matching key-up so View does not also dispatch the short-click
+                    // action (play/details) after opening the favourite/options dialog.
+                    optionsOpenedFromKey = false
+                    true
+                } else if (keyCode in TV_CARD_MENU_KEYS && event.action == KeyEvent.ACTION_UP && value.kind !in setOf("home", "feature_category")) {
                     onLongClick(value)
                     true
                 } else false
             }
             binding.root.setOnFocusChangeListener { view, focused ->
+                if (!focused) optionsOpenedFromKey = false
                 view.animate().scaleX(if (focused) 1.055f else 1f).scaleY(if (focused) 1.055f else 1f).translationZ(if (focused) 12f else 0f).setDuration(130).start()
                 binding.root.strokeColor = ContextCompat.getColor(view.context, if (focused) R.color.crown_gold else R.color.crown_border)
                 val density = view.resources.displayMetrics.density
@@ -233,3 +266,14 @@ class CatalogAdapter(
         super.onViewRecycled(holder)
     }
 }
+
+private val TV_CARD_OPTIONS_KEYS = setOf(
+    KeyEvent.KEYCODE_DPAD_CENTER,
+    KeyEvent.KEYCODE_ENTER,
+    KeyEvent.KEYCODE_NUMPAD_ENTER,
+)
+
+private val TV_CARD_MENU_KEYS = setOf(
+    KeyEvent.KEYCODE_MENU,
+    KeyEvent.KEYCODE_INFO,
+)
