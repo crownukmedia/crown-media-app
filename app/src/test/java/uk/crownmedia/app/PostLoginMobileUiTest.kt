@@ -12,6 +12,7 @@ import android.widget.TextView
 import android.widget.EditText
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -105,6 +106,31 @@ class PostLoginMobileUiTest {
     }
 
     @Test
+    fun featureSelectionHubIsSingleColumnOnMobileAndDoesNotExposeCategoryRail() {
+        openHomeFeature("favorites")
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        waitForCardCount(grid, 3)
+
+        assertEquals(1, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+        assertEquals(
+            listOf("Live Favourites", "Movie Favourites", "Series Favourites"),
+            (grid.adapter as CatalogAdapter).currentItems.map { it.title },
+        )
+    }
+
+    @Test
+    @Config(sdk = [28], qualifiers = "sw600dp-port")
+    fun featureSelectionHubUsesTwoColumnsOnTablet() {
+        openHomeFeature("favorites")
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        waitForCardCount(grid, 3)
+
+        assertEquals(2, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+    }
+
+    @Test
     fun contentSectionsExposeScopedSearchWithoutReplacingMasterSearch() {
         activity.findViewById<View>(R.id.nav_live).performClick()
 
@@ -131,6 +157,22 @@ class PostLoginMobileUiTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         assertEquals("", search.text.toString())
         assertEquals("Search live channels", search.hint.toString())
+    }
+
+    private fun openHomeFeature(id: String) {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val card = requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == id })
+        MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply {
+            isAccessible = true
+            invoke(activity, card)
+        }
+    }
+
+    private fun waitForCardCount(grid: RecyclerView, count: Int) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.size != count && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
     }
 
     @Test

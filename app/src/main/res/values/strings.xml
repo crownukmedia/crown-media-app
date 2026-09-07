@@ -67,6 +67,23 @@
     <string name="epg_tv_guide">EPG / TV Guide</string>
     <string name="favourites">Favourites</string>
     <string name="catch_up">Catch Up</string>
+    <string name="choose_epg_category">Choose a category to browse its channels and programme guide.</string>
+    <string name="choose_catch_up_category">Choose a category to browse channels with provider Catch Up.</string>
+    <string name="choose_favourite_type">Choose Live TV, Movies, or Series favourites.</string>
+    <string name="all_live_channels">All Live TV</string>
+    <string name="all_catch_up_channels">All Catch Up</string>
+    <string name="live_favourites">Live Favourites</string>
+    <string name="movie_favourites">Movie Favourites</string>
+    <string name="series_favourites">Series Favourites</string>
+    <string name="open_section">OPEN</string>
+    <plurals name="feature_channel_count">
+        <item quantity="one">%d channel</item>
+        <item quantity="other">%d channels</item>
+    </plurals>
+    <plurals name="feature_favourite_count">
+        <item quantity="one">%d favourite</item>
+        <item quantity="other">%d favourites</item>
+    </plurals>
     <string name="loading_programme_guide">Loading programme guide…</string>
     <string name="epg_unavailable">EPG unavailable</string>
     <string name="play_channel">Play channel</string>

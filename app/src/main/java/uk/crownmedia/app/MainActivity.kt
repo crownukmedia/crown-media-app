@@ -185,6 +185,8 @@ class MainActivity : AppCompatActivity() {
                 } else if (section == Section.SEARCH) {
                     hideKeyboard()
                     open(Section.HOME)
+                } else if (section in FEATURE_SECTIONS && !sectionState(section).featureRoot) {
+                    showFeatureRoot(section)
                 } else if (section in PAGED_SECTIONS || section in FEATURE_SECTIONS) {
                     open(Section.HOME)
                 } else {
@@ -670,7 +672,7 @@ class MainActivity : AppCompatActivity() {
         binding.actionMore.isVisible = !television && value != Section.SEARCH
         binding.actionReload.isVisible = !television
         binding.actionPlaylist.isVisible = !television
-        setCategoryNavigationVisible(value in CATEGORY_SECTIONS)
+        setCategoryNavigationVisible(value in CATEGORY_SECTIONS && !isFeatureRoot(value, state))
         binding.screenTitle.text = when (value) {
             Section.HOME -> "Welcome to Crown Media"
             Section.LIVE -> "Live TV"
@@ -684,6 +686,7 @@ class MainActivity : AppCompatActivity() {
         binding.screenSubtitle.text = store.selected()?.name ?: "Your world. One screen."
         updateSelectedNavigation(value)
         configureTvPresentation(value)
+        configureFeaturePresentation(value, state)
         if (changingTopLevelSection && value in CATEGORY_SECTIONS) {
             // Keep the previous route hidden until AsyncListDiffer commits the destination rows.
             // Showing the destination loader here prevents Home/last-section cards flashing while
@@ -716,6 +719,72 @@ class MainActivity : AppCompatActivity() {
         analytics.trackScreen(value.name.lowercase())
     }
 
+    private fun openFeature(target: Section) {
+        val state = sectionState(target)
+        state.featureRoot = true
+        state.categoryId = "all"
+        state.categories = emptyList()
+        state.cards = emptyList()
+        state.scrollState = null
+        state.categoryScrollState = null
+        state.focusedCardKey = null
+        open(target)
+    }
+
+    private fun showFeatureRoot(target: Section) {
+        val state = sectionState(target)
+        contentRequestGeneration++
+        loadJob?.cancel()
+        state.featureRoot = true
+        state.categoryId = "all"
+        state.categories = emptyList()
+        state.cards = emptyList()
+        state.scrollState = null
+        state.categoryScrollState = null
+        currentCategory = "all"
+        setCategoryNavigationVisible(false)
+        configureTvPresentation(target)
+        configureFeaturePresentation(target, state)
+        loadFeatureSection()
+    }
+
+    private fun selectFeatureCategory(card: CatalogCard) {
+        val target = section.takeIf { it in FEATURE_SECTIONS } ?: return
+        if (card.isAdult && store.parentalPin != null && !adultSessionUnlocked()) {
+            verifyPin { selectFeatureCategory(card.copy(isAdult = false)) }
+            return
+        }
+        val state = sectionState(target)
+        state.featureRoot = false
+        state.categoryId = card.categoryId
+        state.categories = emptyList()
+        state.cards = emptyList()
+        state.scrollState = null
+        state.categoryScrollState = null
+        state.focusedCardKey = null
+        currentCategory = card.categoryId
+        configureTvPresentation(target)
+        configureFeaturePresentation(target, state)
+        setCategoryNavigationVisible(true)
+        analytics.trackCategorySelected(target.name.lowercase())
+        loadFeatureSection()
+    }
+
+    private fun isFeatureRoot(target: Section = section, state: SectionState = sectionState(target)): Boolean =
+        target in FEATURE_SECTIONS && state.featureRoot
+
+    private fun configureFeaturePresentation(target: Section, state: SectionState) {
+        if (target !in FEATURE_SECTIONS) return
+        val root = state.featureRoot
+        if (root) {
+            contentLayoutManager.spanCount = if (isTelevisionLayout() || resources.configuration.smallestScreenWidthDp >= 600) 2 else 1
+            catalogAdapter.setUniformLandscapeCards(true)
+        } else if (!isTelevisionLayout()) {
+            contentLayoutManager.spanCount = if (resources.configuration.smallestScreenWidthDp >= 600) 4 else 1
+            catalogAdapter.setUniformLandscapeCards(false)
+        }
+    }
+
     private fun updateSelectedNavigation(value: Section) {
         binding.navHome.isSelected = value == Section.HOME || value in FEATURE_SECTIONS
         binding.navLive.isSelected = value == Section.LIVE
@@ -728,14 +797,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun configureTvPresentation(value: Section) {
         if (!isTelevisionLayout()) return
-        contentLayoutManager.spanCount = if (value == Section.HOME) 3 else {
+        val featureRoot = value in FEATURE_SECTIONS && sectionState(value).featureRoot
+        contentLayoutManager.spanCount = if (value == Section.HOME) 3 else if (featureRoot) 2 else {
             responsiveTvContentColumnCount(resources.configuration.screenWidthDp)
         }
-        catalogAdapter.setUniformLandscapeCards(value == Section.HOME || value == Section.SEARCH)
+        catalogAdapter.setUniformLandscapeCards(value == Section.HOME || value == Section.SEARCH || featureRoot)
         val activeNav = navigationView(value)
         val primaryTarget = when (value) {
             Section.HOME -> binding.contentGrid
             Section.SEARCH -> binding.searchBox
+            in FEATURE_SECTIONS -> if (featureRoot) binding.contentGrid else binding.categoryList
             else -> binding.categoryList
         }
         listOf(binding.navHome, binding.navLive, binding.navMovies, binding.navSeries, binding.navSearch).forEach {
@@ -747,13 +818,13 @@ class MainActivity : AppCompatActivity() {
         binding.categoryMenuButton.nextFocusDownId = binding.categoryList.id
         binding.categoryList.nextFocusLeftId = activeNav.id
         binding.categoryList.nextFocusRightId = binding.contentGrid.id
-        binding.contentGrid.nextFocusLeftId = if (value in CATEGORY_SECTIONS) binding.categoryList.id else activeNav.id
+        binding.contentGrid.nextFocusLeftId = if (value in CATEGORY_SECTIONS && !featureRoot) binding.categoryList.id else activeNav.id
         binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.searchBox.id else binding.topBar.id
         binding.searchBox.nextFocusLeftId = activeNav.id
         binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.contentGrid.id
         binding.actionSearchClear.nextFocusLeftId = binding.searchBox.id
         binding.actionSearchClear.nextFocusDownId = binding.contentGrid.id
-        binding.stateAction.nextFocusLeftId = if (value in CATEGORY_SECTIONS) binding.categoryList.id else activeNav.id
+        binding.stateAction.nextFocusLeftId = if (value in CATEGORY_SECTIONS && !featureRoot) binding.categoryList.id else activeNav.id
     }
 
     private fun navigationView(value: Section): View = when (value) {
@@ -1283,7 +1354,7 @@ class MainActivity : AppCompatActivity() {
         val requestedCategory = state.categoryId
         val requestGeneration = ++contentRequestGeneration
         loadJob?.cancel()
-        showState(getString(R.string.loading), "", true, false, keepCategories = true)
+        showState(getString(R.string.loading), "", true, false, keepCategories = !state.featureRoot)
         loadJob = lifecycleScope.launch {
             runCatching {
                 ensureFeatureCatalogs(playlist, target)
@@ -1329,6 +1400,21 @@ class MainActivity : AppCompatActivity() {
             hiddenIds = store.hiddenCategories(playlist.id),
             includeFavorites = false,
         )
+        if (state.featureRoot) {
+            val total = available.values.sum()
+            val cards = if (total == 0) emptyList() else categories.mapNotNull { category ->
+                val count = if (category.id == "all") total else available[category.id] ?: return@mapNotNull null
+                featureCategoryCard(
+                    id = category.id,
+                    title = if (category.id == "all") getString(R.string.all_live_channels) else category.name,
+                    count = count,
+                    artwork = R.drawable.home_epg_icon,
+                    isAdult = requiresPin(category.name),
+                )
+            }
+            publishFeatureRoot(state, cards, R.string.choose_epg_category, R.string.no_epg_channels)
+            return
+        }
         val selected = requestedCategory.takeIf { id -> categories.any { it.id == id } } ?: "all"
         val items = cache.accessibleItemPage(
             playlist.id,
@@ -1384,35 +1470,49 @@ class MainActivity : AppCompatActivity() {
             cache.favoriteItemPage(playlist.id, kind, ids, FEATURE_FAVORITES_LIMIT, 0, store.sort)
                 .filterNot { it.isAdult && !includeAdult }
         }
+        if (state.featureRoot) {
+            val artwork = mapOf(
+                "live" to R.drawable.home_live_icon,
+                "movie" to R.drawable.home_movies_icon,
+                "series" to R.drawable.home_series_icon,
+            )
+            val titles = mapOf(
+                "live" to R.string.live_favourites,
+                "movie" to R.string.movie_favourites,
+                "series" to R.string.series_favourites,
+            )
+            val cards = kindLabels.keys.map { kind ->
+                featureCategoryCard(
+                    id = "favorite:$kind",
+                    title = getString(requireNotNull(titles[kind])),
+                    count = itemsByKind[kind].orEmpty().size,
+                    artwork = requireNotNull(artwork[kind]),
+                    favourites = true,
+                )
+            }
+            publishFeatureRoot(state, cards, R.string.choose_favourite_type, R.string.no_favourites, showEmptyCards = true)
+            return
+        }
+        val selectedKind = requestedCategory.substringAfter("favorite:", "").substringBefore(':')
+            .takeIf { it in kindLabels.keys } ?: "live"
+        val typeRoot = "favorite:$selectedKind"
         val categories = buildList {
-            add(XtreamCategory("all", "All favourites"))
-            kindLabels.forEach { (kind, label) ->
-                val values = itemsByKind[kind].orEmpty()
-                if (values.isNotEmpty()) add(XtreamCategory("favorite:$kind", label))
-                values.map { it.categoryId }.distinct().forEach categoryLoop@{ categoryId ->
-                    val name = categoryNames[kind]?.get(categoryId) ?: return@categoryLoop
-                    add(XtreamCategory("favorite:$kind:$categoryId", "$label — $name"))
-                }
+            add(XtreamCategory(typeRoot, "All ${kindLabels.getValue(selectedKind)} favourites"))
+            itemsByKind[selectedKind].orEmpty().map { it.categoryId }.distinct().forEach categoryLoop@{ categoryId ->
+                val name = categoryNames[selectedKind]?.get(categoryId) ?: return@categoryLoop
+                add(XtreamCategory("favorite:$selectedKind:$categoryId", name))
             }
         }
-        val selected = requestedCategory.takeIf { id -> categories.any { it.id == id } } ?: "all"
+        val selected = requestedCategory.takeIf { id -> categories.any { it.id == id } } ?: typeRoot
         val selectedParts = selected.split(':', limit = 3)
-        val cards = kindLabels.keys.flatMap { kind ->
-            itemsByKind[kind].orEmpty()
-                .asSequence()
-                .filter { selected == "all" || (selectedParts.getOrNull(1) == kind && (selectedParts.size < 3 || it.categoryId == selectedParts[2])) }
-                .map { it.toCard(kind, favoriteKeys) }
-                .toList()
-        }
+        val cards = itemsByKind[selectedKind].orEmpty()
+            .asSequence()
+            .filter { selectedParts.size < 3 || it.categoryId == selectedParts[2] }
+            .map { it.toCard(selectedKind, favoriteKeys) }
+            .toList()
         val counts = categories.associate { category ->
-            category.id to when {
-                category.id == "all" -> cards.size.takeIf { selected == "all" } ?: itemsByKind.values.sumOf(List<XtreamItem>::size)
-                category.id.count { it == ':' } == 1 -> itemsByKind[category.id.substringAfter(':')].orEmpty().size
-                else -> {
-                    val parts = category.id.split(':', limit = 3)
-                    itemsByKind[parts[1]].orEmpty().count { it.categoryId == parts[2] }
-                }
-            }
+            category.id to if (category.id == typeRoot) itemsByKind[selectedKind].orEmpty().size
+            else itemsByKind[selectedKind].orEmpty().count { it.categoryId == category.id.substringAfterLast(':') }
         }
         publishFeatureState(state, categories, selected, cards, counts)
     }
@@ -1476,6 +1576,21 @@ class MainActivity : AppCompatActivity() {
             hiddenIds = store.hiddenCategories(playlist.id),
             includeFavorites = false,
         )
+        if (state.featureRoot) {
+            val total = counts.values.sum()
+            val cards = if (total == 0) emptyList() else categories.mapNotNull { category ->
+                val count = if (category.id == "all") total else counts[category.id] ?: return@mapNotNull null
+                featureCategoryCard(
+                    id = category.id,
+                    title = if (category.id == "all") getString(R.string.all_catch_up_channels) else category.name,
+                    count = count,
+                    artwork = R.drawable.home_catch_up_icon,
+                    isAdult = requiresPin(category.name),
+                )
+            }
+            publishFeatureRoot(state, cards, R.string.choose_catch_up_category, R.string.no_catch_up_channels)
+            return
+        }
         val selected = requestedCategory.takeIf { id -> categories.any { it.id == id } } ?: "all"
         val items = cache.catchUpItemPage(
             playlist.id,
@@ -1495,6 +1610,60 @@ class MainActivity : AppCompatActivity() {
         state.endReached = items.size < FEATURE_PAGE_SIZE
     }
 
+    private fun featureCategoryCard(
+        id: String,
+        title: String,
+        count: Int,
+        artwork: Int,
+        isAdult: Boolean = false,
+        favourites: Boolean = false,
+    ) = CatalogCard(
+        id = "feature:$id",
+        kind = FEATURE_CATEGORY_KIND,
+        title = title,
+        imageUrl = null,
+        meta = resources.getQuantityString(
+            if (favourites) R.plurals.feature_favourite_count else R.plurals.feature_channel_count,
+            count,
+            count,
+        ),
+        badge = getString(R.string.open_section),
+        categoryId = id,
+        localArtwork = artwork,
+        isAdult = isAdult,
+    )
+
+    private fun publishFeatureRoot(
+        state: SectionState,
+        cards: List<CatalogCard>,
+        subtitle: Int,
+        emptyMessage: Int,
+        showEmptyCards: Boolean = false,
+    ) {
+        if (section !in FEATURE_SECTIONS || sectionStates[section] !== state || !state.featureRoot) return
+        state.categories = emptyList()
+        state.cards = cards
+        state.categoryId = "all"
+        state.nextOffset = 0
+        state.endReached = true
+        currentCategory = "all"
+        categoriesAdapter.updateCounts(emptyMap())
+        categoriesAdapter.submit(emptyList())
+        setCategoryNavigationVisible(false)
+        binding.screenSubtitle.text = getString(subtitle)
+        if (cards.isEmpty() && !showEmptyCards) {
+            catalogAdapter.submit(emptyList())
+            showState(getString(R.string.no_content_available), getString(emptyMessage), false, false)
+        } else {
+            catalogAdapter.submit(cards) {
+                if (section in FEATURE_SECTIONS && sectionState(section) === state && state.featureRoot) {
+                    hideState()
+                    if (isTelevisionLayout()) restoreCardFocus(state.focusedCardKey)
+                }
+            }
+        }
+    }
+
     private fun publishFeatureState(
         state: SectionState,
         categories: List<XtreamCategory>,
@@ -1510,6 +1679,7 @@ class MainActivity : AppCompatActivity() {
         state.endReached = true
         currentCategory = selected
         categoriesAdapter.updateCounts(counts)
+        binding.screenSubtitle.text = store.selected()?.name.orEmpty()
         if (cards.isEmpty()) {
             categoriesAdapter.submit(categories, selected)
             catalogAdapter.submit(emptyList())
@@ -1748,11 +1918,15 @@ class MainActivity : AppCompatActivity() {
                 "live" -> openFromNavigation(Section.LIVE)
                 "movies" -> openFromNavigation(Section.MOVIES)
                 "series" -> openFromNavigation(Section.SERIES)
-                "epg" -> open(Section.EPG)
-                "favorites" -> open(Section.FAVORITES)
-                "catch_up" -> open(Section.CATCH_UP)
+                "epg" -> openFeature(Section.EPG)
+                "favorites" -> openFeature(Section.FAVORITES)
+                "catch_up" -> openFeature(Section.CATCH_UP)
                 "account" -> showAccount(); "reload" -> refreshAllCatalogs(); "playlist" -> showPlaylists()
             }; return
+        }
+        if (card.kind == FEATURE_CATEGORY_KIND) {
+            selectFeatureCategory(card)
+            return
         }
         analytics.trackContentOpened(card.kind)
         when (card.kind) {
@@ -1768,7 +1942,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun cardOptions(card: CatalogCard) {
-        if (card.kind == "home") return
+        if (card.kind == "home" || card.kind == FEATURE_CATEGORY_KIND) return
         val playlist = store.selected() ?: return
         val actions = if (card.kind == "live") arrayOf("Play", "Programme guide", "Favorite / unfavorite") else arrayOf("Details / play", "Favorite / unfavorite")
         AlertDialog.Builder(this).setTitle(card.title).setItems(actions) { _, which ->
@@ -2985,14 +3159,17 @@ class MainActivity : AppCompatActivity() {
         // In paged destinations the header/category bar is a fixed sibling of the scrolling grid.
         // Keep it mounted through loading, empty, error, and detail-fetch states so it remains
         // sticky and D-pad reachable. Home and global Search intentionally have no category bar.
-        setCategoryNavigationVisible((keepCategories || section in CATEGORY_SECTIONS) && section != Section.HOME && section != Section.SEARCH)
+        setCategoryNavigationVisible(
+            (keepCategories || section in CATEGORY_SECTIONS) &&
+                section != Section.HOME && section != Section.SEARCH && !isFeatureRoot(),
+        )
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         if (action && isTelevisionLayout()) binding.stateAction.post { binding.stateAction.requestFocus() }
     }
     private fun hideState() {
         binding.statePanel.isVisible = false
         binding.contentGrid.isVisible = true
-        setCategoryNavigationVisible(section != Section.HOME && section != Section.SEARCH)
+        setCategoryNavigationVisible(section != Section.HOME && section != Section.SEARCH && !isFeatureRoot())
         binding.contentGrid.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
     }
 
@@ -3133,6 +3310,7 @@ class MainActivity : AppCompatActivity() {
         var focusedCardKey: String? = null,
         var lastRefreshAt: Long = 0L,
         var searchQuery: String = "",
+        var featureRoot: Boolean = true,
     ) {
         fun resetForTopLevelEntry() {
             // TV-009: preserve category selection, cards, and scroll position when returning
@@ -3173,6 +3351,7 @@ class MainActivity : AppCompatActivity() {
         private const val FEATURE_FAVORITES_LIMIT = 2_000
         private const val EPG_ENTRY_LIMIT = 24
         private const val EPG_CONCURRENCY = 6
+        private const val FEATURE_CATEGORY_KIND = "feature_category"
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
 
         internal fun responsiveTvNavigationWidthDp(screenWidthDp: Int): Int =
