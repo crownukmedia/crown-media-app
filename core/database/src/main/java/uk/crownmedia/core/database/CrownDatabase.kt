@@ -84,6 +84,15 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:categoryId IS NULL OR categoryId = :categoryId) ORDER BY normalizedTitle COLLATE NOCASE DESC, contentId LIMIT :limit OFFSET :offset")
     suspend fun itemPageDescending(playlistId: String, kind: String, categoryId: String?, limit: Int, offset: Int): List<CachedCatalogItem>
 
+    @Query("SELECT * FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:categoryId IS NULL OR categoryId = :categoryId) AND (:includeAdult = 1 OR isAdult = 0) ORDER BY providerOrder, contentId LIMIT :limit OFFSET :offset")
+    suspend fun accessibleItemPageProvider(playlistId: String, kind: String, categoryId: String?, includeAdult: Boolean, limit: Int, offset: Int): List<CachedCatalogItem>
+
+    @Query("SELECT * FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:categoryId IS NULL OR categoryId = :categoryId) AND (:includeAdult = 1 OR isAdult = 0) ORDER BY normalizedTitle COLLATE NOCASE, contentId LIMIT :limit OFFSET :offset")
+    suspend fun accessibleItemPageAscending(playlistId: String, kind: String, categoryId: String?, includeAdult: Boolean, limit: Int, offset: Int): List<CachedCatalogItem>
+
+    @Query("SELECT * FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:categoryId IS NULL OR categoryId = :categoryId) AND (:includeAdult = 1 OR isAdult = 0) ORDER BY normalizedTitle COLLATE NOCASE DESC, contentId LIMIT :limit OFFSET :offset")
+    suspend fun accessibleItemPageDescending(playlistId: String, kind: String, categoryId: String?, includeAdult: Boolean, limit: Int, offset: Int): List<CachedCatalogItem>
+
     @Query("SELECT * FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND contentId IN (:contentIds) ORDER BY providerOrder, contentId LIMIT :limit OFFSET :offset")
     suspend fun favoriteItemPageProvider(playlistId: String, kind: String, contentIds: List<String>, limit: Int, offset: Int): List<CachedCatalogItem>
 
@@ -92,6 +101,12 @@ interface CatalogDao {
 
     @Query("SELECT * FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND contentId IN (:contentIds) ORDER BY normalizedTitle COLLATE NOCASE DESC, contentId LIMIT :limit OFFSET :offset")
     suspend fun favoriteItemPageDescending(playlistId: String, kind: String, contentIds: List<String>, limit: Int, offset: Int): List<CachedCatalogItem>
+
+    @Query("SELECT * FROM catalog_items WHERE playlistId = :playlistId AND kind = 'live' AND catchUp = 1 AND (:categoryId IS NULL OR categoryId = :categoryId) AND (:includeAdult = 1 OR isAdult = 0) ORDER BY providerOrder, contentId LIMIT :limit OFFSET :offset")
+    suspend fun catchUpItemPage(playlistId: String, categoryId: String?, includeAdult: Boolean, limit: Int, offset: Int): List<CachedCatalogItem>
+
+    @Query("SELECT categoryId, COUNT(*) AS itemCount FROM catalog_items WHERE playlistId = :playlistId AND kind = 'live' AND catchUp = 1 AND (:includeAdult = 1 OR isAdult = 0) GROUP BY categoryId")
+    suspend fun catchUpCategoryItemCounts(playlistId: String, includeAdult: Boolean): List<CategoryCount>
 
     @Query("SELECT COUNT(*) FROM catalog_items WHERE playlistId = :playlistId AND kind = :kind AND (:categoryId IS NULL OR categoryId = :categoryId)")
     suspend fun categoryItemCount(playlistId: String, kind: String, categoryId: String?): Int

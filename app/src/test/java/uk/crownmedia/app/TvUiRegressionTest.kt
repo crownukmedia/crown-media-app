@@ -22,6 +22,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
 import com.google.android.material.materialswitch.MaterialSwitch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -79,14 +80,14 @@ class TvUiRegressionTest {
     }
 
     @Test
-    fun homeUsesBalancedThreeByTwoCompositionAndPersistentSelection() {
+    fun homeUsesBalancedThreeColumnCompositionAndPersistentSelection() {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val sideNav = activity.findViewById<View>(R.id.side_nav)
 
         shadowOf(Looper.getMainLooper()).idle()
 
         assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
-        assertEquals(6, grid.adapter?.itemCount)
+        assertEquals(9, grid.adapter?.itemCount)
         assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
         assertEquals(dp(88), sideNav.layoutParams.width)
         assertTrue(grid.hasFocus())
@@ -97,6 +98,7 @@ class TvUiRegressionTest {
 
     @Test
     fun homeUsesDedicatedCategoryIconsInExistingTileOrder() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val adapter = activity.findViewById<RecyclerView>(R.id.content_grid).adapter as CatalogAdapter
 
         assertEquals(
@@ -104,12 +106,213 @@ class TvUiRegressionTest {
                 R.drawable.home_live_icon,
                 R.drawable.home_movies_icon,
                 R.drawable.home_series_icon,
+                R.drawable.home_epg_icon,
+                R.drawable.home_favorites_icon,
+                R.drawable.home_catch_up_icon,
                 R.drawable.home_account_icon,
                 R.drawable.home_reload_icon,
                 R.drawable.home_playlist_icon,
             ),
             adapter.currentItems.map { it.localArtwork },
         )
+        shadowOf(Looper.getMainLooper()).idle()
+        val artwork = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView)
+            .findViewById<ImageView>(R.id.artwork)
+        assertEquals(ImageView.ScaleType.FIT_CENTER, artwork.scaleType)
+        assertTrue(artwork.paddingStart > 0)
+    }
+
+    @Test
+    fun homeTilesUseSectionAccentsAndCrownPinkFocusWithoutChangingGeometry() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        shadowOf(Looper.getMainLooper()).idle()
+        val live = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView) as MaterialCardView
+        val movies = requireNotNull(grid.findViewHolderForAdapterPosition(1)?.itemView) as MaterialCardView
+        val liveBadge = live.findViewById<TextView>(R.id.badge)
+        val moviesBadge = movies.findViewById<TextView>(R.id.badge)
+
+        assertEquals(ContextCompat.getColor(activity, R.color.crown_accent_live), liveBadge.backgroundTintList?.defaultColor)
+        assertEquals(ContextCompat.getColor(activity, R.color.crown_accent_movies), moviesBadge.backgroundTintList?.defaultColor)
+        live.requestFocus()
+        assertEquals(ContextCompat.getColor(activity, R.color.crown_primary_bright), live.strokeColor)
+        assertEquals(dp(3), live.strokeWidth)
+        assertEquals(ImageView.ScaleType.FIT_CENTER, live.findViewById<ImageView>(R.id.artwork).scaleType)
+        assertEquals(ImageView.ScaleType.FIT_CENTER, movies.findViewById<ImageView>(R.id.artwork).scaleType)
+    }
+
+    @Test
+    fun newHomeTilesOpenDedicatedTwoColumnSelectionHubsBeforeContent() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val adapter = grid.adapter as CatalogAdapter
+        val openCard = MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply { isAccessible = true }
+
+        listOf(
+            "epg" to "EPG / TV Guide",
+            "favorites" to "Favourites",
+            "catch_up" to "Catch Up",
+        ).forEach { (id, title) ->
+            openCard.invoke(activity, requireNotNull(adapter.currentItems.firstOrNull { it.id == id }))
+            assertEquals(title, activity.findViewById<TextView>(R.id.screen_title).text.toString())
+            assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+            assertEquals(2, (grid.layoutManager as GridLayoutManager).spanCount)
+            assertEquals(R.id.nav_home, activity.findViewById<View>(R.id.content_grid).nextFocusLeftId)
+            activity.findViewById<View>(R.id.nav_home).performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
+            assertEquals(9, (grid.adapter as CatalogAdapter).currentItems.size)
+        }
+    }
+
+    @Test
+    fun favouriteAddedAfterHubWasOpenedAppearsWithoutRestart() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        cache.saveCategories(playlist.id, "live", listOf(uk.crownmedia.data.xtream.XtreamCategory("news", "News")))
+        cache.saveItems(
+            playlist.id,
+            "live",
+            null,
+            listOf(searchItem("new-favourite", "New favourite").copy(categoryId = "news", extension = "ts")),
+        )
+        testStore.markCatalogRefreshed(playlist.id, "live", null)
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val openCard = MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply { isAccessible = true }
+
+        openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == "favorites" }))
+        waitForTitles(grid, setOf("Live Favourites", "Movie Favourites", "Series Favourites"))
+        activity.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val liveCard = searchItem("new-favourite", "New favourite").copy(categoryId = "news", extension = "ts")
+            .let { item ->
+                CatalogCard(item.id, "live", item.name, item.imageUrl, "LIVE", categoryId = item.categoryId, extension = item.extension)
+            }
+        MainActivity::class.java.getDeclaredMethod("cardOptions", CatalogCard::class.java).apply {
+            isAccessible = true
+            invoke(activity, liveCard)
+        }
+        val options = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        requireNotNull(options.listView.onItemClickListener)
+            .onItemClick(options.listView, null, 2, 2L)
+        assertTrue("live:new-favourite" in testStore.favorites(playlist.id))
+
+        openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == "favorites" }))
+        waitForTitles(grid, setOf("Live Favourites", "Movie Favourites", "Series Favourites"))
+        val liveType = requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.categoryId == "favorite:live" })
+        assertTrue(liveType.meta.startsWith("1 "))
+        openCard.invoke(activity, liveType)
+        waitForTitles(grid, setOf("New favourite"))
+        assertEquals(listOf("new-favourite"), (grid.adapter as CatalogAdapter).currentItems.map { it.id })
+    }
+
+    @Test
+    fun favouritesTileShowsThreeTypesThenOnlyTheSelectedType() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        listOf("live", "movie", "series").forEach { kind ->
+            cache.saveCategories(playlist.id, kind, listOf(uk.crownmedia.data.xtream.XtreamCategory("test", "Test category")))
+            cache.saveItems(playlist.id, kind, null, listOf(searchItem("$kind-favourite", "$kind favourite").copy(extension = if (kind == "live") "ts" else "mp4")))
+            testStore.markCatalogRefreshed(playlist.id, kind, null)
+            testStore.toggleFavorite(playlist.id, "$kind:$kind-favourite")
+        }
+        MainActivity::class.java.getDeclaredMethod("showHome").apply { isAccessible = true; invoke(activity) }
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val homeAdapter = grid.adapter as CatalogAdapter
+        MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply {
+            isAccessible = true
+            invoke(activity, requireNotNull(homeAdapter.currentItems.firstOrNull { it.id == "favorites" }))
+        }
+
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.size != 3 && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
+
+        assertEquals("Favourites", activity.findViewById<TextView>(R.id.screen_title).text.toString())
+        assertEquals(
+            listOf("Live Favourites", "Movie Favourites", "Series Favourites"),
+            (grid.adapter as CatalogAdapter).currentItems.map { it.title },
+        )
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+
+        val liveType = requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.categoryId == "favorite:live" })
+        MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply {
+            isAccessible = true
+            invoke(activity, liveType)
+        }
+        val contentDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.singleOrNull()?.kind != "live" && System.nanoTime() < contentDeadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
+
+        assertEquals(listOf("live"), (grid.adapter as CatalogAdapter).currentItems.map { it.kind })
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_bar).visibility)
+        assertEquals(2, requireNotNull(activity.findViewById<RecyclerView>(R.id.category_list).adapter).itemCount)
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        val backDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.size != 3 && System.nanoTime() < backDeadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
+        assertEquals("Favourites", activity.findViewById<TextView>(R.id.screen_title).text.toString())
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+        assertEquals(
+            listOf("Live Favourites", "Movie Favourites", "Series Favourites"),
+            (grid.adapter as CatalogAdapter).currentItems.map { it.title },
+        )
+    }
+
+    @Test
+    fun epgAndCatchUpRequireCategorySelectionAndCatchUpOmitsUnavailableCategories() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        cache.saveCategories(
+            playlist.id,
+            "live",
+            listOf(
+                uk.crownmedia.data.xtream.XtreamCategory("news", "News"),
+                uk.crownmedia.data.xtream.XtreamCategory("empty", "No Catch Up"),
+            ),
+        )
+        cache.saveItems(
+            playlist.id,
+            "live",
+            null,
+            listOf(
+                searchItem("archive", "Archive channel").copy(categoryId = "news", extension = "ts", catchUp = true, catchUpDays = 7),
+                searchItem("plain", "Plain channel").copy(categoryId = "empty", extension = "ts"),
+            ),
+        )
+        testStore.markCatalogRefreshed(playlist.id, "live", null)
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val openCard = MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply { isAccessible = true }
+
+        MainActivity::class.java.getDeclaredMethod("showHome").apply { isAccessible = true; invoke(activity) }
+        openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == "epg" }))
+        waitForTitles(grid, setOf("All Live TV", "News", "No Catch Up"))
+        assertTrue((grid.adapter as CatalogAdapter).currentItems.all { it.kind == "feature_category" })
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        val homeDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.none { it.id == "catch_up" } && System.nanoTime() < homeDeadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
+        openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == "catch_up" }))
+        waitForTitles(grid, setOf("All Catch Up", "News"))
+        assertEquals(setOf("All Catch Up", "News"), (grid.adapter as CatalogAdapter).currentItems.map { it.title }.toSet())
+        assertFalse((grid.adapter as CatalogAdapter).currentItems.any { it.title == "No Catch Up" })
+
+        openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.title == "News" }))
+        val contentDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.singleOrNull()?.id != "archive" && System.nanoTime() < contentDeadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
+        assertEquals(listOf("archive"), (grid.adapter as CatalogAdapter).currentItems.map { it.id })
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_bar).visibility)
     }
 
     @Test
@@ -158,6 +361,32 @@ class TvUiRegressionTest {
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
         assertTrue(activity.findViewById<View>(R.id.nav_home).hasFocus())
         assertEquals(dp(260), rail.layoutParams.width)
+    }
+
+    @Test
+    fun heldTvOkOpensCardOptionsOnceWithoutDispatchingPlaybackClick() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        var opened: CatalogCard? = null
+        var clicked: CatalogCard? = null
+        val adapter = CatalogAdapter(
+            onClick = { clicked = it },
+            onLongClick = { opened = it },
+        )
+        val card = CatalogCard("channel", "live", "Channel", null, "LIVE")
+        grid.adapter = adapter
+        adapter.submit(listOf(card))
+        shadowOf(Looper.getMainLooper()).idle()
+        val item = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView)
+        item.requestFocus()
+
+        item.dispatchKeyEvent(KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        item.dispatchKeyEvent(KeyEvent(0L, 600L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 1))
+        item.dispatchKeyEvent(KeyEvent(0L, 700L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 2))
+
+        assertEquals(card, opened)
+        assertNull(clicked)
+        item.dispatchKeyEvent(KeyEvent(0L, 800L, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        assertNull(clicked)
     }
 
     @Test
@@ -785,6 +1014,13 @@ class TvUiRegressionTest {
         assertEquals(white, negative.currentTextColor)
         assertEquals(pink, negative.backgroundTintList?.getColorForState(intArrayOf(android.R.attr.state_focused), 0))
         assertFalse(positive.hasFocus())
+    }
+
+    private fun waitForTitles(grid: RecyclerView, expected: Set<String>) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.map { it.title }.toSet() != expected && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()

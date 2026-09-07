@@ -228,6 +228,15 @@ class XtreamClient(
 
     suspend fun shortEpg(credentials: ProviderCredentials, streamId: String, limit: Int = 8): List<XtreamProgramme> = withContext(Dispatchers.IO) {
         val root = objectCall(credentials, "get_short_epg", mapOf("stream_id" to streamId, "limit" to limit.toString()))
+        parseProgrammes(root)
+    }
+
+    /** Provider-backed archive schedule used to construct Xtream timeshift playback requests. */
+    suspend fun catchUpEpg(credentials: ProviderCredentials, streamId: String): List<XtreamProgramme> = withContext(Dispatchers.IO) {
+        parseProgrammes(objectCall(credentials, "get_simple_data_table", mapOf("stream_id" to streamId)))
+    }
+
+    private fun parseProgrammes(root: JSONObject): List<XtreamProgramme> =
         (root.optJSONArray("epg_listings") ?: JSONArray()).objects().map { e ->
             XtreamProgramme(
                 decodeBase64(e.optString("title")), decodeBase64(e.optString("description")).nullIfBlank(),
@@ -235,7 +244,6 @@ class XtreamClient(
                 e.flexLong("start_timestamp"), e.flexLong("stop_timestamp"),
             )
         }
-    }
 
     fun streamUrl(credentials: ProviderCredentials, kind: String, id: String, extension: String? = null): String {
         val base = normalizeServerUrl(credentials.serverUrl)

@@ -11,8 +11,11 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.EditText
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.card.MaterialCardView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -105,6 +108,52 @@ class PostLoginMobileUiTest {
     }
 
     @Test
+    fun featureSelectionHubIsSingleColumnOnMobileAndDoesNotExposeCategoryRail() {
+        openHomeFeature("favorites")
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        waitForCardCount(grid, 3)
+
+        assertEquals(1, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+        assertEquals(
+            listOf("Live Favourites", "Movie Favourites", "Series Favourites"),
+            (grid.adapter as CatalogAdapter).currentItems.map { it.title },
+        )
+    }
+
+    @Test
+    fun homeTileAccentPreservesResponsiveMobileArtworkGeometry() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        shadowOf(Looper.getMainLooper()).idle()
+        val card = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView) as MaterialCardView
+        val artwork = card.findViewById<ImageView>(R.id.artwork)
+        val badge = card.findViewById<TextView>(R.id.badge)
+        val density = activity.resources.displayMetrics.density
+
+        assertEquals(ImageView.ScaleType.FIT_CENTER, artwork.scaleType)
+        assertEquals((8 * density).toInt(), artwork.paddingStart)
+        assertEquals((104 * density).toInt(), (artwork.parent as View).layoutParams.height)
+        assertEquals(ContextCompat.getColor(activity, R.color.crown_accent_live), badge.backgroundTintList?.defaultColor)
+    }
+
+    @Test
+    @Config(sdk = [28], qualifiers = "sw600dp-port")
+    fun featureSelectionHubUsesTwoColumnsOnTablet() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val homeColumns = (grid.layoutManager as GridLayoutManager).spanCount
+        openHomeFeature("favorites")
+        waitForCardCount(grid, 3)
+
+        assertEquals(2, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(homeColumns, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(9, (grid.adapter as CatalogAdapter).currentItems.size)
+    }
+
+    @Test
     fun contentSectionsExposeScopedSearchWithoutReplacingMasterSearch() {
         activity.findViewById<View>(R.id.nav_live).performClick()
 
@@ -131,6 +180,22 @@ class PostLoginMobileUiTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         assertEquals("", search.text.toString())
         assertEquals("Search live channels", search.hint.toString())
+    }
+
+    private fun openHomeFeature(id: String) {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val card = requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == id })
+        MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply {
+            isAccessible = true
+            invoke(activity, card)
+        }
+    }
+
+    private fun waitForCardCount(grid: RecyclerView, count: Int) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while ((grid.adapter as CatalogAdapter).currentItems.size != count && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
     }
 
     @Test

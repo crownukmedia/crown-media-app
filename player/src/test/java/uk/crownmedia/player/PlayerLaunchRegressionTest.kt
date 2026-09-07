@@ -4,6 +4,7 @@ import android.content.Intent
 import android.view.KeyEvent
 import android.view.View
 import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -48,7 +49,13 @@ class PlayerLaunchRegressionTest {
             activity = controller.get()
 
             assertFalse(activity!!.isFinishing)
-            assertNotNull(activity!!.findViewById<View>(R.id.player_view))
+            val playerView = activity!!.findViewById<PlayerView>(R.id.player_view)
+            assertNotNull(playerView)
+            assertEquals(
+                View.GONE,
+                playerView.findViewById<View>(androidx.media3.ui.R.id.exo_buffering).visibility,
+            )
+            assertEquals(View.VISIBLE, activity!!.findViewById<View>(R.id.playback_loading).visibility)
             val player = PlayerActivity::class.java.getDeclaredField("player").apply { isAccessible = true }
                 .get(activity) as Player
             assertEquals(PlayerActivity.SEEK_INCREMENT_MS, player.seekBackIncrement)
@@ -75,5 +82,21 @@ class PlayerLaunchRegressionTest {
         }
         assertFalse(playerControllerOwnsKey(true, KeyEvent.KEYCODE_MEDIA_REWIND))
         assertFalse(playerControllerOwnsKey(true, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD))
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp-port-mdpi")
+    fun mobilePlayerAlsoUsesOnlyTheCrownLoadingIndicator() {
+        val intent = PlayerActivity.internalIntent(
+            context = RuntimeEnvironment.getApplication(),
+            url = "http://127.0.0.1/movie.mp4",
+            title = "movie",
+            live = false,
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        activity = Robolectric.buildActivity(PlayerActivity::class.java, intent).create().get()
+
+        val playerView = activity!!.findViewById<PlayerView>(R.id.player_view)
+        assertEquals(View.GONE, playerView.findViewById<View>(androidx.media3.ui.R.id.exo_buffering).visibility)
+        assertEquals(View.VISIBLE, activity!!.findViewById<View>(R.id.playback_loading).visibility)
     }
 }

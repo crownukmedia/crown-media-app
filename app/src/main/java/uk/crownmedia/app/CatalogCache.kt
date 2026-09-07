@@ -25,6 +25,22 @@ class CatalogCache(private val dao: CatalogDao) {
             }.map { it.toXtream() }
         }
 
+    suspend fun accessibleItemPage(
+        playlistId: String,
+        kind: String,
+        categoryId: String?,
+        includeAdult: Boolean,
+        limit: Int,
+        offset: Int,
+        sort: String = "provider",
+    ): List<XtreamItem> = withContext(Dispatchers.Default) {
+        when (sort) {
+            "asc" -> dao.accessibleItemPageAscending(playlistId, kind, categoryId, includeAdult, limit, offset)
+            "desc" -> dao.accessibleItemPageDescending(playlistId, kind, categoryId, includeAdult, limit, offset)
+            else -> dao.accessibleItemPageProvider(playlistId, kind, categoryId, includeAdult, limit, offset)
+        }.map { it.toXtream() }
+    }
+
     suspend fun favoriteItemPage(playlistId: String, kind: String, contentIds: List<String>, limit: Int, offset: Int, sort: String = "provider"): List<XtreamItem> =
         if (contentIds.isEmpty()) emptyList()
         else withContext(Dispatchers.Default) {
@@ -33,6 +49,18 @@ class CatalogCache(private val dao: CatalogDao) {
                 "desc" -> dao.favoriteItemPageDescending(playlistId, kind, contentIds, limit, offset)
                 else -> dao.favoriteItemPageProvider(playlistId, kind, contentIds, limit, offset)
             }.map { it.toXtream() }
+        }
+
+    suspend fun catchUpItemPage(playlistId: String, categoryId: String?, includeAdult: Boolean, limit: Int, offset: Int): List<XtreamItem> =
+        withContext(Dispatchers.Default) {
+            dao.catchUpItemPage(playlistId, categoryId, includeAdult, limit, offset).map { it.toXtream() }
+        }
+
+    suspend fun catchUpCategoryCounts(playlistId: String, includeAdult: Boolean): Map<String, Int> =
+        withContext(Dispatchers.Default) {
+            dao.catchUpCategoryItemCounts(playlistId, includeAdult)
+                .filter { it.itemCount > 0 && it.categoryId.isNotBlank() }
+                .associate { it.categoryId to it.itemCount }
         }
 
     suspend fun itemCount(playlistId: String, kind: String, categoryId: String?): Int =

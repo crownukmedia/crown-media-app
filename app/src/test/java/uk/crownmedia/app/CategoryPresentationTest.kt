@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
 import uk.crownmedia.data.xtream.XtreamCategory
-import uk.crownmedia.core.design.StreamAvailability
 
 class CategoryPresentationTest {
     @Test
@@ -51,17 +50,29 @@ class CategoryPresentationTest {
     }
 
     @Test
-    fun liveCardsOrderHealthyThenUnknownThenFailuresWithoutDroppingAny() {
+    fun liveCardsKeepProviderOrderWithoutHealthReordering() {
         val cards = listOf("failed", "unknown-a", "healthy", "unknown-b").map {
             CatalogCard(it, "live", it, null, "LIVE")
         }
-        val statuses = mapOf(
-            "failed" to StreamAvailability.Status.TEMPORARILY_FAILED,
-            "healthy" to StreamAvailability.Status.HEALTHY,
+
+        assertEquals(cards, orderedCatalogCards(cards, "provider"))
+    }
+
+    @Test
+    fun emptyCategoryFilteringPreservesProviderOrder() {
+        val categories = listOf(
+            XtreamCategory("first", "First"),
+            XtreamCategory("empty", "Empty"),
+            XtreamCategory("last", "Last"),
         )
 
-        val result = prioritizeLiveCards(cards) { statuses[it.id] ?: StreamAvailability.Status.UNKNOWN }
-
-        assertEquals(listOf("healthy", "unknown-a", "unknown-b", "failed"), result.map { it.id })
+        assertEquals(
+            listOf("first", "last"),
+            availableCategoriesInProviderOrder(categories, setOf("first", "last"), catalogComplete = true).map { it.id },
+        )
+        assertEquals(
+            categories,
+            availableCategoriesInProviderOrder(categories, emptySet(), catalogComplete = false),
+        )
     }
 }
