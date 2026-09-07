@@ -157,6 +157,45 @@ class CatalogPaginationTest {
         }
     }
 
+    @Test
+    fun accessiblePagesFilterBeforeLimitAndPreserveGlobalOffsets() = runBlocking {
+        val values = (0 until 80).map { index ->
+            items(1).first().copy(
+                id = index.toString(),
+                name = "Channel ${index.toString().padStart(2, '0')}",
+                providerOrder = index,
+                isAdult = index < 30,
+            )
+        }
+        cache.saveItems("playlist", "live", null, values)
+
+        val first = cache.accessibleItemPage("playlist", "live", null, false, 48, 0)
+        val second = cache.accessibleItemPage("playlist", "live", null, false, 48, 48)
+
+        assertEquals(48, first.size)
+        assertEquals("30", first.first().id)
+        assertEquals("77", first.last().id)
+        assertEquals(listOf("78", "79"), second.map { it.id })
+    }
+
+    @Test
+    fun catchUpQueriesReturnOnlyAccessibleArchiveChannelsInProviderOrder() = runBlocking {
+        cache.saveItems(
+            "playlist",
+            "live",
+            null,
+            listOf(
+                items(1).first().copy(id = "plain", categoryId = "news", providerOrder = 0),
+                items(1).first().copy(id = "archive", categoryId = "news", providerOrder = 1, catchUp = true, catchUpDays = 7),
+                items(1).first().copy(id = "adult", categoryId = "adult", providerOrder = 2, catchUp = true, catchUpDays = 3, isAdult = true),
+            ),
+        )
+
+        assertEquals(listOf("archive"), cache.catchUpItemPage("playlist", null, includeAdult = false, limit = 60, offset = 0).map { it.id })
+        assertEquals(mapOf("news" to 1), cache.catchUpCategoryCounts("playlist", includeAdult = false))
+        assertEquals(listOf("archive", "adult"), cache.catchUpItemPage("playlist", null, includeAdult = true, limit = 60, offset = 0).map { it.id })
+    }
+
     private fun items(count: Int) = List(count) { index ->
         XtreamItem(
             id = index.toString(),

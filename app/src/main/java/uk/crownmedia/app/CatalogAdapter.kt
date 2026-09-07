@@ -2,15 +2,18 @@ package uk.crownmedia.app
 
 import android.view.LayoutInflater
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.text.TextUtils
+import android.content.res.ColorStateList
 import android.content.res.Resources
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.AsyncListDiffer
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.core.view.isVisible
 import coil.load
 import coil.dispose
@@ -33,6 +36,7 @@ data class CatalogCard(
     val localArtwork: Int? = null,
     val healthHint: Int = 0,
     val isAdult: Boolean = false,
+    val catchUpDays: Int = 0,
 )
 
 internal fun CatalogCard.preferredArtworkSource(): Any {
@@ -47,6 +51,20 @@ internal fun CatalogCard.preferredArtworkSource(): Any {
         remote != null -> remote
         else -> R.drawable.crown_media_logo_header
     }
+}
+
+/** A small, controlled palette for bundled navigation artwork; remote media keeps neutral chrome. */
+internal fun CatalogCard.tileAccentColorRes(): Int? = when (localArtwork) {
+    R.drawable.home_live_icon -> R.color.crown_accent_live
+    R.drawable.home_movies_icon -> R.color.crown_accent_movies
+    R.drawable.home_series_icon -> R.color.crown_accent_series
+    R.drawable.home_epg_icon -> R.color.crown_accent_guide
+    R.drawable.home_favorites_icon -> R.color.crown_accent_favourites
+    R.drawable.home_catch_up_icon -> R.color.crown_accent_catch_up
+    R.drawable.home_account_icon,
+    R.drawable.home_reload_icon,
+    R.drawable.home_playlist_icon -> R.color.crown_accent_manage
+    else -> null
 }
 
 internal fun categoryAccessibilityLabel(
@@ -153,11 +171,23 @@ class CatalogAdapter(
     override fun onBindViewHolder(holder: Holder, position: Int) = holder.bind(differ.currentList[position])
 
     inner class Holder(private val binding: ItemContentBinding) : RecyclerView.ViewHolder(binding.root) {
+        private var optionsOpenedFromKey = false
+
         fun bind(value: CatalogCard) {
+            optionsOpenedFromKey = false
             binding.title.text = value.title
             binding.meta.text = value.meta
             binding.badge.text = value.badge
             binding.badge.visibility = if (value.badge.isBlank()) View.GONE else View.VISIBLE
+            val accentRes = value.tileAccentColorRes()
+            val accent = accentRes?.let { ContextCompat.getColor(binding.root.context, it) }
+            val neutralSurface = ContextCompat.getColor(binding.root.context, R.color.crown_surface)
+            val neutralStroke = ContextCompat.getColor(binding.root.context, R.color.crown_border)
+            val normalStroke = accent?.let { ColorUtils.blendARGB(neutralSurface, it, 0.58f) } ?: neutralStroke
+            binding.root.setCardBackgroundColor(neutralSurface)
+            binding.root.strokeColor = normalStroke
+            binding.badge.backgroundTintList = accent?.let(ColorStateList::valueOf)
+            binding.badge.setTextColor(ContextCompat.getColor(binding.root.context, R.color.crown_background))
             val television = binding.root.context.appLayout() == AppLayout.TELEVISION
             val poster = !uniformLandscapeCards && (value.kind == "movie" || value.kind == "series")
             val artworkHeightDp = if (poster) 220 else if (television) 118 else 104
@@ -166,6 +196,7 @@ class CatalogAdapter(
             artworkContainer.layoutParams = artworkContainer.layoutParams.apply { height = artworkHeight }
             val artworkDensity = binding.root.resources.displayMetrics.density
             val brandInset = (12 * artworkDensity).toInt()
+            val tileInset = (8 * artworkDensity).toInt()
             val source = value.preferredArtworkSource()
             val brandFallback = source == R.drawable.crown_media_logo_header
             fun showBrandArtwork() {
@@ -188,6 +219,13 @@ class CatalogAdapter(
                     onSuccess = { _, _ ->
                         if (brandFallback) {
                             showBrandArtwork()
+                        } else if (value.localArtwork != null) {
+                            // Bundled Home/feature artwork is a complete 16:9 composition, not a
+                            // poster. Contain it on every layout so responsive card widths cannot
+                            // crop or over-zoom the icon artwork.
+                            binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, R.color.crown_surface))
+                            binding.artwork.scaleType = ImageView.ScaleType.FIT_CENTER
+                            binding.artwork.setPadding(tileInset, tileInset, tileInset, tileInset)
                         } else {
                             binding.artwork.setBackgroundColor(ContextCompat.getColor(binding.root.context, if (value.kind == "live") R.color.white else R.color.crown_surface))
                             binding.artwork.scaleType = when (value.kind) {
@@ -206,22 +244,86 @@ class CatalogAdapter(
             binding.moreActions.contentDescription = binding.root.context.getString(R.string.options_for, value.title)
             binding.moreActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
-            binding.root.setOnLongClickListener { onLongClick(value); true }
+            binding.root.setOnLongClickListener {
+                // Some TV frameworks synthesize a View long-click, while others only send
+                // repeated DPAD_CENTER/Enter events. Mark this sequence handled so the explicit
+                // repeat fallback below cannot open the options dialog a second time.
+                if (television) optionsOpenedFromKey = true
+                onLongClick(value)
+                true
+            }
             binding.root.setOnKeyListener { view, keyCode, event ->
                 val position = bindingAdapterPosition
                 if (position != RecyclerView.NO_POSITION && onDpad(view, position, keyCode, event)) {
                     true
-                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.kind != "home") {
+                } else if (
+                    television &&
+                    value.kind !in setOf("home", "feature_category") &&
+                    keyCode in TV_CARD_OPTIONS_KEYS &&
+                    event.action == KeyEvent.ACTION_DOWN &&
+                    (event.repeatCount > 0 || event.isLongPress)
+                ) {
+                    if (!optionsOpenedFromKey) {
+                        optionsOpenedFromKey = true
+                        onLongClick(value)
+                    }
+                    true
+                } else if (
+                    television &&
+                    keyCode in TV_CARD_OPTIONS_KEYS &&
+                    event.action == KeyEvent.ACTION_UP &&
+                    optionsOpenedFromKey
+                ) {
+                    // Consume the matching key-up so View does not also dispatch the short-click
+                    // action (play/details) after opening the favourite/options dialog.
+                    optionsOpenedFromKey = false
+                    true
+                } else if (keyCode in TV_CARD_MENU_KEYS && event.action == KeyEvent.ACTION_UP && value.kind !in setOf("home", "feature_category")) {
                     onLongClick(value)
                     true
                 } else false
             }
-            binding.root.setOnFocusChangeListener { view, focused ->
-                view.animate().scaleX(if (focused) 1.055f else 1f).scaleY(if (focused) 1.055f else 1f).translationZ(if (focused) 12f else 0f).setDuration(130).start()
-                binding.root.strokeColor = ContextCompat.getColor(view.context, if (focused) R.color.crown_gold else R.color.crown_border)
-                val density = view.resources.displayMetrics.density
-                binding.root.strokeWidth = ((if (focused) 3 else 1) * density).toInt().coerceAtLeast(1)
+            binding.root.setOnFocusChangeListener { _, focused ->
+                if (!focused) optionsOpenedFromKey = false
+                applyEmphasis(focused)
             }
+            binding.root.setOnHoverListener { _, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_HOVER_ENTER -> applyEmphasis(true)
+                    MotionEvent.ACTION_HOVER_EXIT -> applyEmphasis(binding.root.hasFocus())
+                }
+                false
+            }
+            // RecyclerView can restore/request TV focus before a rebound holder installs this
+            // listener. Synchronize the visual state immediately so the first focused tile never
+            // appears with its resting border until the user moves the remote.
+            applyEmphasis(binding.root.hasFocus())
+        }
+
+        private fun applyEmphasis(emphasized: Boolean) {
+            val value = itemAt(bindingAdapterPosition)
+            val accentRes = value?.tileAccentColorRes()
+            val normalStroke = accentRes?.let { resource ->
+                ColorUtils.blendARGB(
+                    ContextCompat.getColor(binding.root.context, R.color.crown_surface),
+                    ContextCompat.getColor(binding.root.context, resource),
+                    0.58f,
+                )
+            } ?: ContextCompat.getColor(binding.root.context, R.color.crown_border)
+            binding.root.animate()
+                .scaleX(if (emphasized) 1.045f else 1f)
+                .scaleY(if (emphasized) 1.045f else 1f)
+                .translationZ(if (emphasized) 12f else 0f)
+                .setDuration(130)
+                .start()
+            binding.root.setCardBackgroundColor(
+                ContextCompat.getColor(binding.root.context, if (emphasized) R.color.crown_surface_raised else R.color.crown_surface),
+            )
+            binding.root.strokeColor = if (emphasized) {
+                ContextCompat.getColor(binding.root.context, R.color.crown_primary_bright)
+            } else normalStroke
+            val density = binding.root.resources.displayMetrics.density
+            binding.root.strokeWidth = ((if (emphasized) 3 else 1) * density).toInt().coerceAtLeast(1)
         }
 
         fun recycle() = binding.artwork.dispose()
@@ -232,3 +334,14 @@ class CatalogAdapter(
         super.onViewRecycled(holder)
     }
 }
+
+private val TV_CARD_OPTIONS_KEYS = setOf(
+    KeyEvent.KEYCODE_DPAD_CENTER,
+    KeyEvent.KEYCODE_ENTER,
+    KeyEvent.KEYCODE_NUMPAD_ENTER,
+)
+
+private val TV_CARD_MENU_KEYS = setOf(
+    KeyEvent.KEYCODE_MENU,
+    KeyEvent.KEYCODE_INFO,
+)

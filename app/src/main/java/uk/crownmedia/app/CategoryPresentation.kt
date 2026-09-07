@@ -1,7 +1,6 @@
 package uk.crownmedia.app
 
 import uk.crownmedia.data.xtream.XtreamCategory
-import uk.crownmedia.core.design.StreamAvailability
 import java.util.Locale
 
 internal fun displayedCategoryList(
@@ -54,10 +53,19 @@ internal fun isProviderAllCategory(category: XtreamCategory): Boolean {
             tokens.drop(1).all { it in GENERIC_ALL_SUFFIXES || it.all(Char::isDigit) })
 }
 
-internal fun prioritizeLiveCards(
-    cards: List<CatalogCard>,
-    status: (CatalogCard) -> StreamAvailability.Status,
-): List<CatalogCard> = cards.sortedWith(compareBy { status(it).rank })
+internal fun availableCategoriesInProviderOrder(
+    providerCategories: List<XtreamCategory>,
+    nonEmptyCategoryIds: Set<String>,
+    catalogComplete: Boolean,
+): List<XtreamCategory> = if (catalogComplete) {
+    providerCategories.filter { it.id in nonEmptyCategoryIds }
+} else providerCategories
+
+internal fun orderedCatalogCards(cards: List<CatalogCard>, order: String): List<CatalogCard> = when (order) {
+    "asc" -> cards.sortedBy { it.title.lowercase() }
+    "desc" -> cards.sortedByDescending { it.title.lowercase() }
+    else -> cards
+}
 
 private fun normalizedCategoryName(value: String): String = categoryTokens(value).joinToString(" ")
 

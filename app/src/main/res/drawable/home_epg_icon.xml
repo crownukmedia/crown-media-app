@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="160dp" android:height="90dp" android:viewportWidth="160" android:viewportHeight="90">
+    <path android:fillColor="@color/crown_icon_canvas" android:pathData="M0,0h160v90h-160z" />
+    <path android:fillColor="@color/crown_icon_layer" android:pathData="M104,-8h64v106h-100z" />
+    <path android:fillColor="@color/crown_accent_guide" android:pathData="M36,20h88a8,8 0,0 1,8 8v44a8,8 0,0 1,-8 8h-88a8,8 0,0 1,-8 -8v-44a8,8 0,0 1,8 -8" />
+    <path android:fillColor="#F7F8FA" android:pathData="M40,31h80v7h-80zM40,45h34v7h-34zM82,45h38v7h-38zM40,59h34v7h-34zM82,59h38v7h-38z" />
+    <path android:fillColor="@color/crown_accent_favourites" android:pathData="M51,11h7v18h-7zM102,11h7v18h-7z" />
+</vector>

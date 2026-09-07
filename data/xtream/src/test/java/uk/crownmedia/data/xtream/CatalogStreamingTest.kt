@@ -10,8 +10,14 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import uk.crownmedia.core.model.ProviderCredentials
+import java.util.Base64
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28])
 class CatalogStreamingTest {
     @Test
     fun largeCatalogParserEmitsBoundedBatchesAndSkipsUnknownFields() = runBlocking {
@@ -44,5 +50,27 @@ class CatalogStreamingTest {
         assertEquals(42, batches[0][0].providerOrder)
         assertEquals("epg.two", batches[0][1].epgChannelId)
         assertEquals("mkv", batches[1][0].extension)
+    }
+
+    @Test
+    fun catchUpGuideUsesProviderArchiveEndpointAndParsesProgrammes() = runBlocking {
+        var requestedUrl = ""
+        val title = Base64.getEncoder().encodeToString("Archived Show".toByteArray())
+        val json = """{"epg_listings":[{"title":"$title","description":"","start":"2026-09-06 10:00:00","end":"2026-09-06 11:00:00","start_timestamp":"1788688800","stop_timestamp":"1788692400"}]}"""
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            requestedUrl = chain.request().url.toString()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(json.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+
+        val programmes = XtreamClient(http).catchUpEpg(
+            ProviderCredentials("http://example.test", "user", "pass"),
+            "42",
+        )
+
+        assertTrue(requestedUrl.contains("action=get_simple_data_table"))
+        assertTrue(requestedUrl.contains("stream_id=42"))
+        assertEquals("Archived Show", programmes.single().title)
+        assertEquals(1788688800L, programmes.single().startTimestamp)
     }
 }
