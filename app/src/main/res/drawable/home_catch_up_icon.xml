@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="160dp" android:height="90dp" android:viewportWidth="160" android:viewportHeight="90">
-    <path android:fillColor="#141925" android:pathData="M0,0h160v90h-160z" />
-    <path android:fillColor="#201B3D" android:pathData="M108,-8h60v106h-104z" />
-    <path android:fillColor="#7650D8" android:pathData="M80,17a31,31 0,1 0,30,39h-9a22,22 0,1 1,-6,-22l-11,0l0,9l28,0l0,-28l-9,0l0,12a31,31 0,0 0,-23,-10" />
-    <path android:fillColor="#F4C95D" android:pathData="M75,31h8v19l13,8l-4,7l-17,-10z" />
+    <path android:fillColor="@color/crown_icon_canvas" android:pathData="M0,0h160v90h-160z" />
+    <path android:fillColor="@color/crown_icon_layer" android:pathData="M108,-8h60v106h-104z" />
+    <path android:fillColor="@color/crown_accent_catch_up" android:pathData="M80,17a31,31 0,1 0,30,39h-9a22,22 0,1 1,-6,-22l-11,0l0,9l28,0l0,-28l-9,0l0,12a31,31 0,0 0,-23,-10" />
+    <path android:fillColor="@color/white" android:pathData="M75,31h8v19l13,8l-4,7l-17,-10z" />
 </vector>

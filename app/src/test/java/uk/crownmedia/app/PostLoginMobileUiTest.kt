@@ -11,9 +11,11 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.EditText
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.card.MaterialCardView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -117,6 +119,21 @@ class PostLoginMobileUiTest {
             listOf("Live Favourites", "Movie Favourites", "Series Favourites"),
             (grid.adapter as CatalogAdapter).currentItems.map { it.title },
         )
+    }
+
+    @Test
+    fun homeTileAccentPreservesResponsiveMobileArtworkGeometry() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        shadowOf(Looper.getMainLooper()).idle()
+        val card = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView) as MaterialCardView
+        val artwork = card.findViewById<ImageView>(R.id.artwork)
+        val badge = card.findViewById<TextView>(R.id.badge)
+        val density = activity.resources.displayMetrics.density
+
+        assertEquals(ImageView.ScaleType.FIT_CENTER, artwork.scaleType)
+        assertEquals((8 * density).toInt(), artwork.paddingStart)
+        assertEquals((104 * density).toInt(), (artwork.parent as View).layoutParams.height)
+        assertEquals(ContextCompat.getColor(activity, R.color.crown_accent_live), badge.backgroundTintList?.defaultColor)
     }
 
     @Test

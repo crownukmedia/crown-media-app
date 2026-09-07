@@ -11,5 +11,15 @@
     <color name="crown_success">#59D499</color>
     <color name="crown_gold">#9A6FEB</color>
     <color name="crown_border">#3A4268</color>
+    <!-- Restrained content accents: section identity without replacing Crown violet/pink. -->
+    <color name="crown_accent_live">#FF6F7D</color>
+    <color name="crown_accent_movies">#F2B75D</color>
+    <color name="crown_accent_series">#55C7B5</color>
+    <color name="crown_accent_guide">#58BCE8</color>
+    <color name="crown_accent_favourites">#F2C75C</color>
+    <color name="crown_accent_catch_up">#62D49D</color>
+    <color name="crown_accent_manage">#A98CF3</color>
+    <color name="crown_icon_canvas">#101522</color>
+    <color name="crown_icon_layer">#19233A</color>
     <color name="white">#FFFFFF</color>
 </resources>

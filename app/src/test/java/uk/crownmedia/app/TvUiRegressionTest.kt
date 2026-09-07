@@ -22,6 +22,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
 import com.google.android.material.materialswitch.MaterialSwitch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -119,6 +120,24 @@ class TvUiRegressionTest {
             .findViewById<ImageView>(R.id.artwork)
         assertEquals(ImageView.ScaleType.FIT_CENTER, artwork.scaleType)
         assertTrue(artwork.paddingStart > 0)
+    }
+
+    @Test
+    fun homeTilesUseSectionAccentsAndCrownPinkFocusWithoutChangingGeometry() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        shadowOf(Looper.getMainLooper()).idle()
+        val live = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView) as MaterialCardView
+        val movies = requireNotNull(grid.findViewHolderForAdapterPosition(1)?.itemView) as MaterialCardView
+        val liveBadge = live.findViewById<TextView>(R.id.badge)
+        val moviesBadge = movies.findViewById<TextView>(R.id.badge)
+
+        assertEquals(ContextCompat.getColor(activity, R.color.crown_accent_live), liveBadge.backgroundTintList?.defaultColor)
+        assertEquals(ContextCompat.getColor(activity, R.color.crown_accent_movies), moviesBadge.backgroundTintList?.defaultColor)
+        live.requestFocus()
+        assertEquals(ContextCompat.getColor(activity, R.color.crown_primary_bright), live.strokeColor)
+        assertEquals(dp(3), live.strokeWidth)
+        assertEquals(ImageView.ScaleType.FIT_CENTER, live.findViewById<ImageView>(R.id.artwork).scaleType)
+        assertEquals(ImageView.ScaleType.FIT_CENTER, movies.findViewById<ImageView>(R.id.artwork).scaleType)
     }
 
     @Test
