@@ -507,7 +507,7 @@ class TvUiRegressionTest {
         assertEquals("Search live channels", search.hint.toString())
         assertEquals(R.id.category_list, search.nextFocusDownId)
         assertEquals(RecyclerView.VERTICAL, (categories.layoutManager as LinearLayoutManager).orientation)
-        assertEquals(dp(211), activity.findViewById<View>(R.id.category_bar).layoutParams.width)
+        assertEquals(dp(192), activity.findViewById<View>(R.id.category_bar).layoutParams.width)
         assertEquals(0, activity.findViewById<View>(R.id.category_bar).layoutParams.height)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, categories.layoutParams.width)
         assertEquals(0, categories.layoutParams.height)
@@ -525,14 +525,38 @@ class TvUiRegressionTest {
         assertEquals(dp(54), logo.layoutParams.height)
         assertEquals(dp(5), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
-        assertEquals(dp(54), category.layoutParams.height)
+        assertEquals(dp(46), category.layoutParams.height)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, category.layoutParams.width)
         assertEquals(0, category.minimumWidth)
-        assertEquals(dp(14), category.paddingStart)
-        assertEquals(dp(12), category.paddingEnd)
+        assertEquals(dp(10), category.paddingStart)
+        assertEquals(dp(9), category.paddingEnd)
         assertEquals(dp(44), activity.findViewById<View>(R.id.category_menu_button).layoutParams.width)
         assertEquals(dp(44), activity.findViewById<View>(R.id.category_menu_button).layoutParams.height)
         assertEquals(0, activity.findViewById<View>(R.id.category_list).layoutParams.height)
+    }
+
+
+    @Test
+    fun tvPagedSectionsExposeSearchAsFirstCompactCategoryAction() {
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        categories.measure(
+            View.MeasureSpec.makeMeasureSpec(dp(192), View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(dp(420), View.MeasureSpec.EXACTLY),
+        )
+        categories.layout(0, 0, dp(192), dp(420))
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue(requireNotNull(categories.adapter).itemCount >= 1)
+        val first = requireNotNull(categories.findViewHolderForAdapterPosition(0)?.itemView)
+        val label = first.findViewById<TextView>(R.id.category_name)
+        assertEquals("Search", label.text.toString())
+        assertNotNull(label.compoundDrawables[0])
+        assertEquals(dp(46), first.layoutParams.height)
+
+        first.performClick()
+        assertTrue(activity.findViewById<EditText>(R.id.search_box).hasFocus())
     }
 
     @Test

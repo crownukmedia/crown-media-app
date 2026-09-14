@@ -240,7 +240,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun configureLists() {
         val television = isTelevisionLayout()
-        categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory, ::handleCategoryDpad)
+        categoriesAdapter = CategoryAdapter(
+            ::selectCategory,
+            ::hideCategory,
+            ::handleCategoryDpad,
+            ::categoryNavigationItems,
+        )
         binding.categoryList.layoutManager = LinearLayoutManager(
             this,
             if (television) RecyclerView.VERTICAL else RecyclerView.HORIZONTAL,
@@ -708,6 +713,11 @@ class MainActivity : AppCompatActivity() {
         binding.actionReload.isVisible = !television
         binding.actionPlaylist.isVisible = !television
         setCategoryNavigationVisible(value in CATEGORY_SECTIONS && !isFeatureRoot(value, state))
+        if (value in PAGED_SECTIONS) {
+            // Search is a local navigation action and must be available immediately, including
+            // while a cold provider category list is still loading.
+            categoriesAdapter.submit(state.categories, currentCategory)
+        }
         binding.screenTitle.text = when (value) {
             Section.HOME -> "Welcome to Crown Media"
             Section.LIVE -> "Live TV"
@@ -929,6 +939,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectCategory(category: XtreamCategory) {
+        if (category.id == CATEGORY_SEARCH_ID) {
+            focusExistingSectionSearch()
+            return
+        }
         if (category.id.startsWith("season:")) {
             selectSeriesSeason(category.id.substringAfter(':').toIntOrNull() ?: return)
             return
@@ -960,6 +974,27 @@ class MainActivity : AppCompatActivity() {
         cancelSectionRefreshes(section)
         analytics.trackCategorySelected(section.name.lowercase())
         load()
+    }
+
+    private fun categoryNavigationItems(values: List<XtreamCategory>): List<XtreamCategory> {
+        val supportsInlineSearch = nestedSeries == null && section in PAGED_SECTIONS &&
+            (isTelevisionLayout() || deviceClass() == DeviceClass.TABLET)
+        return if (supportsInlineSearch && values.none { it.id == CATEGORY_SEARCH_ID }) {
+            listOf(XtreamCategory(CATEGORY_SEARCH_ID, getString(R.string.nav_search))) + values
+        } else values
+    }
+
+    private fun focusExistingSectionSearch() {
+        if (section !in PAGED_SECTIONS) return
+        binding.searchRow.isVisible = true
+        binding.searchBox.requestFocus()
+        binding.searchBox.setSelection(binding.searchBox.text.length)
+        if (!isTelevisionLayout()) {
+            binding.searchBox.post {
+                (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.showSoftInput(binding.searchBox, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
     }
 
     private fun scrollCategoryIntoView(categoryId: String) {
@@ -3543,12 +3578,12 @@ class MainActivity : AppCompatActivity() {
         private const val TV_NAV_ANIMATION_MS = 180L
         private const val TV_NAV_ICON_PADDING_DP = 16
         private const val TV_NAV_BUTTON_PADDING_DP = 16
-        private const val TV_CATEGORY_MIN_WIDTH_DP = 180
-        private const val TV_CATEGORY_MAX_WIDTH_DP = 240
+        private const val TV_CATEGORY_MIN_WIDTH_DP = 168
+        private const val TV_CATEGORY_MAX_WIDTH_DP = 216
         private const val TV_CONTENT_MIN_CARD_WIDTH_DP = 145
         private const val TV_SAFE_AREA_START_DP = 16
-        private const val TV_PREVIEW_DELAY_MS = 700L
-        private const val MOBILE_PREVIEW_DELAY_MS = 900L
+        internal const val TV_PREVIEW_DELAY_MS = 350L
+        internal const val MOBILE_PREVIEW_DELAY_MS = 450L
         private val TV_DPAD_KEYS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT,
             KeyEvent.KEYCODE_DPAD_RIGHT,
@@ -3571,7 +3606,7 @@ class MainActivity : AppCompatActivity() {
                 .coerceIn(TV_NAV_MIN_EXPANDED_WIDTH_DP, TV_NAV_MAX_EXPANDED_WIDTH_DP)
 
         internal fun responsiveTvCategoryNavigationWidthDp(screenWidthDp: Int): Int =
-            (screenWidthDp * 0.22f).toInt()
+            (screenWidthDp * 0.20f).toInt()
                 .coerceIn(TV_CATEGORY_MIN_WIDTH_DP, TV_CATEGORY_MAX_WIDTH_DP)
 
         internal fun responsiveTvContentColumnCount(screenWidthDp: Int): Int {

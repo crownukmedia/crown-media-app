@@ -15,6 +15,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class InlineLivePreviewViewTest {
     @Test
+    fun previewRenderTimeoutFitsTheThreeSecondInteractionBudget() {
+        assertEquals(2_200L, INLINE_PREVIEW_RENDER_TIMEOUT_MS)
+    }
+
+    @Test
     fun previewSurfaceNeverParticipatesInCardInputOrFocus() {
         val preview = InlineLivePreviewView(RuntimeEnvironment.getApplication())
 

@@ -313,6 +313,30 @@ class PostLoginMobileUiTest {
     }
 
     @Test
+    @Config(qualifiers = "sw700dp-port")
+    fun tabletCategoryNavigationIsCompactAndReusesScopedSearch() {
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        categories.measure(
+            View.MeasureSpec.makeMeasureSpec(700, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(48, View.MeasureSpec.EXACTLY),
+        )
+        categories.layout(0, 0, 700, 48)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val first = requireNotNull(categories.findViewHolderForAdapterPosition(0)?.itemView)
+        val label = first.findViewById<TextView>(R.id.category_name)
+        assertEquals("Search", label.text.toString())
+        assertTrue(label.compoundDrawables[0] != null)
+        assertEquals((44 * activity.resources.displayMetrics.density).toInt(), first.layoutParams.height)
+        assertEquals(13f, label.textSize / activity.resources.displayMetrics.scaledDensity, 0.1f)
+
+        first.performClick()
+        assertTrue(activity.findViewById<EditText>(R.id.search_box).hasFocus())
+    }
+
+    @Test
     fun mobileNavigationReservesCountLineForEachContentType() {
         assertTrue(activity.findViewById<TextView>(R.id.nav_live).text.startsWith("Live\n("))
         assertTrue(activity.findViewById<TextView>(R.id.nav_movies).text.startsWith("Movies\n("))

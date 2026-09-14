@@ -55,7 +55,7 @@ class InlineLivePreviewController(
         instance.volume = 0f
         instance.prepare()
         instance.playWhenReady = true
-        handler.postDelayed(timeout, PREVIEW_TIMEOUT_MS)
+        handler.postDelayed(timeout, INLINE_PREVIEW_RENDER_TIMEOUT_MS)
 
     }
 
@@ -85,7 +85,9 @@ class InlineLivePreviewController(
             .setDefaultRequestProperties(mapOf("Accept" to "*/*", "Accept-Encoding" to "identity"))
         val mediaSourceFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(appContext, httpSource))
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(1_000, 6_000, 400, 800)
+            // Inline previews are deliberately short-lived browsing aids. Start from a small
+            // buffer and fail back to artwork quickly instead of making a card look stuck.
+            .setBufferDurationsMs(500, 3_000, 250, 500)
             .build()
         return ExoPlayer.Builder(
             appContext,
@@ -142,15 +144,17 @@ class InlineLivePreviewController(
     }
 
     private companion object {
-        const val PREVIEW_TIMEOUT_MS = 10_000L
         const val PREVIEW_USER_AGENT = "CrownMedia/1.0"
         val PREVIEW_HTTP_CLIENT = OkHttpClient.Builder()
             .dispatcher(Dispatcher().apply {
                 maxRequests = 2
                 maxRequestsPerHost = 1
             })
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
             .build()
     }
 }
+
+/** Maximum time a card may wait for its first video frame before returning to artwork. */
+internal const val INLINE_PREVIEW_RENDER_TIMEOUT_MS = 2_200L

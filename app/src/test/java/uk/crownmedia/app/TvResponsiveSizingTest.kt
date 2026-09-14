@@ -1,6 +1,7 @@
 package uk.crownmedia.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TvResponsiveSizingTest {
@@ -15,12 +16,20 @@ class TvResponsiveSizingTest {
 
     @Test
     fun secondaryCategoryRailAndGridScaleAcrossTvResolutionClasses() {
-        assertEquals(180, MainActivity.responsiveTvCategoryNavigationWidthDp(640))
-        assertEquals(211, MainActivity.responsiveTvCategoryNavigationWidthDp(960))
-        assertEquals(240, MainActivity.responsiveTvCategoryNavigationWidthDp(1280))
+        assertEquals(168, MainActivity.responsiveTvCategoryNavigationWidthDp(640))
+        assertEquals(192, MainActivity.responsiveTvCategoryNavigationWidthDp(960))
+        assertEquals(216, MainActivity.responsiveTvCategoryNavigationWidthDp(1280))
 
         assertEquals(2, MainActivity.responsiveTvContentColumnCount(640))
         assertEquals(4, MainActivity.responsiveTvContentColumnCount(960))
         assertEquals(5, MainActivity.responsiveTvContentColumnCount(1280))
+    }
+
+    @Test
+    fun previewSchedulingLeavesAtLeastTwoAndHalfSecondsForRendering() {
+        assertEquals(350L, MainActivity.TV_PREVIEW_DELAY_MS)
+        assertEquals(450L, MainActivity.MOBILE_PREVIEW_DELAY_MS)
+        assertTrue(MainActivity.TV_PREVIEW_DELAY_MS < 1_000L)
+        assertTrue(MainActivity.MOBILE_PREVIEW_DELAY_MS < 1_000L)
     }
 }

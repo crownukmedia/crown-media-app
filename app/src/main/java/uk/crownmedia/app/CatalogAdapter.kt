@@ -9,6 +9,7 @@ import android.widget.ImageView
 import android.text.TextUtils
 import android.content.res.ColorStateList
 import android.content.res.Resources
+import android.util.TypedValue
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.AsyncListDiffer
@@ -85,6 +86,7 @@ class CategoryAdapter(
     private val onClick: (XtreamCategory) -> Unit,
     private val onLongClick: (XtreamCategory) -> Unit,
     private val onDpad: (View, Int, Int, KeyEvent) -> Boolean = { _, _, _, _ -> false },
+    private val navigationItems: (List<XtreamCategory>) -> List<XtreamCategory> = { it },
 ) : RecyclerView.Adapter<CategoryAdapter.Holder>() {
     data class Row(val category: XtreamCategory, val selected: Boolean)
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<Row>() {
@@ -94,7 +96,7 @@ class CategoryAdapter(
     private var counts: Map<String, Int> = emptyMap()
 
     fun submit(values: List<XtreamCategory>, selectedId: String = "all", committed: (() -> Unit)? = null) {
-        differ.submitList(values.map { Row(it, it.id == selectedId) }, committed)
+        differ.submitList(navigationItems(values).map { Row(it, it.id == selectedId) }, committed)
     }
 
     /** TV-003/TV-004: apply per-category item counts without resubmitting the list (keeps focus/scroll). */
@@ -115,11 +117,33 @@ class CategoryAdapter(
     inner class Holder(private val binding: ItemCategoryBinding) : RecyclerView.ViewHolder(binding.root) {
         fun bind(row: Row) {
             val value = row.category
+            val search = value.id == CATEGORY_SEARCH_ID
+            val deviceClass = binding.root.context.deviceClass()
             binding.categoryName.text = value.name
             binding.categoryName.ellipsize = TextUtils.TruncateAt.END
             binding.categoryName.maxLines = 1
             binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
-            binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
+            binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(
+                if (search) R.drawable.ic_nav_search else 0,
+                0,
+                0,
+                0,
+            )
+            binding.categoryName.compoundDrawablePadding = if (search) {
+                (8 * binding.root.resources.displayMetrics.density).toInt()
+            } else 0
+            if (deviceClass == DeviceClass.TABLET) {
+                val density = binding.root.resources.displayMetrics.density
+                binding.root.layoutParams = binding.root.layoutParams.apply { height = (44 * density).toInt() }
+                (binding.root.layoutParams as? ViewGroup.MarginLayoutParams)?.marginEnd = (6 * density).toInt()
+                binding.categoryName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                binding.categoryName.setPadding((10 * density).toInt(), 0, (10 * density).toInt(), 0)
+                binding.categoryCount.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                binding.categoryActions.layoutParams = binding.categoryActions.layoutParams.apply {
+                    width = (44 * density).toInt()
+                    height = (44 * density).toInt()
+                }
+            }
             val count = counts[value.id]?.takeIf {
                 it > 0 && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             }
@@ -130,16 +154,19 @@ class CategoryAdapter(
             binding.root.nextFocusLeftId = if (
                 binding.root.context.appLayout() != AppLayout.TELEVISION && bindingAdapterPosition == 0
             ) R.id.category_menu_button else View.NO_ID
-            binding.categoryActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
+            binding.categoryActions.isVisible = !search && binding.root.context.appLayout() != AppLayout.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             binding.categoryActions.contentDescription = binding.root.context.getString(R.string.options_for, value.name)
             binding.categoryActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
-            binding.root.setOnLongClickListener { onLongClick(value); true }
+            binding.root.setOnLongClickListener {
+                if (!search) onLongClick(value)
+                true
+            }
             binding.root.setOnKeyListener { view, keyCode, event ->
                 val position = bindingAdapterPosition
                 if (position != RecyclerView.NO_POSITION && onDpad(view, position, keyCode, event)) {
                     true
-                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
+                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && !search && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
                     onLongClick(value)
                     true
                 } else false
@@ -148,6 +175,8 @@ class CategoryAdapter(
         }
     }
 }
+
+internal const val CATEGORY_SEARCH_ID = "__search__"
 
 class CatalogAdapter(
     private val onClick: (CatalogCard) -> Unit,
