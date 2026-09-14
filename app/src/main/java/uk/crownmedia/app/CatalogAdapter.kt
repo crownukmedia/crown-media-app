@@ -39,6 +39,7 @@ data class CatalogCard(
     val healthHint: Int = 0,
     val isAdult: Boolean = false,
     val catchUpDays: Int = 0,
+    val channelNumber: Int? = null,
 )
 
 internal fun CatalogCard.preferredArtworkSource(): Any {
@@ -186,6 +187,7 @@ class CatalogAdapter(
     private val onPreviewHostAvailability: (CatalogCard, View, InlineLivePreviewView, Boolean) -> Unit = { _, _, _, _ -> },
 ) : RecyclerView.Adapter<CatalogAdapter.Holder>() {
     private var uniformLandscapeCards = false
+    private var liveChannelNavigation = false
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<CatalogCard>() {
         override fun areItemsTheSame(oldItem: CatalogCard, newItem: CatalogCard) = oldItem.id == newItem.id && oldItem.kind == newItem.kind
         override fun areContentsTheSame(oldItem: CatalogCard, newItem: CatalogCard) = oldItem == newItem
@@ -195,6 +197,11 @@ class CatalogAdapter(
     fun setUniformLandscapeCards(enabled: Boolean) {
         if (uniformLandscapeCards == enabled) return
         uniformLandscapeCards = enabled
+        notifyItemRangeChanged(0, itemCount)
+    }
+    fun setLiveChannelNavigation(enabled: Boolean) {
+        if (liveChannelNavigation == enabled) return
+        liveChannelNavigation = enabled
         notifyItemRangeChanged(0, itemCount)
     }
     fun submit(values: List<CatalogCard>, committed: (() -> Unit)? = null) = differ.submitList(values, committed)
@@ -213,7 +220,9 @@ class CatalogAdapter(
             binding.inlinePreview.clearPreviewSurface()
             boundCard = value
             optionsOpenedFromKey = false
-            binding.title.text = value.title
+            binding.title.text = if (liveChannelNavigation) {
+                value.channelNumber?.let { "$it  |  ${value.title}" } ?: value.title
+            } else value.title
             binding.meta.text = value.meta
             binding.badge.text = value.badge
             binding.badge.visibility = if (value.badge.isBlank()) View.GONE else View.VISIBLE
@@ -231,7 +240,40 @@ class CatalogAdapter(
             val artworkHeightDp = if (poster) 220 else if (television) 118 else 104
             val artworkHeight = (artworkHeightDp * binding.root.resources.displayMetrics.density).toInt()
             val artworkContainer = binding.artwork.parent as View
-            artworkContainer.layoutParams = artworkContainer.layoutParams.apply { height = artworkHeight }
+            artworkContainer.isVisible = !liveChannelNavigation
+            artworkContainer.layoutParams = artworkContainer.layoutParams.apply { height = if (liveChannelNavigation) 0 else artworkHeight }
+            binding.meta.isVisible = !liveChannelNavigation
+            binding.badge.isVisible = !liveChannelNavigation && value.badge.isNotBlank()
+            if (liveChannelNavigation) {
+                val density = binding.root.resources.displayMetrics.density
+                (binding.root.layoutParams as? ViewGroup.MarginLayoutParams)?.apply {
+                    marginStart = (4 * density).toInt()
+                    marginEnd = (4 * density).toInt()
+                    topMargin = (3 * density).toInt()
+                    bottomMargin = (3 * density).toInt()
+                }
+                binding.root.radius = 8 * density
+                binding.title.minHeight = (42 * density).toInt()
+                binding.title.maxLines = 1
+                binding.title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                binding.title.setPadding((11 * density).toInt(), 0, (11 * density).toInt(), 0)
+                binding.title.gravity = android.view.Gravity.CENTER_VERTICAL
+            } else {
+                val density = binding.root.resources.displayMetrics.density
+                val margin = ((if (television) 8 else 6) * density).toInt()
+                (binding.root.layoutParams as? ViewGroup.MarginLayoutParams)?.setMargins(margin, margin, margin, margin)
+                binding.root.radius = 14 * density
+                binding.title.minHeight = if (television) 0 else (46 * density).toInt()
+                binding.title.maxLines = if (television) 1 else 2
+                binding.title.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (television) 17f else 14f)
+                binding.title.setPadding(
+                    ((if (television) 12 else 10) * density).toInt(),
+                    ((if (television) 11 else 8) * density).toInt(),
+                    ((if (television) 12 else 10) * density).toInt(),
+                    0,
+                )
+                binding.title.gravity = android.view.Gravity.NO_GRAVITY
+            }
             val artworkDensity = binding.root.resources.displayMetrics.density
             val brandInset = (12 * artworkDensity).toInt()
             val tileInset = (8 * artworkDensity).toInt()
@@ -278,7 +320,7 @@ class CatalogAdapter(
                 )
             }
             binding.root.contentDescription = listOf(value.title, value.meta, value.badge).filter { it.isNotBlank() }.joinToString(", ")
-            binding.moreActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.kind != "home"
+            binding.moreActions.isVisible = !liveChannelNavigation && binding.root.context.appLayout() != AppLayout.TELEVISION && value.kind != "home"
             binding.moreActions.contentDescription = binding.root.context.getString(R.string.options_for, value.title)
             binding.moreActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
@@ -324,7 +366,7 @@ class CatalogAdapter(
             binding.root.setOnFocusChangeListener { _, focused ->
                 if (!focused) optionsOpenedFromKey = false
                 applyEmphasis(focused)
-                if (television && value.kind == "live") {
+                if ((television || liveChannelNavigation) && value.kind == "live") {
                     onPreviewFocusChanged(value, binding.root, binding.inlinePreview, focused)
                 }
             }
@@ -339,7 +381,7 @@ class CatalogAdapter(
             // listener. Synchronize the visual state immediately so the first focused tile never
             // appears with its resting border until the user moves the remote.
             applyEmphasis(binding.root.hasFocus())
-            if (television && binding.root.hasFocus() && value.kind == "live") {
+            if ((television || liveChannelNavigation) && binding.root.hasFocus() && value.kind == "live") {
                 onPreviewFocusChanged(value, binding.root, binding.inlinePreview, true)
             }
             if (binding.root.isAttachedToWindow && value.kind == "live") {

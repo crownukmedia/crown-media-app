@@ -25,6 +25,12 @@ data class SavedLoginDetails(
     val password: String,
 )
 
+data class CustomChannelGroup(
+    val id: String,
+    val name: String,
+    val channelIds: Set<String>,
+)
+
 class AppStore internal constructor(private val prefs: CrownSecureStore) {
     constructor(context: Context) : this(CrownSecureStore.create(context))
     private var transientPlaylist: SavedPlaylist? = null
@@ -150,6 +156,7 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
         val remaining = persistedPlaylists().filterNot { it.id == id }
         write(remaining)
         clearCatalogCountSnapshots(id)
+        prefs.putString(customGroupsKey(id), null)
         if (selectedId == id || (removedTransient && selectedId == null)) selectedId = remaining.firstOrNull()?.id
     }
 
@@ -236,6 +243,58 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
         prefs.putStringSet("favorites_$playlistId", values)
         return added
     }
+
+    fun customChannelGroups(playlistId: String): List<CustomChannelGroup> = try {
+        val values = JSONArray(prefs.getString(customGroupsKey(playlistId), "[]"))
+        (0 until values.length()).mapNotNull { index ->
+            values.optJSONObject(index)?.let { value ->
+                val id = value.optString("id").takeIf(String::isNotBlank) ?: return@let null
+                val name = value.optString("name").takeIf(String::isNotBlank) ?: return@let null
+                val channels = value.optJSONArray("channels") ?: JSONArray()
+                CustomChannelGroup(
+                    id,
+                    name,
+                    (0 until channels.length()).mapNotNullTo(linkedSetOf()) {
+                        channels.optString(it).takeIf(String::isNotBlank)
+                    },
+                )
+            }
+        }
+    } catch (_: Exception) { emptyList() }
+
+    fun createCustomChannelGroup(playlistId: String, name: String): CustomChannelGroup? {
+        val normalized = name.trim().takeIf(String::isNotBlank) ?: return null
+        val groups = customChannelGroups(playlistId)
+        groups.firstOrNull { it.name.equals(normalized, ignoreCase = true) }?.let { return it }
+        return CustomChannelGroup(UUID.randomUUID().toString(), normalized, emptySet()).also {
+            writeCustomChannelGroups(playlistId, groups + it)
+        }
+    }
+
+    fun setChannelInCustomGroup(playlistId: String, groupId: String, channelId: String, included: Boolean) {
+        val updated = customChannelGroups(playlistId).map { group ->
+            if (group.id != groupId) group else group.copy(
+                channelIds = group.channelIds.toMutableSet().apply {
+                    if (included) add(channelId) else remove(channelId)
+                },
+            )
+        }
+        writeCustomChannelGroups(playlistId, updated)
+    }
+
+    private fun writeCustomChannelGroups(playlistId: String, groups: List<CustomChannelGroup>) {
+        val values = JSONArray()
+        groups.forEach { group ->
+            values.put(JSONObject().apply {
+                put("id", group.id)
+                put("name", group.name)
+                put("channels", JSONArray(group.channelIds.toList()))
+            })
+        }
+        prefs.putString(customGroupsKey(playlistId), values.toString())
+    }
+
+    private fun customGroupsKey(playlistId: String) = "custom_channel_groups_$playlistId"
 
     fun hiddenCategories(playlistId: String): Set<String> = prefs.getStringSet("hidden_$playlistId")
     fun setHiddenCategories(playlistId: String, values: Set<String>) {

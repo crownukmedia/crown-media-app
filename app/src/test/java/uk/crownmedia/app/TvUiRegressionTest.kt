@@ -45,6 +45,7 @@ import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamEpisode
 import uk.crownmedia.data.xtream.XtreamItem
+import uk.crownmedia.data.xtream.XtreamCategory
 import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import java.util.concurrent.TimeUnit
 
@@ -90,7 +91,7 @@ class TvUiRegressionTest {
         assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
         assertEquals(9, grid.adapter?.itemCount)
         assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
-        assertEquals(dp(88), sideNav.layoutParams.width)
+        assertEquals(dp(80), sideNav.layoutParams.width)
         assertTrue(grid.hasFocus())
         assertFalse(activity.findViewById<View>(R.id.nav_home).hasFocus())
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_reload).visibility)
@@ -121,6 +122,73 @@ class TvUiRegressionTest {
             .findViewById<ImageView>(R.id.artwork)
         assertEquals(ImageView.ScaleType.FIT_CENTER, artwork.scaleType)
         assertTrue(artwork.paddingStart > 0)
+    }
+
+    @Test
+    fun liveCategoryOpensCompactChannelRailAndBackRestoresCategoryHierarchy() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        cache.saveCategories(playlist.id, "live", listOf(XtreamCategory("sports", "Sports")))
+        cache.saveItems(
+            playlist.id,
+            "live",
+            null,
+            listOf(searchItem("401", "Sky Sports Main Event").copy(categoryId = "sports", extension = "ts", providerOrder = 401)),
+        )
+        testStore.markCatalogRefreshed(playlist.id, "live", null)
+        testStore.markCatalogRefreshed(playlist.id, "live", "sports")
+
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        MainActivity::class.java.getDeclaredMethod("selectCategory", XtreamCategory::class.java).apply {
+            isAccessible = true
+            invoke(activity, XtreamCategory("sports", "Sports"))
+        }
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        waitForTitles(grid, setOf("Sky Sports Main Event"))
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.live_channel_details).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.side_nav).visibility)
+        assertEquals(1, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertTrue(activity.findViewById<TextView>(R.id.live_channel_title).text.toString().startsWith("401  |"))
+        val channel = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView)
+        assertEquals(View.GONE, (channel.findViewById<ImageView>(R.id.artwork).parent as View).visibility)
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.live_channel_details).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.side_nav).visibility)
+        assertTrue((activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter).positionOf("sports") >= 0)
+    }
+
+    @Test
+    fun categorySearchFiltersOnlyCategoriesAndLeavesLiveChannelSearchUntouched() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        cache.saveCategories(
+            playlist.id,
+            "live",
+            listOf(XtreamCategory("sports", "UK Sports"), XtreamCategory("news", "UK News")),
+        )
+        testStore.markCatalogRefreshed(playlist.id, "live", null)
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        MainActivity::class.java.getDeclaredMethod("showCategorySearch").apply { isAccessible = true; invoke(activity) }
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        val input = dialog.window?.decorView?.let { decor -> findEditText(decor) }
+        requireNotNull(input).setText("sports")
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val adapter = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
+        assertTrue(adapter.positionOf(CATEGORY_SEARCH_ID) >= 0)
+        assertTrue(adapter.positionOf("sports") >= 0)
+        assertEquals(-1, adapter.positionOf("news"))
+        assertEquals("", activity.findViewById<EditText>(R.id.search_box).text.toString())
     }
 
     @Test
@@ -361,7 +429,7 @@ class TvUiRegressionTest {
         press(KeyEvent.KEYCODE_DPAD_LEFT)
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
         assertTrue(activity.findViewById<View>(R.id.nav_home).hasFocus())
-        assertEquals(dp(260), rail.layoutParams.width)
+        assertEquals(dp(240), rail.layoutParams.width)
     }
 
     @Test
@@ -436,7 +504,7 @@ class TvUiRegressionTest {
 
         assertEquals("Live TV", activity.findViewById<TextView>(R.id.screen_title).text.toString())
         assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)
-        assertEquals(dp(88), rail.layoutParams.width)
+        assertEquals(dp(80), rail.layoutParams.width)
         assertFalse(activity.findViewById<View>(R.id.nav_live).hasFocus())
         assertTrue((grid.adapter as CatalogAdapter).currentItems.none { it.kind == "home" })
     }
@@ -474,7 +542,7 @@ class TvUiRegressionTest {
         activity.findViewById<View>(R.id.nav_movies).performClick()
         shadowOf(Looper.getMainLooper()).idle()
 
-        assertEquals(dp(88), rail.layoutParams.width)
+        assertEquals(dp(80), rail.layoutParams.width)
         assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
         assertTrue(
             activity.findViewById<View>(R.id.search_box).hasFocus() ||
@@ -513,7 +581,7 @@ class TvUiRegressionTest {
         assertEquals(0, categories.layoutParams.height)
         assertFalse(activity.findViewById<TextView>(R.id.nav_live).text.contains('\n'))
         val scaledDensity = activity.resources.displayMetrics.density * activity.resources.configuration.fontScale
-        assertEquals(14f, navHome.textSize / scaledDensity, 0.1f)
+        assertEquals(13f, navHome.textSize / scaledDensity, 0.1f)
     }
 
     @Test
@@ -521,8 +589,8 @@ class TvUiRegressionTest {
         val logo = activity.findViewById<ImageView>(R.id.brand_logo)
         val category = activity.layoutInflater.inflate(R.layout.item_category, FrameLayout(activity), false)
 
-        assertEquals(dp(56), logo.layoutParams.width)
-        assertEquals(dp(54), logo.layoutParams.height)
+        assertEquals(dp(52), logo.layoutParams.width)
+        assertEquals(dp(48), logo.layoutParams.height)
         assertEquals(dp(5), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals(dp(46), category.layoutParams.height)
@@ -556,7 +624,8 @@ class TvUiRegressionTest {
         assertEquals(dp(46), first.layoutParams.height)
 
         first.performClick()
-        assertTrue(activity.findViewById<EditText>(R.id.search_box).hasFocus())
+        assertTrue(ShadowAlertDialog.getLatestAlertDialog().isShowing)
+        assertFalse(activity.findViewById<EditText>(R.id.search_box).hasFocus())
     }
 
     @Test
@@ -610,14 +679,14 @@ class TvUiRegressionTest {
         val topBar = activity.findViewById<View>(R.id.top_bar)
         val categories = activity.findViewById<View>(R.id.category_bar)
 
-        assertEquals(dp(88), rail.layoutParams.width)
+        assertEquals(dp(80), rail.layoutParams.width)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, panel.layoutParams.width)
         assertEquals(R.id.side_nav, (topBar.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         assertEquals(R.id.side_nav, (categories.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         assertEquals(R.id.category_bar, (content.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         content.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
-        assertEquals(dp(88), rail.layoutParams.width)
+        assertEquals(dp(80), rail.layoutParams.width)
         assertEquals("", home.text.toString())
         assertEquals(Gravity.CENTER, home.gravity)
         assertEquals(0, home.iconPadding)
@@ -627,7 +696,7 @@ class TvUiRegressionTest {
         home.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
 
-        assertEquals(dp(260), rail.layoutParams.width)
+        assertEquals(dp(240), rail.layoutParams.width)
         assertEquals("Home", home.text.toString())
         assertEquals(Gravity.START or Gravity.CENTER_VERTICAL, home.gravity)
         assertEquals(dp(16), home.iconPadding)
@@ -635,7 +704,7 @@ class TvUiRegressionTest {
         content.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
 
-        assertEquals(dp(88), rail.layoutParams.width)
+        assertEquals(dp(80), rail.layoutParams.width)
         assertEquals("", home.text.toString())
     }
 
@@ -907,12 +976,12 @@ class TvUiRegressionTest {
         val rail = activity.findViewById<View>(R.id.side_nav)
         activity.findViewById<View>(R.id.nav_home).requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
-        assertEquals(dp(260), rail.layoutParams.width)
+        assertEquals(dp(240), rail.layoutParams.width)
 
         activity.onBackPressedDispatcher.onBackPressed()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
 
-        assertEquals(dp(88), rail.layoutParams.width)
+        assertEquals(dp(80), rail.layoutParams.width)
         assertTrue(activity.findViewById<View>(R.id.content_grid).hasFocus())
         assertFalse(activity.isFinishing)
     }
@@ -1059,6 +1128,13 @@ class TvUiRegressionTest {
         while ((grid.adapter as CatalogAdapter).currentItems.map { it.title }.toSet() != expected && System.nanoTime() < deadline) {
             shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
         }
+    }
+
+    private fun findEditText(view: View): EditText? {
+        if (view is EditText) return view
+        if (view !is ViewGroup) return null
+        repeat(view.childCount) { index -> findEditText(view.getChildAt(index))?.let { return it } }
+        return null
     }
 
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()

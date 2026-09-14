@@ -333,7 +333,9 @@ class PostLoginMobileUiTest {
         assertEquals(13f, label.textSize / activity.resources.displayMetrics.scaledDensity, 0.1f)
 
         first.performClick()
-        assertTrue(activity.findViewById<EditText>(R.id.search_box).hasFocus())
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertTrue(dialog.isShowing)
+        assertFalse(activity.findViewById<EditText>(R.id.search_box).hasFocus())
     }
 
     @Test
