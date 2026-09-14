@@ -5,6 +5,7 @@
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
         <FrameLayout android:layout_width="match_parent" android:layout_height="150dp">
             <ImageView android:id="@+id/artwork" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#141925" android:contentDescription="@null" android:scaleType="centerCrop" />
+            <uk.crownmedia.player.InlineLivePreviewView android:id="@+id/inline_preview" android:layout_width="match_parent" android:layout_height="match_parent" />
             <TextView android:id="@+id/badge" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="top|end" android:layout_margin="8dp" android:background="@drawable/bg_badge" android:paddingHorizontal="8dp" android:paddingVertical="4dp" android:textColor="#07090E" android:textSize="11sp" android:textStyle="bold" />
             <ImageButton android:id="@+id/more_actions" style="@style/Widget.Crown.IconButton" android:contentDescription="@string/more_options" android:src="@drawable/ic_more_vert" android:visibility="gone" />
         </FrameLayout>

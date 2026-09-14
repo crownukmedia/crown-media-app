@@ -22,6 +22,7 @@ import coil.size.Precision
 import uk.crownmedia.app.databinding.ItemCategoryBinding
 import uk.crownmedia.app.databinding.ItemContentBinding
 import uk.crownmedia.data.xtream.XtreamCategory
+import uk.crownmedia.player.InlineLivePreviewView
 import java.net.URI
 
 data class CatalogCard(
@@ -152,6 +153,8 @@ class CatalogAdapter(
     private val onClick: (CatalogCard) -> Unit,
     private val onLongClick: (CatalogCard) -> Unit,
     private val onDpad: (View, Int, Int, KeyEvent) -> Boolean = { _, _, _, _ -> false },
+    private val onPreviewFocusChanged: (CatalogCard, View, InlineLivePreviewView, Boolean) -> Unit = { _, _, _, _ -> },
+    private val onPreviewHostAvailability: (CatalogCard, View, InlineLivePreviewView, Boolean) -> Unit = { _, _, _, _ -> },
 ) : RecyclerView.Adapter<CatalogAdapter.Holder>() {
     private var uniformLandscapeCards = false
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<CatalogCard>() {
@@ -172,8 +175,14 @@ class CatalogAdapter(
 
     inner class Holder(private val binding: ItemContentBinding) : RecyclerView.ViewHolder(binding.root) {
         private var optionsOpenedFromKey = false
+        private var boundCard: CatalogCard? = null
 
         fun bind(value: CatalogCard) {
+            boundCard?.let { previous ->
+                onPreviewHostAvailability(previous, binding.root, binding.inlinePreview, false)
+            }
+            binding.inlinePreview.clearPreviewSurface()
+            boundCard = value
             optionsOpenedFromKey = false
             binding.title.text = value.title
             binding.meta.text = value.meta
@@ -286,6 +295,9 @@ class CatalogAdapter(
             binding.root.setOnFocusChangeListener { _, focused ->
                 if (!focused) optionsOpenedFromKey = false
                 applyEmphasis(focused)
+                if (television && value.kind == "live") {
+                    onPreviewFocusChanged(value, binding.root, binding.inlinePreview, focused)
+                }
             }
             binding.root.setOnHoverListener { _, event ->
                 when (event.actionMasked) {
@@ -298,6 +310,18 @@ class CatalogAdapter(
             // listener. Synchronize the visual state immediately so the first focused tile never
             // appears with its resting border until the user moves the remote.
             applyEmphasis(binding.root.hasFocus())
+            if (television && binding.root.hasFocus() && value.kind == "live") {
+                onPreviewFocusChanged(value, binding.root, binding.inlinePreview, true)
+            }
+            if (binding.root.isAttachedToWindow && value.kind == "live") {
+                onPreviewHostAvailability(value, binding.root, binding.inlinePreview, true)
+            }
+        }
+
+        fun previewHostAvailability(available: Boolean) {
+            boundCard?.takeIf { it.kind == "live" }?.let { card ->
+                onPreviewHostAvailability(card, binding.root, binding.inlinePreview, available)
+            }
         }
 
         private fun applyEmphasis(emphasized: Boolean) {
@@ -326,7 +350,22 @@ class CatalogAdapter(
             binding.root.strokeWidth = ((if (emphasized) 3 else 1) * density).toInt().coerceAtLeast(1)
         }
 
-        fun recycle() = binding.artwork.dispose()
+        fun recycle() {
+            previewHostAvailability(false)
+            binding.inlinePreview.clearPreviewSurface()
+            binding.artwork.dispose()
+            boundCard = null
+        }
+    }
+
+    override fun onViewAttachedToWindow(holder: Holder) {
+        super.onViewAttachedToWindow(holder)
+        holder.previewHostAvailability(true)
+    }
+
+    override fun onViewDetachedFromWindow(holder: Holder) {
+        holder.previewHostAvailability(false)
+        super.onViewDetachedFromWindow(holder)
     }
 
     override fun onViewRecycled(holder: Holder) {

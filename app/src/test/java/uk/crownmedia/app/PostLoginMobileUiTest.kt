@@ -105,6 +105,10 @@ class PostLoginMobileUiTest {
         assertEquals((48 * density).toInt(), categoryAction.layoutParams.width)
         assertEquals((48 * density).toInt(), categoryAction.layoutParams.height)
         assertTrue(activity.findViewById<View>(R.id.side_nav).isShown)
+        val preview = card.findViewById<View>(R.id.inline_preview)
+        assertEquals(View.GONE, preview.visibility)
+        assertFalse(preview.isFocusable)
+        assertFalse(preview.isClickable)
     }
 
     @Test

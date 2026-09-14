@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.os.Parcelable
@@ -71,15 +72,21 @@ import uk.crownmedia.data.xtream.XtreamProgramme
 import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import uk.crownmedia.data.xtream.preferredLiveExtension
 import uk.crownmedia.player.PlayerActivity
+import uk.crownmedia.player.InlineLivePreviewController
+import uk.crownmedia.player.InlineLivePreviewView
 import java.security.MessageDigest
 import java.text.DateFormat
 import java.util.Date
 import kotlin.math.roundToInt
+import kotlin.math.abs
 import java.util.EnumMap
 
 class MainActivity : AppCompatActivity() {
     private val internalPlayer = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (::store.isInitialized) restoreSearchPresentationAfterPlayback()
+        if (::store.isInitialized) {
+            restoreSearchPresentationAfterPlayback()
+            binding.contentGrid.post(::scheduleCurrentLivePreview)
+        }
     }
     private lateinit var binding: ActivityMainBinding
     private lateinit var store: AppStore
@@ -93,6 +100,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var categoriesAdapter: CategoryAdapter
     private lateinit var catalogAdapter: CatalogAdapter
     private lateinit var contentLayoutManager: GridLayoutManager
+    private lateinit var inlinePreviewController: InlineLivePreviewController
+    private var inlinePreviewJob: Job? = null
+    private var pendingInlinePreview: InlinePreviewTarget? = null
+    private var activeInlinePreview: InlinePreviewTarget? = null
     private var standardContentColumnCount = 1
     private var section = Section.HOME
     private var currentCategory = "all"
@@ -163,6 +174,9 @@ class MainActivity : AppCompatActivity() {
         store = storeFactory(this)
         cache = CatalogCache(CrownDatabase.get(this).catalogDao())
         streamAvailability = StreamAvailability(this)
+        inlinePreviewController = InlineLivePreviewController(this) {
+            activeInlinePreview = null
+        }
         configureLogin()
         configureLists()
         configureNavigation()
@@ -259,7 +273,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        catalogAdapter = CatalogAdapter(::openCard, ::cardOptions, ::handleCatalogDpad)
+        catalogAdapter = CatalogAdapter(
+            ::openCard,
+            ::cardOptions,
+            ::handleCatalogDpad,
+            ::onLivePreviewFocusChanged,
+            ::onLivePreviewHostAvailability,
+        )
         val initialColumns = when {
             television -> responsiveTvContentColumnCount(resources.configuration.screenWidthDp)
             resources.configuration.smallestScreenWidthDp >= 600 -> 4
@@ -277,6 +297,15 @@ class MainActivity : AppCompatActivity() {
         if (television) binding.contentGrid.itemAnimator = null
         contentLayoutManager.initialPrefetchItemCount = 8
         binding.contentGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (isTelevisionLayout() || section != Section.LIVE) return
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    recyclerView.post(::schedulePrimaryVisibleLivePreview)
+                } else {
+                    stopInlinePreview()
+                }
+            }
+
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 if (dy <= 0 || section !in (PAGED_SECTIONS + PAGINATED_FEATURE_SECTIONS)) return
                 val lastVisible = contentLayoutManager.findLastVisibleItemPosition()
@@ -637,6 +666,7 @@ class MainActivity : AppCompatActivity() {
         }
         ensurePlaylistState()
         val changingTopLevelSection = section != value
+        if (changingTopLevelSection || value != Section.LIVE) stopInlinePreview()
         captureSectionState()
         detailJob?.cancel()
         detailJob = null
@@ -1016,6 +1046,9 @@ class MainActivity : AppCompatActivity() {
                 val focusKey = pendingContentFocusKey ?: if (binding.contentGrid.hasFocus()) focusedCardKey() else null
                 pendingContentFocusKey = null
                 if (focusKey != null && isTelevisionLayout()) restoreCardFocus(focusKey)
+                if (target == Section.LIVE && !isTelevisionLayout()) {
+                    binding.contentGrid.post(::schedulePrimaryVisibleLivePreview)
+                }
             }
             // AsyncListDiffer commits before RecyclerView completes the layout/draw frame. Keep
             // the TV grid invisible for that frame so outgoing Home/last-route holders can never
@@ -1986,6 +2019,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun play(card: CatalogCard, live: Boolean) {
         val playlist = store.selected() ?: return
+        stopInlinePreview()
         if (nestedSeries == null && activeSearchQuery().trim().length >= MIN_SEARCH_LENGTH) {
             pendingContentFocusKey = "${card.kind}:${card.id}"
         }
@@ -2030,6 +2064,137 @@ class MainActivity : AppCompatActivity() {
         if (!PlayerActivity.launchExternal(this, url, title, packageName)) {
             Toast.makeText(this, "Selected external player is not installed", Toast.LENGTH_LONG).show()
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (::binding.isInitialized) binding.contentGrid.post(::scheduleCurrentLivePreview)
+    }
+
+    override fun onStop() {
+        stopInlinePreview(releasePlayer = true)
+        super.onStop()
+    }
+
+    private fun onLivePreviewFocusChanged(
+        card: CatalogCard,
+        cardView: View,
+        host: InlineLivePreviewView,
+        focused: Boolean,
+    ) {
+        if (!isTelevisionLayout() || section != Section.LIVE) return
+        val target = InlinePreviewTarget(card, cardView, host)
+        if (focused) scheduleInlinePreview(target, TV_PREVIEW_DELAY_MS)
+        else if (pendingInlinePreview.matches(target) || activeInlinePreview.matches(target)) stopInlinePreview()
+    }
+
+    private fun onLivePreviewHostAvailability(
+        card: CatalogCard,
+        cardView: View,
+        host: InlineLivePreviewView,
+        available: Boolean,
+    ) {
+        val target = InlinePreviewTarget(card, cardView, host)
+        if (!available) {
+            if (pendingInlinePreview.matches(target) || activeInlinePreview.matches(target)) stopInlinePreview()
+            return
+        }
+        if (!isTelevisionLayout() && section == Section.LIVE && binding.contentGrid.scrollState == RecyclerView.SCROLL_STATE_IDLE) {
+            binding.contentGrid.post(::schedulePrimaryVisibleLivePreview)
+        }
+    }
+
+    private fun scheduleCurrentLivePreview() {
+        if (section != Section.LIVE || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
+        if (isTelevisionLayout()) {
+            val focused = binding.contentGrid.focusedChild ?: return
+            val position = binding.contentGrid.getChildAdapterPosition(focused)
+            val card = catalogAdapter.itemAt(position)?.takeIf { it.kind == "live" } ?: return
+            val host = focused.findViewById<InlineLivePreviewView>(R.id.inline_preview) ?: return
+            scheduleInlinePreview(InlinePreviewTarget(card, focused, host), TV_PREVIEW_DELAY_MS)
+        } else schedulePrimaryVisibleLivePreview()
+    }
+
+    private fun schedulePrimaryVisibleLivePreview() {
+        if (
+            isTelevisionLayout() || section != Section.LIVE ||
+            binding.contentGrid.scrollState != RecyclerView.SCROLL_STATE_IDLE ||
+            !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        ) return
+        val target = primaryVisibleLivePreviewTarget() ?: run {
+            stopInlinePreview()
+            return
+        }
+        scheduleInlinePreview(target, MOBILE_PREVIEW_DELAY_MS)
+    }
+
+    private fun primaryVisibleLivePreviewTarget(): InlinePreviewTarget? {
+        val grid = binding.contentGrid
+        if (grid.width <= 0 || grid.height <= 0) return null
+        val viewportCenter = (grid.paddingTop + grid.height - grid.paddingBottom) / 2
+        val targets = mutableMapOf<Int, InlinePreviewTarget>()
+        val visibility = buildList {
+            repeat(grid.childCount) { childIndex ->
+                val child = grid.getChildAt(childIndex)
+                val position = grid.getChildAdapterPosition(child)
+                val card = catalogAdapter.itemAt(position)?.takeIf { it.kind == "live" } ?: return@repeat
+                val visibleRect = Rect()
+                if (!child.getLocalVisibleRect(visibleRect) || child.width <= 0 || child.height <= 0) return@repeat
+                val visibleArea = visibleRect.width().toLong() * visibleRect.height().toLong()
+                val totalArea = child.width.toLong() * child.height.toLong()
+                val host = child.findViewById<InlineLivePreviewView>(R.id.inline_preview) ?: return@repeat
+                targets[position] = InlinePreviewTarget(card, child, host)
+                add(
+                    LivePreviewVisibility(
+                        adapterPosition = position,
+                        visibleFraction = visibleArea.toFloat() / totalArea.toFloat(),
+                        centerDistancePx = abs((child.top + child.bottom) / 2 - viewportCenter),
+                    ),
+                )
+            }
+        }
+        return primaryLivePreviewPosition(visibility)?.let(targets::get)
+    }
+
+    private fun scheduleInlinePreview(target: InlinePreviewTarget, delayMs: Long) {
+        if (target.card.kind != "live" || section != Section.LIVE) return
+        if (activeInlinePreview.matches(target) || pendingInlinePreview.matches(target)) return
+        inlinePreviewJob?.cancel()
+        inlinePreviewJob = null
+        pendingInlinePreview = target
+        if (activeInlinePreview != null) {
+            inlinePreviewController.stop()
+            activeInlinePreview = null
+        }
+        inlinePreviewJob = lifecycleScope.launch {
+            delay(delayMs)
+            if (!currentCoroutineContext().isActive || pendingInlinePreview !== target) return@launch
+            pendingInlinePreview = null
+            inlinePreviewJob = null
+            if (!target.cardView.isAttachedToWindow || section != Section.LIVE) return@launch
+            val stillSelected = if (isTelevisionLayout()) {
+                target.cardView.hasFocus()
+            } else {
+                binding.contentGrid.scrollState == RecyclerView.SCROLL_STATE_IDLE &&
+                    primaryVisibleLivePreviewTarget()?.matches(target) == true
+            }
+            if (!stillSelected || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+            val playlist = store.selected() ?: return@launch
+            val extension = preferredLiveExtension(playlist.allowedFormats)
+            val url = api.streamUrl(playlist.credentials, "live", target.card.id, extension)
+            healthJob?.cancel()
+            activeInlinePreview = target
+            inlinePreviewController.start(target.host, url)
+        }
+    }
+
+    private fun stopInlinePreview(releasePlayer: Boolean = false) {
+        inlinePreviewJob?.cancel()
+        inlinePreviewJob = null
+        pendingInlinePreview = null
+        activeInlinePreview = null
+        if (!::inlinePreviewController.isInitialized) return
+        if (releasePlayer) inlinePreviewController.release() else inlinePreviewController.stop()
     }
 
     private fun showMovie(card: CatalogCard) {
@@ -3351,6 +3516,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private data class InlinePreviewTarget(
+        val card: CatalogCard,
+        val cardView: View,
+        val host: InlineLivePreviewView,
+    )
+
+    private fun InlinePreviewTarget?.matches(other: InlinePreviewTarget): Boolean =
+        this != null &&
+            card.kind == other.card.kind &&
+            card.id == other.card.id &&
+            cardView === other.cardView &&
+            host === other.host
+
     companion object {
         private const val PAGE_SIZE = 60
         private const val NETWORK_BATCH_SIZE = 240
@@ -3368,6 +3546,9 @@ class MainActivity : AppCompatActivity() {
         private const val TV_CATEGORY_MIN_WIDTH_DP = 180
         private const val TV_CATEGORY_MAX_WIDTH_DP = 240
         private const val TV_CONTENT_MIN_CARD_WIDTH_DP = 145
+        private const val TV_SAFE_AREA_START_DP = 16
+        private const val TV_PREVIEW_DELAY_MS = 700L
+        private const val MOBILE_PREVIEW_DELAY_MS = 900L
         private val TV_DPAD_KEYS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT,
             KeyEvent.KEYCODE_DPAD_RIGHT,
@@ -3394,7 +3575,7 @@ class MainActivity : AppCompatActivity() {
                 .coerceIn(TV_CATEGORY_MIN_WIDTH_DP, TV_CATEGORY_MAX_WIDTH_DP)
 
         internal fun responsiveTvContentColumnCount(screenWidthDp: Int): Int {
-            val available = screenWidthDp - TV_NAV_COLLAPSED_WIDTH_DP -
+            val available = screenWidthDp - TV_SAFE_AREA_START_DP - TV_NAV_COLLAPSED_WIDTH_DP -
                 responsiveTvCategoryNavigationWidthDp(screenWidthDp) - 60
             return (available.toFloat() / TV_CONTENT_MIN_CARD_WIDTH_DP).roundToInt().coerceIn(2, 5)
         }

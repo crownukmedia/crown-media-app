@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -612,6 +613,19 @@ class TvUiRegressionTest {
 
         assertEquals(dp(88), rail.layoutParams.width)
         assertEquals("", home.text.toString())
+    }
+
+    @Test
+    fun tvNavigationAndInlinePreviewRespectOverscanAndExistingFocusGeometry() {
+        val rail = activity.findViewById<View>(R.id.side_nav)
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val liveCard = LayoutInflater.from(activity).inflate(R.layout.item_content, grid, false)
+        val preview = liveCard.findViewById<View>(R.id.inline_preview)
+
+        assertEquals(dp(16), (rail.layoutParams as ViewGroup.MarginLayoutParams).marginStart)
+        assertEquals(View.GONE, preview.visibility)
+        assertFalse(preview.isFocusable)
+        assertFalse(preview.isClickable)
     }
 
     @Test

@@ -452,5 +452,6 @@ class PlayerActivity : AppCompatActivity() {
     }
 }
 
+@UnstableApi
 internal fun playerControllerOwnsKey(controllerFullyVisible: Boolean, keyCode: Int): Boolean =
     controllerFullyVisible && keyCode in PlayerActivity.CONTROLLER_NAVIGATION_KEYS
