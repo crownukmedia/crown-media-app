@@ -146,6 +146,14 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/category_bar" />
 
+    <include layout="@layout/view_live_channel_details"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintBottom_toTopOf="@id/side_nav"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@id/content_grid"
+        app:layout_constraintTop_toBottomOf="@id/category_bar" />
+
     <ProgressBar
         android:id="@+id/page_progress"
         android:layout_width="32dp"

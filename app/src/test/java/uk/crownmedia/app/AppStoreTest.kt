@@ -144,6 +144,25 @@ class AppStoreTest {
     }
 
     @Test
+    fun customChannelGroupsPersistAndSupportMultiGroupMembership() {
+        val secureStore = FakeSecureStore()
+        val store = AppStore(secureStore)
+        val sports = requireNotNull(store.createCustomChannelGroup("playlist", "My Sports"))
+        val family = requireNotNull(store.createCustomChannelGroup("playlist", "Family"))
+
+        store.setChannelInCustomGroup("playlist", sports.id, "channel-1", true)
+        store.setChannelInCustomGroup("playlist", family.id, "channel-1", true)
+        store.setChannelInCustomGroup("playlist", sports.id, "channel-2", true)
+
+        val restored = AppStore(secureStore).customChannelGroups("playlist")
+        assertEquals(setOf("channel-1", "channel-2"), restored.first { it.id == sports.id }.channelIds)
+        assertEquals(setOf("channel-1"), restored.first { it.id == family.id }.channelIds)
+
+        AppStore(secureStore).setChannelInCustomGroup("playlist", sports.id, "channel-1", false)
+        assertEquals(setOf("channel-2"), AppStore(secureStore).customChannelGroups("playlist").first { it.id == sports.id }.channelIds)
+    }
+
+    @Test
     fun repeatedStartupReadsReuseTheDecryptedPlaylistSnapshot() {
         val secureStore = FakeSecureStore()
         AppStore(secureStore).save("Saved", credentials, null, "ACTIVE", null, null, persist = true)

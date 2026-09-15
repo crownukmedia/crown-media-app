@@ -4,6 +4,7 @@ import android.content.Intent
 import android.view.KeyEvent
 import android.view.View
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -19,6 +20,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-television-mdpi")
+@UnstableApi
 class PlayerLaunchRegressionTest {
     private var activity: PlayerActivity? = null
 

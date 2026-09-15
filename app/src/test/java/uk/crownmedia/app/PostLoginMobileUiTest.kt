@@ -8,6 +8,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.EditText
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -33,6 +35,7 @@ import kotlinx.coroutines.runBlocking
 import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamItem
+import uk.crownmedia.data.xtream.XtreamCategory
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -105,6 +108,10 @@ class PostLoginMobileUiTest {
         assertEquals((48 * density).toInt(), categoryAction.layoutParams.width)
         assertEquals((48 * density).toInt(), categoryAction.layoutParams.height)
         assertTrue(activity.findViewById<View>(R.id.side_nav).isShown)
+        val preview = card.findViewById<View>(R.id.inline_preview)
+        assertEquals(View.GONE, preview.visibility)
+        assertFalse(preview.isFocusable)
+        assertFalse(preview.isClickable)
     }
 
     @Test
@@ -309,6 +316,56 @@ class PostLoginMobileUiTest {
     }
 
     @Test
+    @Config(qualifiers = "sw700dp-port")
+    fun tabletCategoryNavigationIsCompactAndReusesScopedSearch() {
+        val playlist = requireNotNull(testStore.selected())
+        runBlocking {
+            val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+            cache.saveCategories(
+                playlist.id,
+                "live",
+                listOf(XtreamCategory("sports", "UK Sports"), XtreamCategory("news", "Sky News")),
+            )
+            testStore.markCatalogRefreshed(playlist.id, "live", null)
+        }
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        categories.measure(
+            View.MeasureSpec.makeMeasureSpec(700, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(48, View.MeasureSpec.EXACTLY),
+        )
+        categories.layout(0, 0, 700, 48)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val first = requireNotNull(categories.findViewHolderForAdapterPosition(0)?.itemView)
+        val label = first.findViewById<TextView>(R.id.category_name)
+        assertEquals("Search", label.text.toString())
+        assertTrue(label.compoundDrawables[0] != null)
+        assertEquals((44 * activity.resources.displayMetrics.density).toInt(), first.layoutParams.height)
+        assertEquals(13f, label.textSize / activity.resources.displayMetrics.scaledDensity, 0.1f)
+
+        first.performClick()
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        assertTrue(dialog.isShowing)
+        assertFalse(activity.findViewById<EditText>(R.id.search_box).hasFocus())
+        val input = requireNotNull(findEditText(requireNotNull(dialog.window).decorView))
+        input.setText("news")
+        shadowOf(Looper.getMainLooper()).idle()
+        val adapter = categories.adapter as CategoryAdapter
+        assertTrue(adapter.positionOf("news") >= 0)
+        assertEquals(-1, adapter.positionOf("sports"))
+        val actions = activity.findViewById<LinearLayout>(R.id.live_channel_actions)
+        assertEquals(LinearLayout.VERTICAL, actions.orientation)
+        listOf(R.id.live_channel_play, R.id.live_channel_favourite, R.id.live_channel_group).forEach { id ->
+            val params = activity.findViewById<Button>(id).layoutParams as LinearLayout.LayoutParams
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, params.width)
+            assertEquals((44 * activity.resources.displayMetrics.density).toInt(), params.height)
+            assertEquals(0f, params.weight, 0f)
+        }
+    }
+
+    @Test
     fun mobileNavigationReservesCountLineForEachContentType() {
         assertTrue(activity.findViewById<TextView>(R.id.nav_live).text.startsWith("Live\n("))
         assertTrue(activity.findViewById<TextView>(R.id.nav_movies).text.startsWith("Movies\n("))
@@ -349,4 +406,10 @@ class PostLoginMobileUiTest {
         catchUp = false,
         catchUpDays = 0,
     )
+
+    private fun findEditText(view: View): EditText? {
+        if (view is EditText) return view
+        if (view !is ViewGroup) return null
+        return (0 until view.childCount).firstNotNullOfOrNull { findEditText(view.getChildAt(it)) }
+    }
 }
