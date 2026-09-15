@@ -355,12 +355,27 @@ class MainActivity : AppCompatActivity() {
         play.setOnClickListener { liveChannelSelection?.let { play(it, live = true) } }
         favourite.setOnClickListener { toggleLiveChannelFavourite() }
         group.setOnClickListener { liveChannelSelection?.let(::showChannelGroups) }
-        listOf(play, favourite, group).forEach { action ->
-            action.setOnKeyListener { _, keyCode, event ->
-                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    restoreCardFocus(liveChannelSelection?.let { "${it.kind}:${it.id}" })
-                    true
-                } else false
+        val actions = listOf(play, favourite, group)
+        actions.forEachIndexed { index, action ->
+            action.nextFocusLeftId = actions.getOrNull(index - 1)?.id ?: binding.contentGrid.id
+            action.nextFocusRightId = actions.getOrNull(index + 1)?.id ?: action.id
+            action.nextFocusUpId = action.id
+            action.nextFocusDownId = action.id
+            action.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> actions.getOrNull(index - 1)?.requestFocus()
+                        ?: requestRecyclerItemFocus(
+                            binding.contentGrid,
+                            liveChannelSelection?.let { selected ->
+                                catalogAdapter.currentItems.indexOfFirst { it.kind == selected.kind && it.id == selected.id }
+                            }?.takeIf { it >= 0 } ?: 0,
+                        )
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> actions.getOrNull(index + 1)?.requestFocus()
+                        ?: view.requestFocus()
+                    else -> view.requestFocus()
+                }
+                true
             }
         }
     }
@@ -515,7 +530,9 @@ class MainActivity : AppCompatActivity() {
         if (binding.contentGrid.id in pendingTvFocusMoves) return true
         if (liveChannelBrowserOpen) {
             when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP -> requestRecyclerItemFocus(binding.contentGrid, (position - 1).coerceAtLeast(0))
+                KeyEvent.KEYCODE_DPAD_UP -> if (position == 0 && binding.searchBox.isVisible) {
+                    binding.searchBox.requestFocus()
+                } else requestRecyclerItemFocus(binding.contentGrid, (position - 1).coerceAtLeast(0))
                 KeyEvent.KEYCODE_DPAD_DOWN -> requestRecyclerItemFocus(binding.contentGrid, (position + 1).coerceAtMost(catalogAdapter.itemCount - 1))
                 KeyEvent.KEYCODE_DPAD_LEFT -> restoreCategoryFocus(activeCategoryFocusId())
                 KeyEvent.KEYCODE_DPAD_RIGHT -> findViewById<Button>(R.id.live_channel_play).requestFocus()
@@ -544,6 +561,15 @@ class MainActivity : AppCompatActivity() {
         if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
         if (keyCode !in TV_DPAD_KEYS) return false
         if (binding.categoryList.id in pendingTvFocusMoves) return true
+        if (
+            keyCode == KeyEvent.KEYCODE_DPAD_UP &&
+            position == 0 &&
+            nestedSeries == null &&
+            binding.searchBox.isVisible
+        ) {
+            binding.searchBox.requestFocus()
+            return true
+        }
         val move = tvCategoryFocusMove(
             position,
             categoriesAdapter.itemCount,
@@ -565,7 +591,11 @@ class MainActivity : AppCompatActivity() {
         when {
             binding.contentGrid.isVisible && catalogAdapter.itemCount > 0 -> {
                 val key = if (nestedSeries != null) null else sectionState(section).focusedCardKey
-                restoreCardFocus(key)
+                val position = key?.let { requested ->
+                    catalogAdapter.currentItems.indexOfFirst { "${it.kind}:${it.id}" == requested }
+                        .takeIf { it >= 0 }
+                } ?: 0
+                requestRecyclerItemFocus(binding.contentGrid, position)
             }
             binding.stateAction.isVisible -> binding.stateAction.requestFocus()
             else -> fallback.requestFocus()
@@ -672,6 +702,33 @@ class MainActivity : AppCompatActivity() {
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        if (isTelevisionLayout()) {
+            binding.searchBox.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> navigationView(section).requestFocus()
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> if (binding.actionSearchClear.isVisible) {
+                        binding.actionSearchClear.requestFocus()
+                    } else view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (
+                        section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0
+                    ) restoreCategoryFocus(activeCategoryFocusId()) else focusVisibleCatalogDestination(view)
+                    else -> view.requestFocus()
+                }
+                true
+            }
+            binding.actionSearchClear.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> binding.searchBox.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (
+                        section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0
+                    ) restoreCategoryFocus(activeCategoryFocusId()) else focusVisibleCatalogDestination(view)
+                    else -> view.requestFocus()
+                }
+                true
+            }
+        }
     }
 
     private fun runActiveSearch(query: String) {
@@ -1118,7 +1175,7 @@ class MainActivity : AppCompatActivity() {
                     restoreCategoryFocus(CATEGORY_SEARCH_ID)
                 }
             }
-            .showCrown()
+            .showCrown(preferredButton = null)
         input.setOnEditorActionListener { _, actionId, event ->
             val submitted = actionId == EditorInfo.IME_ACTION_SEARCH ||
                 actionId == EditorInfo.IME_ACTION_DONE ||
@@ -1143,12 +1200,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun focusDialogInput(dialog: AlertDialog, input: EditText) {
-        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
-        input.requestFocus()
-        input.post {
-            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        input.id = input.id.takeIf { it != View.NO_ID } ?: View.generateViewId()
+        input.isFocusable = true
+        input.isFocusableInTouchMode = true
+        input.showSoftInputOnFocus = true
+        val window = dialog.window ?: return
+        window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        val positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+        val negative = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+        val neutral = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+        val buttons = listOfNotNull(positive, negative, neutral)
+        input.nextFocusDownId = buttons.firstOrNull()?.id ?: input.id
+        buttons.forEachIndexed { index, button ->
+            button.nextFocusUpId = input.id
+            button.nextFocusLeftId = buttons.getOrNull(index - 1)?.id ?: button.id
+            button.nextFocusRightId = buttons.getOrNull(index + 1)?.id ?: button.id
         }
+        input.requestFocus()
+        var initialActivationPending = true
+        val activateEditor = {
+            if (
+                dialog.isShowing &&
+                (initialActivationPending || dialog.currentFocus == null || dialog.currentFocus === input)
+            ) {
+                initialActivationPending = false
+                input.requestFocus()
+                input.setSelection(input.text.length)
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)?.let { manager ->
+                    manager.restartInput(input)
+                    manager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                }
+            }
+        }
+        window.decorView.post(activateEditor)
+        window.decorView.postDelayed(activateEditor, TV_INPUT_FOCUS_RETRY_MS)
     }
 
     private fun selectCustomChannelGroup(category: XtreamCategory) {
@@ -2390,7 +2476,7 @@ class MainActivity : AppCompatActivity() {
             }
             .setNeutralButton(R.string.create_group) { _, _ -> promptCreateChannelGroup(card) }
             .setPositiveButton("Done", null)
-            .showCrown()
+            .showCrown(preferredButton = null)
     }
 
     private fun promptCreateChannelGroup(card: CatalogCard) {
@@ -2410,7 +2496,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton("Cancel", null)
-            .showCrown()
+            .showCrown(preferredButton = null)
         input.setOnEditorActionListener { _, actionId, event ->
             val submitted = actionId == EditorInfo.IME_ACTION_DONE ||
                 (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER)
@@ -3977,12 +4063,13 @@ class MainActivity : AppCompatActivity() {
         private const val MIN_SEARCH_LENGTH = 2
         private const val SEARCH_RESULT_LIMIT = 500
         private const val QR_CONNECT_UI_ENABLED = false
-        private const val TV_NAV_COLLAPSED_WIDTH_DP = 80
-        private const val TV_NAV_MIN_EXPANDED_WIDTH_DP = 204
-        private const val TV_NAV_MAX_EXPANDED_WIDTH_DP = 240
+        private const val TV_NAV_COLLAPSED_WIDTH_DP = 72
+        private const val TV_NAV_MIN_EXPANDED_WIDTH_DP = 184
+        private const val TV_NAV_MAX_EXPANDED_WIDTH_DP = 216
         private const val TV_NAV_ANIMATION_MS = 180L
-        private const val TV_NAV_ICON_PADDING_DP = 16
-        private const val TV_NAV_BUTTON_PADDING_DP = 16
+        private const val TV_NAV_ICON_PADDING_DP = 12
+        private const val TV_NAV_BUTTON_PADDING_DP = 10
+        private const val TV_INPUT_FOCUS_RETRY_MS = 120L
         private const val TV_CATEGORY_MIN_WIDTH_DP = 168
         private const val TV_CATEGORY_MAX_WIDTH_DP = 216
         private const val TV_CONTENT_MIN_CARD_WIDTH_DP = 145
@@ -4009,7 +4096,7 @@ class MainActivity : AppCompatActivity() {
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
 
         internal fun responsiveTvNavigationWidthDp(screenWidthDp: Int): Int =
-            (screenWidthDp * 0.32f).toInt()
+            (screenWidthDp * 0.2875f).toInt()
                 .coerceIn(TV_NAV_MIN_EXPANDED_WIDTH_DP, TV_NAV_MAX_EXPANDED_WIDTH_DP)
 
         internal fun responsiveTvCategoryNavigationWidthDp(screenWidthDp: Int): Int =

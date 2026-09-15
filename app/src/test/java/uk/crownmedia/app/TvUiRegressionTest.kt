@@ -33,6 +33,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -93,7 +94,7 @@ class TvUiRegressionTest {
         assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
         assertEquals(9, grid.adapter?.itemCount)
         assertTrue(activity.findViewById<View>(R.id.nav_home).isSelected)
-        assertEquals(dp(80), sideNav.layoutParams.width)
+        assertEquals(dp(72), sideNav.layoutParams.width)
         assertTrue(grid.hasFocus())
         assertFalse(activity.findViewById<View>(R.id.nav_home).hasFocus())
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_reload).visibility)
@@ -155,7 +156,7 @@ class TvUiRegressionTest {
 
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.live_channel_details).visibility)
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.side_nav).visibility)
-        assertEquals(dp(80), activity.findViewById<View>(R.id.side_nav).layoutParams.width)
+        assertEquals(dp(72), activity.findViewById<View>(R.id.side_nav).layoutParams.width)
         assertEquals(1, (grid.layoutManager as GridLayoutManager).spanCount)
         val categoryBar = activity.findViewById<View>(R.id.category_bar)
         val browserParams = categoryBar.layoutParams as ConstraintLayout.LayoutParams
@@ -169,7 +170,7 @@ class TvUiRegressionTest {
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals(View.GONE, activity.findViewById<View>(R.id.live_channel_details).visibility)
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.side_nav).visibility)
-        assertEquals(dp(80), activity.findViewById<View>(R.id.side_nav).layoutParams.width)
+        assertEquals(dp(72), activity.findViewById<View>(R.id.side_nav).layoutParams.width)
         assertFalse(activity.findViewById<View>(R.id.side_nav).hasFocus())
         assertTrue(categories.hasFocus())
         val restoredParams = categoryBar.layoutParams as ConstraintLayout.LayoutParams
@@ -187,7 +188,68 @@ class TvUiRegressionTest {
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
         assertTrue(activity.findViewById<View>(R.id.nav_live).hasFocus())
         assertEquals(View.GONE, activity.findViewById<View>(R.id.live_channel_details).visibility)
-        assertTrue(activity.findViewById<View>(R.id.side_nav).layoutParams.width > dp(80))
+        assertTrue(activity.findViewById<View>(R.id.side_nav).layoutParams.width > dp(72))
+    }
+
+    @Test
+    fun liveBrowserDpadReachesTopSearchCategoriesChannelsAndEveryAction() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        cache.saveCategories(playlist.id, "live", listOf(XtreamCategory("sports", "Sports")))
+        cache.saveItems(
+            playlist.id,
+            "live",
+            null,
+            listOf(searchItem("401", "Sky Sports Main Event").copy(categoryId = "sports", providerOrder = 401)),
+        )
+        testStore.markCatalogRefreshed(playlist.id, "live", null)
+        testStore.markCatalogRefreshed(playlist.id, "live", "sports")
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        MainActivity::class.java.getDeclaredMethod("selectCategory", XtreamCategory::class.java).apply {
+            isAccessible = true
+            invoke(activity, XtreamCategory("sports", "Sports"))
+        }
+
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        val search = activity.findViewById<EditText>(R.id.search_box)
+        val play = activity.findViewById<Button>(R.id.live_channel_play)
+        val favourite = activity.findViewById<Button>(R.id.live_channel_favourite)
+        val group = activity.findViewById<Button>(R.id.live_channel_group)
+        waitForTitles(grid, setOf("Sky Sports Main Event"))
+        val channel = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView)
+
+        channel.requestFocus()
+        assertTrue(channel.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)))
+        assertTrue(search.hasFocus())
+        assertTrue(search.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(categories.hasFocus())
+        assertTrue(requireNotNull(categories.focusedChild).dispatchKeyEvent(
+            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT),
+        ))
+        assertTrue(grid.hasFocus())
+
+        assertTrue(requireNotNull(grid.focusedChild).dispatchKeyEvent(
+            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT),
+        ))
+        assertTrue(play.hasFocus())
+        assertTrue(play.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
+        assertTrue(favourite.hasFocus())
+        assertTrue(favourite.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
+        assertTrue(group.hasFocus())
+        assertTrue(group.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
+        assertTrue(favourite.hasFocus())
+        assertTrue(favourite.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
+        assertTrue(play.hasFocus())
+        assertTrue(play.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
+        assertTrue(grid.hasFocus())
+
+        val categorySearch = requireNotNull(categories.findViewHolderForAdapterPosition(0)?.itemView)
+        categorySearch.requestFocus()
+        assertTrue(categorySearch.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)))
+        assertTrue(search.hasFocus())
     }
 
     @Test
@@ -208,8 +270,13 @@ class TvUiRegressionTest {
         val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
         val input = dialog.window?.decorView?.let { decor -> findEditText(decor) }
         requireNotNull(input)
+        shadowOf(Looper.getMainLooper()).idleFor(150, TimeUnit.MILLISECONDS)
         assertTrue(input.hasFocus())
-        input.setText("sport")
+        assertSame(input, dialog.currentFocus)
+        assertEquals(dialog.getButton(AlertDialog.BUTTON_POSITIVE).id, input.nextFocusDownId)
+        assertEquals(input.id, dialog.getButton(AlertDialog.BUTTON_POSITIVE).nextFocusUpId)
+        val inputConnection = requireNotNull(input.onCreateInputConnection(EditorInfo()))
+        assertTrue(inputConnection.commitText("sport", 1))
         val adapter = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
         fun awaitCategories(condition: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
@@ -262,8 +329,13 @@ class TvUiRegressionTest {
         }
         val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
         val input = requireNotNull(dialog.window?.decorView?.let(::findEditText))
+        shadowOf(Looper.getMainLooper()).idleFor(150, TimeUnit.MILLISECONDS)
         assertTrue(input.hasFocus())
-        input.setText("My Sports")
+        assertSame(input, dialog.currentFocus)
+        assertEquals(dialog.getButton(AlertDialog.BUTTON_POSITIVE).id, input.nextFocusDownId)
+        assertEquals(input.id, dialog.getButton(AlertDialog.BUTTON_POSITIVE).nextFocusUpId)
+        val inputConnection = requireNotNull(input.onCreateInputConnection(EditorInfo()))
+        assertTrue(inputConnection.commitText("My Sports", 1))
         input.onEditorAction(EditorInfo.IME_ACTION_DONE)
         shadowOf(Looper.getMainLooper()).idle()
 
@@ -526,7 +598,7 @@ class TvUiRegressionTest {
         press(KeyEvent.KEYCODE_DPAD_LEFT)
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
         assertTrue(activity.findViewById<View>(R.id.nav_home).hasFocus())
-        assertEquals(dp(240), rail.layoutParams.width)
+        assertEquals(dp(216), rail.layoutParams.width)
     }
 
     @Test
@@ -601,7 +673,7 @@ class TvUiRegressionTest {
 
         assertEquals("Live TV", activity.findViewById<TextView>(R.id.screen_title).text.toString())
         assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)
-        assertEquals(dp(80), rail.layoutParams.width)
+        assertEquals(dp(72), rail.layoutParams.width)
         assertFalse(activity.findViewById<View>(R.id.nav_live).hasFocus())
         assertTrue((grid.adapter as CatalogAdapter).currentItems.none { it.kind == "home" })
     }
@@ -639,7 +711,7 @@ class TvUiRegressionTest {
         activity.findViewById<View>(R.id.nav_movies).performClick()
         shadowOf(Looper.getMainLooper()).idle()
 
-        assertEquals(dp(80), rail.layoutParams.width)
+        assertEquals(dp(72), rail.layoutParams.width)
         assertTrue(activity.findViewById<View>(R.id.category_bar).isShown)
         assertTrue(
             activity.findViewById<View>(R.id.search_box).hasFocus() ||
@@ -678,7 +750,7 @@ class TvUiRegressionTest {
         assertEquals(0, categories.layoutParams.height)
         assertFalse(activity.findViewById<TextView>(R.id.nav_live).text.contains('\n'))
         val scaledDensity = activity.resources.displayMetrics.density * activity.resources.configuration.fontScale
-        assertEquals(13f, navHome.textSize / scaledDensity, 0.1f)
+        assertEquals(12f, navHome.textSize / scaledDensity, 0.1f)
     }
 
     @Test
@@ -686,9 +758,9 @@ class TvUiRegressionTest {
         val logo = activity.findViewById<ImageView>(R.id.brand_logo)
         val category = activity.layoutInflater.inflate(R.layout.item_category, FrameLayout(activity), false)
 
-        assertEquals(dp(52), logo.layoutParams.width)
-        assertEquals(dp(48), logo.layoutParams.height)
-        assertEquals(dp(5), logo.paddingTop)
+        assertEquals(dp(46), logo.layoutParams.width)
+        assertEquals(dp(42), logo.layoutParams.height)
+        assertEquals(dp(4), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals(dp(46), category.layoutParams.height)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, category.layoutParams.width)
@@ -776,14 +848,14 @@ class TvUiRegressionTest {
         val topBar = activity.findViewById<View>(R.id.top_bar)
         val categories = activity.findViewById<View>(R.id.category_bar)
 
-        assertEquals(dp(80), rail.layoutParams.width)
+        assertEquals(dp(72), rail.layoutParams.width)
         assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, panel.layoutParams.width)
         assertEquals(R.id.side_nav, (topBar.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         assertEquals(R.id.side_nav, (categories.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         assertEquals(R.id.category_bar, (content.layoutParams as ConstraintLayout.LayoutParams).startToEnd)
         content.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
-        assertEquals(dp(80), rail.layoutParams.width)
+        assertEquals(dp(72), rail.layoutParams.width)
         assertEquals("", home.text.toString())
         assertEquals(Gravity.CENTER, home.gravity)
         assertEquals(0, home.iconPadding)
@@ -793,15 +865,15 @@ class TvUiRegressionTest {
         home.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
 
-        assertEquals(dp(240), rail.layoutParams.width)
+        assertEquals(dp(216), rail.layoutParams.width)
         assertEquals("Home", home.text.toString())
         assertEquals(Gravity.START or Gravity.CENTER_VERTICAL, home.gravity)
-        assertEquals(dp(16), home.iconPadding)
+        assertEquals(dp(12), home.iconPadding)
 
         content.requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
 
-        assertEquals(dp(80), rail.layoutParams.width)
+        assertEquals(dp(72), rail.layoutParams.width)
         assertEquals("", home.text.toString())
     }
 
@@ -1073,12 +1145,12 @@ class TvUiRegressionTest {
         val rail = activity.findViewById<View>(R.id.side_nav)
         activity.findViewById<View>(R.id.nav_home).requestFocus()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
-        assertEquals(dp(240), rail.layoutParams.width)
+        assertEquals(dp(216), rail.layoutParams.width)
 
         activity.onBackPressedDispatcher.onBackPressed()
         shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
 
-        assertEquals(dp(80), rail.layoutParams.width)
+        assertEquals(dp(72), rail.layoutParams.width)
         assertTrue(activity.findViewById<View>(R.id.content_grid).hasFocus())
         assertFalse(activity.isFinishing)
     }
