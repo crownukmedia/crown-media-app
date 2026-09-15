@@ -59,6 +59,45 @@
                 android:textSize="13sp" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/live_browser_actions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <ImageButton
+                android:id="@+id/live_browser_home"
+                style="@style/Widget.Crown.IconButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="@drawable/bg_chip"
+                android:contentDescription="@string/nav_home"
+                android:padding="11dp"
+                android:src="@drawable/ic_nav_home" />
+
+            <ImageButton
+                android:id="@+id/live_browser_search"
+                style="@style/Widget.Crown.IconButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="@drawable/bg_chip"
+                android:contentDescription="@string/nav_search"
+                android:padding="11dp"
+                android:src="@drawable/ic_nav_search" />
+
+            <ImageButton
+                android:id="@+id/live_browser_settings"
+                style="@style/Widget.Crown.IconButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="@drawable/bg_chip"
+                android:contentDescription="@string/settings"
+                android:padding="11dp"
+                android:src="@drawable/ic_nav_settings" />
+        </LinearLayout>
+
         <ImageButton
             android:id="@+id/action_more"
             style="@style/Widget.Crown.IconButton"

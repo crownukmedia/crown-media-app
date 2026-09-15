@@ -362,6 +362,34 @@ class MainActivity : AppCompatActivity() {
                 } else false
             }
         }
+        val compactActions = listOf(
+            binding.liveBrowserHome,
+            binding.liveBrowserSearch,
+            binding.liveBrowserSettings,
+        )
+        binding.liveBrowserHome.setOnClickListener { openFromNavigation(Section.HOME) }
+        binding.liveBrowserSearch.setOnClickListener { openFromNavigation(Section.SEARCH) }
+        binding.liveBrowserSettings.setOnClickListener { showSettings() }
+        compactActions.forEachIndexed { index, action ->
+            action.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        compactActions.getOrNull(index - 1)?.requestFocus() ?: view.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        compactActions.getOrNull(index + 1)?.requestFocus() ?: view.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        restoreCategoryFocus(activeCategoryFocusId())
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
     }
 
     private fun configureNavigation() {
@@ -464,6 +492,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun collapseTvNavigationImmediately() {
+        if (!isTelevisionLayout()) return
+        tvNavigationAnimator?.cancel()
+        tvNavigationAnimator = null
+        tvNavigationExpanded = false
+        applyTvNavigationLabels(expanded = false)
+        binding.sideNav.layoutParams = binding.sideNav.layoutParams.apply {
+            width = dp(TV_NAV_COLLAPSED_WIDTH_DP)
+        }
+    }
+
     private fun applyTvNavigationLabels(expanded: Boolean) {
         tvNavigationButtons().forEach { button ->
             button.text = if (expanded) tvNavigationLabels[button.id] ?: "" else ""
@@ -536,7 +575,9 @@ class MainActivity : AppCompatActivity() {
         when (move.region) {
             TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.categoryList, move.position)
             TvFocusRegion.CATEGORY_MENU -> binding.categoryMenuButton.requestFocus()
-            TvFocusRegion.SIDEBAR -> navigationView(section).requestFocus()
+            TvFocusRegion.SIDEBAR -> if (liveChannelBrowserOpen) {
+                binding.liveBrowserHome.requestFocus()
+            } else navigationView(section).requestFocus()
             TvFocusRegion.CONTENT -> focusVisibleCatalogDestination(view)
             else -> view.requestFocus()
         }
@@ -1056,28 +1097,46 @@ class MainActivity : AppCompatActivity() {
 
     private fun showCategorySearch() {
         if (section !in PAGED_SECTIONS || isFinishing) return
+        val target = section
+        val originalQuery = categorySearchQueries[target].orEmpty()
         val input = EditText(this).apply {
             hint = getString(R.string.category_search_hint)
-            setText(categorySearchQueries[section].orEmpty())
+            setText(originalQuery)
             setSelection(text.length)
             isSingleLine = true
         }
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (section != target) return
+                val query = s?.toString().orEmpty().trim()
+                if (query.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = query
+                categoriesAdapter.submit(sectionState(target).categories, currentCategory)
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
         AlertDialog.Builder(this)
             .setTitle(R.string.category_search_title)
             .setView(input)
             .setPositiveButton(R.string.nav_search) { _, _ ->
-                categorySearchQueries[section] = input.text.toString().trim()
-                categoriesAdapter.submit(sectionState(section).categories, currentCategory) {
+                val query = input.text.toString().trim()
+                if (query.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = query
+                categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
                     restoreCategoryFocus(CATEGORY_SEARCH_ID)
                 }
             }
             .setNeutralButton(R.string.clear_search) { _, _ ->
-                categorySearchQueries.remove(section)
-                categoriesAdapter.submit(sectionState(section).categories, currentCategory) {
+                categorySearchQueries.remove(target)
+                categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
                     restoreCategoryFocus(CATEGORY_SEARCH_ID)
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton("Cancel") { _, _ ->
+                if (originalQuery.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = originalQuery
+                categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
+                    restoreCategoryFocus(CATEGORY_SEARCH_ID)
+                }
+            }
             .showCrown()
     }
 
@@ -2207,8 +2266,19 @@ class MainActivity : AppCompatActivity() {
         set.clear(R.id.content_grid, ConstraintSet.END)
         set.connect(R.id.content_grid, ConstraintSet.START, R.id.category_bar, ConstraintSet.END)
         set.setVisibility(R.id.live_channel_details, View.VISIBLE)
-        if (isTelevisionLayout()) set.setVisibility(R.id.side_nav, View.GONE)
+        if (isTelevisionLayout()) {
+            set.setVisibility(R.id.side_nav, View.GONE)
+            set.clear(R.id.category_bar, ConstraintSet.START)
+            set.connect(
+                R.id.category_bar,
+                ConstraintSet.START,
+                ConstraintSet.PARENT_ID,
+                ConstraintSet.START,
+                dp(TV_SAFE_AREA_START_DP),
+            )
+        }
         set.applyTo(binding.root)
+        binding.liveBrowserActions.isVisible = isTelevisionLayout()
         binding.contentGrid.setPadding(dp(5), dp(5), dp(5), dp(10))
         binding.contentGrid.isVisible = true
         binding.statePanel.isVisible = false
@@ -2231,12 +2301,18 @@ class MainActivity : AppCompatActivity() {
         liveChannelSelection = null
         stopInlinePreview()
         catalogAdapter.setLiveChannelNavigation(false)
+        if (isTelevisionLayout()) collapseTvNavigationImmediately()
         val set = ConstraintSet().apply { clone(binding.root) }
         set.constrainWidth(R.id.content_grid, ConstraintSet.MATCH_CONSTRAINT)
         set.connect(R.id.content_grid, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END)
         set.setVisibility(R.id.live_channel_details, View.GONE)
-        if (isTelevisionLayout()) set.setVisibility(R.id.side_nav, View.VISIBLE)
+        if (isTelevisionLayout()) {
+            set.setVisibility(R.id.side_nav, View.VISIBLE)
+            set.clear(R.id.category_bar, ConstraintSet.START)
+            set.connect(R.id.category_bar, ConstraintSet.START, R.id.side_nav, ConstraintSet.END)
+        }
         set.applyTo(binding.root)
+        binding.liveBrowserActions.isVisible = false
         if (isTelevisionLayout()) {
             binding.contentGrid.setPadding(dp(20), dp(16), dp(40), dp(28))
             configureTvPresentation(section)

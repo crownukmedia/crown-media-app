@@ -33,6 +33,7 @@ import kotlinx.coroutines.runBlocking
 import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamItem
+import uk.crownmedia.data.xtream.XtreamCategory
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -79,6 +80,7 @@ class PostLoginMobileUiTest {
         assertEquals((4 * density).toInt(), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals((54 * density).toInt(), topBar.minimumHeight)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.live_browser_actions).visibility)
     }
 
     @Test
@@ -315,6 +317,16 @@ class PostLoginMobileUiTest {
     @Test
     @Config(qualifiers = "sw700dp-port")
     fun tabletCategoryNavigationIsCompactAndReusesScopedSearch() {
+        val playlist = requireNotNull(testStore.selected())
+        runBlocking {
+            val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+            cache.saveCategories(
+                playlist.id,
+                "live",
+                listOf(XtreamCategory("sports", "UK Sports"), XtreamCategory("news", "Sky News")),
+            )
+            testStore.markCatalogRefreshed(playlist.id, "live", null)
+        }
         activity.findViewById<View>(R.id.nav_live).performClick()
         shadowOf(Looper.getMainLooper()).idle()
         val categories = activity.findViewById<RecyclerView>(R.id.category_list)
@@ -336,6 +348,13 @@ class PostLoginMobileUiTest {
         val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
         assertTrue(dialog.isShowing)
         assertFalse(activity.findViewById<EditText>(R.id.search_box).hasFocus())
+        val input = requireNotNull(findEditText(requireNotNull(dialog.window).decorView))
+        input.setText("news")
+        shadowOf(Looper.getMainLooper()).idle()
+        val adapter = categories.adapter as CategoryAdapter
+        assertTrue(adapter.positionOf("news") >= 0)
+        assertEquals(-1, adapter.positionOf("sports"))
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.live_browser_actions).visibility)
     }
 
     @Test
@@ -379,4 +398,10 @@ class PostLoginMobileUiTest {
         catchUp = false,
         catchUpDays = 0,
     )
+
+    private fun findEditText(view: View): EditText? {
+        if (view is EditText) return view
+        if (view !is ViewGroup) return null
+        return (0 until view.childCount).firstNotNullOfOrNull { findEditText(view.getChildAt(it)) }
+    }
 }
