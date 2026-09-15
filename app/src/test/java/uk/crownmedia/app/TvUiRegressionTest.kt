@@ -235,13 +235,16 @@ class TvUiRegressionTest {
             KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT),
         ))
         assertTrue(play.hasFocus())
-        assertTrue(play.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
+        val verticalActions = activity.findViewById<LinearLayout>(R.id.live_channel_actions).orientation == LinearLayout.VERTICAL
+        val forwardActionKey = if (verticalActions) KeyEvent.KEYCODE_DPAD_DOWN else KeyEvent.KEYCODE_DPAD_RIGHT
+        val backwardActionKey = if (verticalActions) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_LEFT
+        assertTrue(play.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, forwardActionKey)))
         assertTrue(favourite.hasFocus())
-        assertTrue(favourite.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
+        assertTrue(favourite.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, forwardActionKey)))
         assertTrue(group.hasFocus())
-        assertTrue(group.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
+        assertTrue(group.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, backwardActionKey)))
         assertTrue(favourite.hasFocus())
-        assertTrue(favourite.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
+        assertTrue(favourite.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, backwardActionKey)))
         assertTrue(play.hasFocus())
         assertTrue(play.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
         assertTrue(grid.hasFocus())
@@ -313,6 +316,65 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun categorySearchPersistsForItsSelectedContextThenResetsOnCategorySwitch() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        cache.saveCategories(
+            playlist.id,
+            "live",
+            listOf(XtreamCategory("sports", "UK Sports"), XtreamCategory("news", "UK News")),
+        )
+        testStore.markCatalogRefreshed(playlist.id, "live", null)
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        MainActivity::class.java.getDeclaredMethod("showCategorySearch").apply { isAccessible = true; invoke(activity) }
+        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+        val input = requireNotNull(dialog.window?.decorView?.let(::findEditText))
+        input.setText("uk")
+        input.onEditorAction(EditorInfo.IME_ACTION_SEARCH)
+        shadowOf(Looper.getMainLooper()).idle()
+        val adapter = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
+        fun searchLabel(): String? = activity.findViewById<RecyclerView>(R.id.category_list)
+            .findViewHolderForAdapterPosition(0)?.itemView
+            ?.findViewById<TextView>(R.id.category_name)?.text?.toString()
+        fun awaitCategories(condition: () -> Boolean) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (!condition() && System.nanoTime() < deadline) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            assertTrue(condition())
+        }
+        awaitCategories { adapter.positionOf("sports") > 0 && adapter.positionOf("news") > adapter.positionOf("sports") }
+        assertTrue(adapter.positionOf("sports") > 0)
+        assertTrue(adapter.positionOf("news") > adapter.positionOf("sports"))
+
+        val selectCategory = MainActivity::class.java.getDeclaredMethod("selectCategory", XtreamCategory::class.java).apply {
+            isAccessible = true
+        }
+        selectCategory.invoke(activity, XtreamCategory("sports", "UK Sports"))
+        shadowOf(Looper.getMainLooper()).idle()
+        MainActivity::class.java.getDeclaredMethod("closeLiveChannelBrowser").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("Search: uk", searchLabel())
+
+        selectCategory.invoke(activity, XtreamCategory("news", "UK News"))
+        shadowOf(Looper.getMainLooper()).idle()
+        awaitCategories {
+            searchLabel() == "Search" &&
+                adapter.positionOf("sports") > 0 && adapter.positionOf("news") > adapter.positionOf("sports")
+        }
+        assertEquals("Search", searchLabel())
+        assertTrue(adapter.positionOf("sports") > 0)
+        assertTrue(adapter.positionOf("news") > adapter.positionOf("sports"))
+    }
+
+    @Test
     fun customGroupsLeadProviderCategoriesAndCreateDialogOwnsTvInputFocus() = runBlocking {
         val playlist = requireNotNull(testStore.selected())
         val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
@@ -341,22 +403,32 @@ class TvUiRegressionTest {
 
         val adapter = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
         val group = testStore.customChannelGroups(playlist.id).single()
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (
+            (adapter.positionOf("$CUSTOM_GROUP_CATEGORY_PREFIX${group.id}") != 1 || adapter.positionOf("sports") <= 1) &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.sleep(10)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
         assertEquals(1, adapter.positionOf("$CUSTOM_GROUP_CATEGORY_PREFIX${group.id}"))
         assertTrue(adapter.positionOf("sports") > 1)
     }
 
     @Test
-    fun liveChannelActionsKeepEqualGeometryWhenFavouriteLabelChanges() {
+    fun constrainedLiveChannelActionsStackWithoutChangingGeometryWhenLabelsChange() {
         val play = activity.findViewById<Button>(R.id.live_channel_play)
         val favourite = activity.findViewById<Button>(R.id.live_channel_favourite)
         val group = activity.findViewById<Button>(R.id.live_channel_group)
+        assertEquals(LinearLayout.VERTICAL, activity.findViewById<LinearLayout>(R.id.live_channel_actions).orientation)
         val params = listOf(play, favourite, group).map { it.layoutParams as LinearLayout.LayoutParams }
-        assertTrue(params.all { it.width == 0 && it.weight == 1f })
-        val widths = params.map { it.width to it.weight }
+        assertTrue(params.all { it.width == ViewGroup.LayoutParams.MATCH_PARENT && it.weight == 0f })
+        assertTrue(params.all { it.height == dp(46) })
+        val geometry = params.map { Triple(it.width, it.height, it.weight) }
         favourite.text = activity.getString(R.string.remove_favourite)
-        assertEquals(widths, listOf(play, favourite, group).map {
+        assertEquals(geometry, listOf(play, favourite, group).map {
             val value = it.layoutParams as LinearLayout.LayoutParams
-            value.width to value.weight
+            Triple(value.width, value.height, value.weight)
         })
     }
 

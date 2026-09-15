@@ -22,6 +22,11 @@ class TvResponsiveSizingTest {
         assertEquals(200, MainActivity.responsiveLiveChannelNavigationWidthDp(600, television = false))
         assertEquals(240, MainActivity.responsiveLiveChannelNavigationWidthDp(800, television = false))
         assertEquals(140L, MainActivity.LIVE_CHANNEL_BROWSER_PREVIEW_DELAY_MS)
+        assertTrue(MainActivity.useVerticalLiveChannelActions(640, television = true))
+        assertTrue(MainActivity.useVerticalLiveChannelActions(960, television = true))
+        assertEquals(false, MainActivity.useVerticalLiveChannelActions(1280, television = true))
+        assertTrue(MainActivity.useVerticalLiveChannelActions(600, television = false))
+        assertEquals(false, MainActivity.useVerticalLiveChannelActions(800, television = false))
     }
 
     @Test

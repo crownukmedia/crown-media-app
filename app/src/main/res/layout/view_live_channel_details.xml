@@ -59,6 +59,7 @@
         android:textStyle="bold" />
 
     <LinearLayout
+        android:id="@+id/live_channel_actions"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
@@ -71,33 +72,42 @@
             android:id="@+id/live_channel_play"
             style="@style/Widget.Crown.ActionButton"
             android:layout_width="0dp"
+            android:layout_height="44dp"
             android:layout_weight="1"
             android:layout_marginStart="0dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
+            android:textSize="13sp"
             android:text="@string/play_channel" />
 
         <Button
             android:id="@+id/live_channel_favourite"
             style="@style/Widget.Crown.ActionButton"
             android:layout_width="0dp"
+            android:layout_height="44dp"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="6dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
+            android:textSize="13sp"
             android:text="@string/favourite" />
 
         <Button
             android:id="@+id/live_channel_group"
             style="@style/Widget.Crown.ActionButton"
             android:layout_width="0dp"
+            android:layout_height="44dp"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="6dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
+            android:textSize="13sp"
             android:text="@string/add_to_group" />
     </LinearLayout>
 </LinearLayout>

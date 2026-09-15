@@ -155,6 +155,7 @@ class MainActivity : AppCompatActivity() {
     private var liveChannelSelection: CatalogCard? = null
     private var liveChannelEpgJob: Job? = null
     private val categorySearchQueries = EnumMap<Section, String>(Section::class.java)
+    private val categorySearchContextIds = EnumMap<Section, String>(Section::class.java)
 
     override fun attachBaseContext(newBase: Context) {
         detectedDeviceClass = newBase.deviceClass()
@@ -356,28 +357,52 @@ class MainActivity : AppCompatActivity() {
         favourite.setOnClickListener { toggleLiveChannelFavourite() }
         group.setOnClickListener { liveChannelSelection?.let(::showChannelGroups) }
         val actions = listOf(play, favourite, group)
+        val vertical = useVerticalLiveChannelActions(resources.configuration.screenWidthDp, isTelevisionLayout())
+        findViewById<LinearLayout>(R.id.live_channel_actions).orientation =
+            if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
         actions.forEachIndexed { index, action ->
-            action.nextFocusLeftId = actions.getOrNull(index - 1)?.id ?: binding.contentGrid.id
-            action.nextFocusRightId = actions.getOrNull(index + 1)?.id ?: action.id
-            action.nextFocusUpId = action.id
-            action.nextFocusDownId = action.id
+            action.layoutParams = LinearLayout.LayoutParams(
+                if (vertical) LinearLayout.LayoutParams.MATCH_PARENT else 0,
+                dp(if (isTelevisionLayout()) 46 else 44),
+                if (vertical) 0f else 1f,
+            ).apply {
+                if (vertical && index > 0) topMargin = dp(6)
+                if (!vertical && index > 0) marginStart = dp(6)
+            }
+            action.nextFocusLeftId = if (vertical) binding.contentGrid.id else {
+                actions.getOrNull(index - 1)?.id ?: binding.contentGrid.id
+            }
+            action.nextFocusRightId = if (vertical) action.id else actions.getOrNull(index + 1)?.id ?: action.id
+            action.nextFocusUpId = if (vertical) actions.getOrNull(index - 1)?.id ?: action.id else action.id
+            action.nextFocusDownId = if (vertical) actions.getOrNull(index + 1)?.id ?: action.id else action.id
             action.setOnKeyListener { view, keyCode, event ->
                 if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
                 when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> actions.getOrNull(index - 1)?.requestFocus()
-                        ?: requestRecyclerItemFocus(
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (vertical) {
+                        requestRecyclerItemFocus(
                             binding.contentGrid,
                             liveChannelSelection?.let { selected ->
                                 catalogAdapter.currentItems.indexOfFirst { it.kind == selected.kind && it.id == selected.id }
                             }?.takeIf { it >= 0 } ?: 0,
                         )
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> actions.getOrNull(index + 1)?.requestFocus()
-                        ?: view.requestFocus()
-                    else -> view.requestFocus()
+                    } else actions.getOrNull(index - 1)?.requestFocus() ?: focusSelectedLiveChannel()
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> if (vertical) view.requestFocus()
+                    else actions.getOrNull(index + 1)?.requestFocus() ?: view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_UP -> if (vertical) actions.getOrNull(index - 1)?.requestFocus() ?: view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (vertical) actions.getOrNull(index + 1)?.requestFocus() ?: view.requestFocus()
                 }
                 true
             }
         }
+    }
+
+    private fun focusSelectedLiveChannel() {
+        requestRecyclerItemFocus(
+            binding.contentGrid,
+            liveChannelSelection?.let { selected ->
+                catalogAdapter.currentItems.indexOfFirst { it.kind == selected.kind && it.id == selected.id }
+            }?.takeIf { it >= 0 } ?: 0,
+        )
     }
 
     private fun configureNavigation() {
@@ -789,6 +814,7 @@ class MainActivity : AppCompatActivity() {
         }
         ensurePlaylistState()
         val changingTopLevelSection = section != value
+        if (changingTopLevelSection && section in PAGED_SECTIONS) resetCategorySearch(section)
         if (changingTopLevelSection || value != Section.LIVE) resetLiveChannelBrowser(renderGrid = false)
         if (changingTopLevelSection || value != Section.LIVE) stopInlinePreview()
         captureSectionState()
@@ -1070,6 +1096,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (requiresPin(category.name)) { verifyPin { selectCategory(category) }; return }
+        updateCategorySearchContext(category.id)
         if (category.id == currentCategory) {
             if (section == Section.LIVE && supportsLiveChannelBrowser() && !liveChannelBrowserOpen) {
                 openLiveChannelBrowser(sectionState(Section.LIVE).cards, restoreFocus = true)
@@ -1136,6 +1163,7 @@ class MainActivity : AppCompatActivity() {
         if (section !in PAGED_SECTIONS || isFinishing) return
         val target = section
         val originalQuery = categorySearchQueries[target].orEmpty()
+        val originalContextId = categorySearchContextIds[target]
         val input = EditText(this).apply {
             hint = getString(R.string.category_search_hint)
             setText(originalQuery)
@@ -1148,7 +1176,10 @@ class MainActivity : AppCompatActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (section != target) return
                 val query = s?.toString().orEmpty().trim()
-                if (query.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = query
+                if (query.isBlank()) resetCategorySearch(target) else {
+                    categorySearchQueries[target] = query
+                    categorySearchContextIds.remove(target)
+                }
                 categoriesAdapter.submit(sectionState(target).categories, currentCategory)
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -1164,13 +1195,15 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .setNeutralButton(R.string.clear_search) { _, _ ->
-                categorySearchQueries.remove(target)
+                resetCategorySearch(target)
                 categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
                     restoreCategoryFocus(CATEGORY_SEARCH_ID)
                 }
             }
             .setNegativeButton("Cancel") { _, _ ->
-                if (originalQuery.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = originalQuery
+                resetCategorySearch(target)
+                if (originalQuery.isNotBlank()) categorySearchQueries[target] = originalQuery
+                if (originalContextId != null) categorySearchContextIds[target] = originalContextId
                 categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
                     restoreCategoryFocus(CATEGORY_SEARCH_ID)
                 }
@@ -1197,6 +1230,19 @@ class MainActivity : AppCompatActivity() {
             ?: categoriesAdapter.positionOf(CATEGORY_SEARCH_ID).takeIf { it >= 0 }
             ?: return
         requestRecyclerItemFocus(binding.categoryList, position)
+    }
+
+    private fun updateCategorySearchContext(categoryId: String) {
+        val query = categorySearchQueries[section].orEmpty().trim()
+        if (query.isBlank()) return
+        val contextId = categorySearchContextIds[section]
+        if (contextId == null) categorySearchContextIds[section] = categoryId
+        else if (contextId != categoryId) resetCategorySearch(section)
+    }
+
+    private fun resetCategorySearch(target: Section) {
+        categorySearchQueries.remove(target)
+        categorySearchContextIds.remove(target)
     }
 
     private fun focusDialogInput(dialog: AlertDialog, input: EditText) {
@@ -1314,6 +1360,8 @@ class MainActivity : AppCompatActivity() {
         catalogWarmJobs.clear()
         sectionStates.clear()
         contentCounts.clear()
+        categorySearchQueries.clear()
+        categorySearchContextIds.clear()
         searchWarmJob = null
         searchWarmCompletedFor = null
         masterSearchQuery = ""
@@ -4074,6 +4122,7 @@ class MainActivity : AppCompatActivity() {
         private const val TV_CATEGORY_MAX_WIDTH_DP = 216
         private const val TV_CONTENT_MIN_CARD_WIDTH_DP = 145
         private const val TV_SAFE_AREA_START_DP = 16
+        private const val LIVE_ACTIONS_HORIZONTAL_MIN_WIDTH_DP = 520
         internal const val TV_PREVIEW_DELAY_MS = 350L
         internal const val MOBILE_PREVIEW_DELAY_MS = 450L
         internal const val LIVE_CHANNEL_BROWSER_PREVIEW_DELAY_MS = 140L
@@ -4106,6 +4155,15 @@ class MainActivity : AppCompatActivity() {
         internal fun responsiveLiveChannelNavigationWidthDp(screenWidthDp: Int, television: Boolean): Int =
             (screenWidthDp * if (television) 0.22f else 0.30f).roundToInt()
                 .coerceIn(if (television) 220 else 200, if (television) 300 else 260)
+
+        internal fun useVerticalLiveChannelActions(screenWidthDp: Int, television: Boolean): Boolean {
+            val reservedNavigation = responsiveLiveChannelNavigationWidthDp(screenWidthDp, television) +
+                if (television) {
+                    TV_SAFE_AREA_START_DP + TV_NAV_COLLAPSED_WIDTH_DP +
+                        responsiveTvCategoryNavigationWidthDp(screenWidthDp)
+                } else 0
+            return screenWidthDp - reservedNavigation < LIVE_ACTIONS_HORIZONTAL_MIN_WIDTH_DP
+        }
 
         internal fun responsiveTvContentColumnCount(screenWidthDp: Int): Int {
             val available = screenWidthDp - TV_SAFE_AREA_START_DP - TV_NAV_COLLAPSED_WIDTH_DP -

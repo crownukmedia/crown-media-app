@@ -8,6 +8,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.EditText
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -353,6 +355,14 @@ class PostLoginMobileUiTest {
         val adapter = categories.adapter as CategoryAdapter
         assertTrue(adapter.positionOf("news") >= 0)
         assertEquals(-1, adapter.positionOf("sports"))
+        val actions = activity.findViewById<LinearLayout>(R.id.live_channel_actions)
+        assertEquals(LinearLayout.VERTICAL, actions.orientation)
+        listOf(R.id.live_channel_play, R.id.live_channel_favourite, R.id.live_channel_group).forEach { id ->
+            val params = activity.findViewById<Button>(id).layoutParams as LinearLayout.LayoutParams
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, params.width)
+            assertEquals((44 * activity.resources.displayMetrics.density).toInt(), params.height)
+            assertEquals(0f, params.weight, 0f)
+        }
     }
 
     @Test
