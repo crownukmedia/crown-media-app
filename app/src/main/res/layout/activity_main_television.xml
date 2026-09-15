@@ -30,15 +30,6 @@
             <TextView android:id="@+id/screen_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:maxLines="1" android:text="@string/app_name" android:textColor="@color/white" android:textSize="30sp" android:textStyle="bold" />
             <TextView android:id="@+id/screen_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:maxLines="1" android:text="@string/brand_tagline" android:textColor="@color/crown_text_secondary" android:textSize="15sp" />
         </LinearLayout>
-        <LinearLayout android:id="@+id/live_browser_actions" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:layout_marginEnd="10dp" android:gravity="center_vertical" android:orientation="horizontal" android:visibility="gone">
-            <ImageButton android:id="@+id/live_browser_home" style="@style/Widget.Crown.IconButton" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginHorizontal="3dp" android:background="@drawable/bg_chip_tv" android:contentDescription="@string/nav_home" android:padding="11dp" android:src="@drawable/ic_nav_home" />
-            <ImageButton android:id="@+id/live_browser_search" style="@style/Widget.Crown.IconButton" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginHorizontal="3dp" android:background="@drawable/bg_chip_tv" android:contentDescription="@string/nav_search" android:padding="11dp" android:src="@drawable/ic_nav_search" />
-            <ImageButton android:id="@+id/live_browser_settings" style="@style/Widget.Crown.IconButton" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginHorizontal="3dp" android:background="@drawable/bg_chip_tv" android:contentDescription="@string/settings" android:padding="11dp" android:src="@drawable/ic_nav_settings" />
-        </LinearLayout>
         <LinearLayout android:id="@+id/search_row" android:layout_width="wrap_content" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal" android:visibility="gone">
             <EditText android:id="@+id/search_box" android:layout_width="300dp" android:layout_height="52dp" android:autofillHints="none" android:background="@drawable/bg_field" android:hint="@string/search_everything" android:imeOptions="actionSearch" android:inputType="text" android:paddingHorizontal="16dp" android:singleLine="true" android:textColor="@color/white" android:textColorHint="@color/crown_text_secondary" android:textSize="16sp" />
             <ImageButton android:id="@+id/action_search_clear" style="@style/Widget.Crown.IconButton" android:contentDescription="@string/clear_search" android:src="@drawable/ic_close" android:visibility="gone" />

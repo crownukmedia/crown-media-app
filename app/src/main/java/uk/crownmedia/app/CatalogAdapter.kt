@@ -119,18 +119,23 @@ class CategoryAdapter(
         fun bind(row: Row) {
             val value = row.category
             val search = value.id == CATEGORY_SEARCH_ID
+            val customGroup = value.id.startsWith(CUSTOM_GROUP_CATEGORY_PREFIX)
             val deviceClass = binding.root.context.deviceClass()
             binding.categoryName.text = value.name
             binding.categoryName.ellipsize = TextUtils.TruncateAt.END
             binding.categoryName.maxLines = 1
             binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
             binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(
-                if (search) R.drawable.ic_nav_search else 0,
+                when {
+                    search -> R.drawable.ic_nav_search
+                    customGroup -> R.drawable.ic_custom_group
+                    else -> 0
+                },
                 0,
                 0,
                 0,
             )
-            binding.categoryName.compoundDrawablePadding = if (search) {
+            binding.categoryName.compoundDrawablePadding = if (search || customGroup) {
                 (8 * binding.root.resources.displayMetrics.density).toInt()
             } else 0
             if (deviceClass == DeviceClass.TABLET) {
@@ -178,6 +183,7 @@ class CategoryAdapter(
 }
 
 internal const val CATEGORY_SEARCH_ID = "__search__"
+internal const val CUSTOM_GROUP_CATEGORY_PREFIX = "custom_group:"
 
 class CatalogAdapter(
     private val onClick: (CatalogCard) -> Unit,

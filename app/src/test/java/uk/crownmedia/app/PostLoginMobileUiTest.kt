@@ -80,7 +80,6 @@ class PostLoginMobileUiTest {
         assertEquals((4 * density).toInt(), logo.paddingTop)
         assertEquals(ImageView.ScaleType.FIT_CENTER, logo.scaleType)
         assertEquals((54 * density).toInt(), topBar.minimumHeight)
-        assertEquals(View.GONE, activity.findViewById<View>(R.id.live_browser_actions).visibility)
     }
 
     @Test
@@ -354,7 +353,6 @@ class PostLoginMobileUiTest {
         val adapter = categories.adapter as CategoryAdapter
         assertTrue(adapter.positionOf("news") >= 0)
         assertEquals(-1, adapter.positionOf("sports"))
-        assertEquals(View.GONE, activity.findViewById<View>(R.id.live_browser_actions).visibility)
     }
 
     @Test

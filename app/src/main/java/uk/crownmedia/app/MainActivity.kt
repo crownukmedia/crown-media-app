@@ -18,6 +18,7 @@ import android.text.TextWatcher
 import android.view.View
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -362,34 +363,6 @@ class MainActivity : AppCompatActivity() {
                 } else false
             }
         }
-        val compactActions = listOf(
-            binding.liveBrowserHome,
-            binding.liveBrowserSearch,
-            binding.liveBrowserSettings,
-        )
-        binding.liveBrowserHome.setOnClickListener { openFromNavigation(Section.HOME) }
-        binding.liveBrowserSearch.setOnClickListener { openFromNavigation(Section.SEARCH) }
-        binding.liveBrowserSettings.setOnClickListener { showSettings() }
-        compactActions.forEachIndexed { index, action ->
-            action.setOnKeyListener { view, keyCode, event ->
-                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-                when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        compactActions.getOrNull(index - 1)?.requestFocus() ?: view.requestFocus()
-                        true
-                    }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        compactActions.getOrNull(index + 1)?.requestFocus() ?: view.requestFocus()
-                        true
-                    }
-                    KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        restoreCategoryFocus(activeCategoryFocusId())
-                        true
-                    }
-                    else -> false
-                }
-            }
-        }
     }
 
     private fun configureNavigation() {
@@ -450,7 +423,13 @@ class MainActivity : AppCompatActivity() {
                 view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
                     .translationZ(if (focused) 10f else 0f).setDuration(120).start()
                 if (focused && tvNavigationFocusEnabled) {
+                    val closedChannelBrowser = liveChannelBrowserOpen
+                    if (closedChannelBrowser) resetLiveChannelBrowser(renderGrid = true)
                     setTvNavigationExpanded(true)
+                    // ConstraintSet application can temporarily detach focus while Navbar 3 is
+                    // removed. Return it to the explicitly selected primary destination rather
+                    // than allowing spatial search to choose an unrelated category or channel.
+                    if (closedChannelBrowser) view.post { if (!view.hasFocus()) view.requestFocus() }
                 } else {
                     binding.root.post {
                         if (buttons.none(View::hasFocus)) setTvNavigationExpanded(false)
@@ -575,9 +554,7 @@ class MainActivity : AppCompatActivity() {
         when (move.region) {
             TvFocusRegion.ITEM -> requestRecyclerItemFocus(binding.categoryList, move.position)
             TvFocusRegion.CATEGORY_MENU -> binding.categoryMenuButton.requestFocus()
-            TvFocusRegion.SIDEBAR -> if (liveChannelBrowserOpen) {
-                binding.liveBrowserHome.requestFocus()
-            } else navigationView(section).requestFocus()
+            TvFocusRegion.SIDEBAR -> navigationView(section).requestFocus()
             TvFocusRegion.CONTENT -> focusVisibleCatalogDestination(view)
             else -> view.requestFocus()
         }
@@ -1087,12 +1064,15 @@ class MainActivity : AppCompatActivity() {
             }.orEmpty()
         } else emptyList()
         val query = categorySearchQueries[section].orEmpty().trim()
-        val candidates = (values.filterNot { it.id == CATEGORY_SEARCH_ID } + groups)
+        val candidates = (groups + values.filterNot { it.id == CATEGORY_SEARCH_ID })
             .distinctBy(XtreamCategory::id)
         val filtered = if (query.isBlank()) candidates else candidates.filter {
             it.name.contains(query, ignoreCase = true)
         }
-        return listOf(XtreamCategory(CATEGORY_SEARCH_ID, getString(R.string.nav_search))) + filtered
+        val searchLabel = if (query.isBlank()) getString(R.string.nav_search) else {
+            getString(R.string.category_search_active, query)
+        }
+        return listOf(XtreamCategory(CATEGORY_SEARCH_ID, searchLabel)) + filtered
     }
 
     private fun showCategorySearch() {
@@ -1104,6 +1084,7 @@ class MainActivity : AppCompatActivity() {
             setText(originalQuery)
             setSelection(text.length)
             isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
         }
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -1115,14 +1096,14 @@ class MainActivity : AppCompatActivity() {
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.category_search_title)
             .setView(input)
             .setPositiveButton(R.string.nav_search) { _, _ ->
                 val query = input.text.toString().trim()
                 if (query.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = query
                 categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
-                    restoreCategoryFocus(CATEGORY_SEARCH_ID)
+                    focusFirstCategorySearchResult()
                 }
             }
             .setNeutralButton(R.string.clear_search) { _, _ ->
@@ -1138,6 +1119,36 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .showCrown()
+        input.setOnEditorActionListener { _, actionId, event ->
+            val submitted = actionId == EditorInfo.IME_ACTION_SEARCH ||
+                actionId == EditorInfo.IME_ACTION_DONE ||
+                (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER)
+            if (!submitted) return@setOnEditorActionListener false
+            val query = input.text.toString().trim()
+            if (query.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = query
+            dialog.dismiss()
+            categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
+                focusFirstCategorySearchResult()
+            }
+            true
+        }
+        focusDialogInput(dialog, input)
+    }
+
+    private fun focusFirstCategorySearchResult() {
+        val position = 1.takeIf { categoriesAdapter.itemCount > 1 }
+            ?: categoriesAdapter.positionOf(CATEGORY_SEARCH_ID).takeIf { it >= 0 }
+            ?: return
+        requestRecyclerItemFocus(binding.categoryList, position)
+    }
+
+    private fun focusDialogInput(dialog: AlertDialog, input: EditText) {
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        input.requestFocus()
+        input.post {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     private fun selectCustomChannelGroup(category: XtreamCategory) {
@@ -2260,6 +2271,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyLiveChannelBrowserLayout() {
         if (!liveChannelBrowserOpen || !supportsLiveChannelBrowser()) return
+        if (isTelevisionLayout()) collapseTvNavigationImmediately()
         val set = ConstraintSet().apply { clone(binding.root) }
         val channelWidthDp = responsiveLiveChannelNavigationWidthDp(resources.configuration.screenWidthDp, isTelevisionLayout())
         set.constrainWidth(R.id.content_grid, dp(channelWidthDp))
@@ -2267,18 +2279,11 @@ class MainActivity : AppCompatActivity() {
         set.connect(R.id.content_grid, ConstraintSet.START, R.id.category_bar, ConstraintSet.END)
         set.setVisibility(R.id.live_channel_details, View.VISIBLE)
         if (isTelevisionLayout()) {
-            set.setVisibility(R.id.side_nav, View.GONE)
+            set.setVisibility(R.id.side_nav, View.VISIBLE)
             set.clear(R.id.category_bar, ConstraintSet.START)
-            set.connect(
-                R.id.category_bar,
-                ConstraintSet.START,
-                ConstraintSet.PARENT_ID,
-                ConstraintSet.START,
-                dp(TV_SAFE_AREA_START_DP),
-            )
+            set.connect(R.id.category_bar, ConstraintSet.START, R.id.side_nav, ConstraintSet.END)
         }
         set.applyTo(binding.root)
-        binding.liveBrowserActions.isVisible = isTelevisionLayout()
         binding.contentGrid.setPadding(dp(5), dp(5), dp(5), dp(10))
         binding.contentGrid.isVisible = true
         binding.statePanel.isVisible = false
@@ -2288,6 +2293,10 @@ class MainActivity : AppCompatActivity() {
     private fun closeLiveChannelBrowser() {
         if (!liveChannelBrowserOpen) return
         val categoryId = currentCategory
+        // Move ownership away from the channel rail before the normal grid is rebound. Otherwise
+        // renderSectionState can correctly restore the previously focused channel after this
+        // method has restored Navbar 2, stealing focus back from the category hierarchy.
+        if (isTelevisionLayout()) binding.categoryList.requestFocus()
         resetLiveChannelBrowser(renderGrid = true)
         if (isTelevisionLayout()) restoreCategoryFocus(categoryId)
         else binding.categoryList.requestFocus()
@@ -2312,7 +2321,6 @@ class MainActivity : AppCompatActivity() {
             set.connect(R.id.category_bar, ConstraintSet.START, R.id.side_nav, ConstraintSet.END)
         }
         set.applyTo(binding.root)
-        binding.liveBrowserActions.isVisible = false
         if (isTelevisionLayout()) {
             binding.contentGrid.setPadding(dp(20), dp(16), dp(40), dp(28))
             configureTvPresentation(section)
@@ -2387,8 +2395,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun promptCreateChannelGroup(card: CatalogCard) {
         val playlist = store.selected() ?: return
-        val input = EditText(this).apply { hint = getString(R.string.new_group_name); isSingleLine = true }
-        AlertDialog.Builder(this)
+        val input = EditText(this).apply {
+            hint = getString(R.string.new_group_name)
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_DONE
+        }
+        val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.create_group)
             .setView(input)
             .setPositiveButton("Create") { _, _ ->
@@ -2399,6 +2411,14 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .showCrown()
+        input.setOnEditorActionListener { _, actionId, event ->
+            val submitted = actionId == EditorInfo.IME_ACTION_DONE ||
+                (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER)
+            if (!submitted) return@setOnEditorActionListener false
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            true
+        }
+        focusDialogInput(dialog, input)
     }
 
     private fun play(card: CatalogCard, live: Boolean) {
@@ -3970,7 +3990,6 @@ class MainActivity : AppCompatActivity() {
         internal const val TV_PREVIEW_DELAY_MS = 350L
         internal const val MOBILE_PREVIEW_DELAY_MS = 450L
         internal const val LIVE_CHANNEL_BROWSER_PREVIEW_DELAY_MS = 140L
-        private const val CUSTOM_GROUP_CATEGORY_PREFIX = "custom_group:"
         private const val CUSTOM_GROUP_RESULT_LIMIT = 2_000
         private val TV_DPAD_KEYS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT,

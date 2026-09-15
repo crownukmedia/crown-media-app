@@ -92,6 +92,7 @@
     <string name="remove_favourite">Remove Favourite</string>
     <string name="category_search_title">Search categories</string>
     <string name="category_search_hint">Category name</string>
+    <string name="category_search_active">Search: %1$s</string>
     <string name="create_group">Create new group</string>
     <string name="new_group_name">Group name</string>
     <string name="no_matching_categories">No matching categories</string>
