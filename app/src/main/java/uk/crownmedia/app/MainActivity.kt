@@ -156,6 +156,7 @@ class MainActivity : AppCompatActivity() {
     private var liveChannelEpgJob: Job? = null
     private val categorySearchQueries = EnumMap<Section, String>(Section::class.java)
     private val categorySearchContextIds = EnumMap<Section, String>(Section::class.java)
+    private var updatingCategorySearchBox = false
 
     override fun attachBaseContext(newBase: Context) {
         detectedDeviceClass = newBase.deviceClass()
@@ -191,6 +192,7 @@ class MainActivity : AppCompatActivity() {
         }
         configureLogin()
         configureLists()
+        configureCategorySearch()
         configureNavigation()
         configureSearch()
         configureLiveChannelDetails()
@@ -590,9 +592,9 @@ class MainActivity : AppCompatActivity() {
             keyCode == KeyEvent.KEYCODE_DPAD_UP &&
             position == 0 &&
             nestedSeries == null &&
-            binding.searchBox.isVisible
+            binding.categorySearchBox.isVisible
         ) {
-            binding.searchBox.requestFocus()
+            binding.categorySearchBox.requestFocus()
             return true
         }
         val move = tvCategoryFocusMove(
@@ -735,9 +737,11 @@ class MainActivity : AppCompatActivity() {
                     KeyEvent.KEYCODE_DPAD_RIGHT -> if (binding.actionSearchClear.isVisible) {
                         binding.actionSearchClear.requestFocus()
                     } else view.requestFocus()
-                    KeyEvent.KEYCODE_DPAD_DOWN -> if (
-                        section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0
-                    ) restoreCategoryFocus(activeCategoryFocusId()) else focusVisibleCatalogDestination(view)
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (binding.categorySearchBox.isVisible) {
+                        binding.categorySearchBox.requestFocus()
+                    } else if (section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0) {
+                        restoreCategoryFocus(activeCategoryFocusId())
+                    } else focusVisibleCatalogDestination(view)
                     else -> view.requestFocus()
                 }
                 true
@@ -746,14 +750,68 @@ class MainActivity : AppCompatActivity() {
                 if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> binding.searchBox.requestFocus()
-                    KeyEvent.KEYCODE_DPAD_DOWN -> if (
-                        section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0
-                    ) restoreCategoryFocus(activeCategoryFocusId()) else focusVisibleCatalogDestination(view)
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (binding.categorySearchBox.isVisible) {
+                        binding.categorySearchBox.requestFocus()
+                    } else if (section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0) {
+                        restoreCategoryFocus(activeCategoryFocusId())
+                    } else focusVisibleCatalogDestination(view)
                     else -> view.requestFocus()
                 }
                 true
             }
         }
+    }
+
+    private fun configureCategorySearch() {
+        binding.categorySearchBox.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (updatingCategorySearchBox || section !in PAGED_SECTIONS || nestedSeries != null) return
+                val query = s?.toString().orEmpty().trim()
+                if (query.isBlank()) {
+                    categorySearchQueries.remove(section)
+                    categorySearchContextIds.remove(section)
+                } else {
+                    categorySearchQueries[section] = query
+                    categorySearchContextIds.remove(section)
+                }
+                categoriesAdapter.submit(sectionState(section).categories, currentCategory)
+            }
+
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        binding.categorySearchBox.setOnEditorActionListener { _, actionId, event ->
+            val submitted = actionId == EditorInfo.IME_ACTION_SEARCH ||
+                actionId == EditorInfo.IME_ACTION_DONE ||
+                (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER)
+            if (!submitted) return@setOnEditorActionListener false
+            hideKeyboard(clearFocus = false)
+            focusFirstCategorySearchResult()
+            true
+        }
+        if (isTelevisionLayout()) {
+            binding.categorySearchBox.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> navigationView(section).requestFocus()
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> focusVisibleCatalogDestination(view)
+                    KeyEvent.KEYCODE_DPAD_UP -> if (binding.searchBox.isVisible) binding.searchBox.requestFocus() else view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> focusFirstCategorySearchResult()
+                }
+                true
+            }
+        }
+    }
+
+    private fun syncCategorySearchBox(target: Section = section) {
+        if (target != section) return
+        val expected = categorySearchQueries[target].orEmpty()
+        if (binding.categorySearchBox.text.toString() == expected) return
+        updatingCategorySearchBox = true
+        binding.categorySearchBox.setText(expected)
+        binding.categorySearchBox.setSelection(binding.categorySearchBox.text.length)
+        updatingCategorySearchBox = false
     }
 
     private fun runActiveSearch(query: String) {
@@ -1003,12 +1061,16 @@ class MainActivity : AppCompatActivity() {
         binding.categoryMenuButton.nextFocusRightId = binding.contentGrid.id
         binding.categoryMenuButton.nextFocusUpId = binding.searchBox.id
         binding.categoryMenuButton.nextFocusDownId = binding.categoryList.id
+        binding.categorySearchBox.nextFocusLeftId = activeNav.id
+        binding.categorySearchBox.nextFocusRightId = binding.contentGrid.id
+        binding.categorySearchBox.nextFocusUpId = binding.searchBox.id
+        binding.categorySearchBox.nextFocusDownId = binding.categoryList.id
         binding.categoryList.nextFocusLeftId = activeNav.id
         binding.categoryList.nextFocusRightId = binding.contentGrid.id
         binding.contentGrid.nextFocusLeftId = if (value in CATEGORY_SECTIONS && !featureRoot) binding.categoryList.id else activeNav.id
         binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.searchBox.id else binding.topBar.id
         binding.searchBox.nextFocusLeftId = activeNav.id
-        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.contentGrid.id
+        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categorySearchBox.id else binding.contentGrid.id
         binding.actionSearchClear.nextFocusLeftId = binding.searchBox.id
         binding.actionSearchClear.nextFocusDownId = binding.contentGrid.id
         binding.stateAction.nextFocusLeftId = if (value in CATEGORY_SECTIONS && !featureRoot) binding.categoryList.id else activeNav.id
@@ -1062,6 +1124,7 @@ class MainActivity : AppCompatActivity() {
                 state.scrollState = null
                 state.categoryScrollState = null
             }
+            if (nestedSeries == null) categoriesAdapter.submit(state.categories, state.categoryId)
             state.cards = page.cards
             state.nextOffset = page.consumed
             state.endReached = page.endReached
@@ -1088,7 +1151,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun selectCategory(category: XtreamCategory) {
         if (category.id == CATEGORY_SEARCH_ID) {
-            showCategorySearch()
+            binding.categorySearchBox.requestFocus()
             return
         }
         if (category.id.startsWith("season:")) {
@@ -1137,10 +1200,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun categoryNavigationItems(values: List<XtreamCategory>): List<XtreamCategory> {
-        val supportsInlineSearch = nestedSeries == null && section in PAGED_SECTIONS &&
-            (isTelevisionLayout() || deviceClass() == DeviceClass.TABLET)
-        if (!supportsInlineSearch) return values
-        val groups = if (section == Section.LIVE) {
+        if (nestedSeries != null || section !in PAGED_SECTIONS) return values
+        val groups = if (
+            section == Section.LIVE && (isTelevisionLayout() || deviceClass() == DeviceClass.TABLET)
+        ) {
             store.selected()?.let { playlist ->
                 store.customChannelGroups(playlist.id).map {
                     XtreamCategory("$CUSTOM_GROUP_CATEGORY_PREFIX${it.id}", it.name)
@@ -1153,83 +1216,17 @@ class MainActivity : AppCompatActivity() {
         val filtered = if (query.isBlank()) candidates else candidates.filter {
             it.name.contains(query, ignoreCase = true)
         }
-        val searchLabel = if (query.isBlank()) getString(R.string.nav_search) else {
-            getString(R.string.category_search_active, query)
-        }
-        return listOf(XtreamCategory(CATEGORY_SEARCH_ID, searchLabel)) + filtered
-    }
-
-    private fun showCategorySearch() {
-        if (section !in PAGED_SECTIONS || isFinishing) return
-        val target = section
-        val originalQuery = categorySearchQueries[target].orEmpty()
-        val originalContextId = categorySearchContextIds[target]
-        val input = EditText(this).apply {
-            hint = getString(R.string.category_search_hint)
-            setText(originalQuery)
-            setSelection(text.length)
-            isSingleLine = true
-            imeOptions = EditorInfo.IME_ACTION_SEARCH
-        }
-        input.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (section != target) return
-                val query = s?.toString().orEmpty().trim()
-                if (query.isBlank()) resetCategorySearch(target) else {
-                    categorySearchQueries[target] = query
-                    categorySearchContextIds.remove(target)
-                }
-                categoriesAdapter.submit(sectionState(target).categories, currentCategory)
-            }
-            override fun afterTextChanged(s: Editable?) = Unit
-        })
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.category_search_title)
-            .setView(input)
-            .setPositiveButton(R.string.nav_search) { _, _ ->
-                val query = input.text.toString().trim()
-                if (query.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = query
-                categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
-                    focusFirstCategorySearchResult()
-                }
-            }
-            .setNeutralButton(R.string.clear_search) { _, _ ->
-                resetCategorySearch(target)
-                categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
-                    restoreCategoryFocus(CATEGORY_SEARCH_ID)
-                }
-            }
-            .setNegativeButton("Cancel") { _, _ ->
-                resetCategorySearch(target)
-                if (originalQuery.isNotBlank()) categorySearchQueries[target] = originalQuery
-                if (originalContextId != null) categorySearchContextIds[target] = originalContextId
-                categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
-                    restoreCategoryFocus(CATEGORY_SEARCH_ID)
-                }
-            }
-            .showCrown(preferredButton = null)
-        input.setOnEditorActionListener { _, actionId, event ->
-            val submitted = actionId == EditorInfo.IME_ACTION_SEARCH ||
-                actionId == EditorInfo.IME_ACTION_DONE ||
-                (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER)
-            if (!submitted) return@setOnEditorActionListener false
-            val query = input.text.toString().trim()
-            if (query.isBlank()) categorySearchQueries.remove(target) else categorySearchQueries[target] = query
-            dialog.dismiss()
-            categoriesAdapter.submit(sectionState(target).categories, currentCategory) {
-                focusFirstCategorySearchResult()
-            }
-            true
-        }
-        focusDialogInput(dialog, input)
+        return filtered
     }
 
     private fun focusFirstCategorySearchResult() {
-        val position = 1.takeIf { categoriesAdapter.itemCount > 1 }
-            ?: categoriesAdapter.positionOf(CATEGORY_SEARCH_ID).takeIf { it >= 0 }
-            ?: return
-        requestRecyclerItemFocus(binding.categoryList, position)
+        if (categoriesAdapter.itemCount == 0) {
+            binding.categorySearchBox.requestFocus()
+        } else if (isTelevisionLayout()) {
+            requestRecyclerItemFocus(binding.categoryList, 0)
+        } else {
+            binding.categoryList.requestFocus()
+        }
     }
 
     private fun updateCategorySearchContext(categoryId: String) {
@@ -1243,6 +1240,7 @@ class MainActivity : AppCompatActivity() {
     private fun resetCategorySearch(target: Section) {
         categorySearchQueries.remove(target)
         categorySearchContextIds.remove(target)
+        syncCategorySearchBox(target)
     }
 
     private fun focusDialogInput(dialog: AlertDialog, input: EditText) {
@@ -3945,6 +3943,8 @@ class MainActivity : AppCompatActivity() {
     private fun setCategoryNavigationVisible(visible: Boolean) {
         binding.categoryBar.isVisible = visible
         val nested = nestedSeries != null
+        binding.categorySearchBox.isVisible = visible && !nested && section in PAGED_SECTIONS
+        if (binding.categorySearchBox.isVisible) syncCategorySearchBox()
         binding.categoryMenuButton.isVisible = visible && section in CATEGORY_SECTIONS && (!isTelevisionLayout() || nested)
         binding.root.findViewById<TextView>(R.id.category_panel_title)?.text =
             getString(if (nested) R.string.seasons else R.string.categories)

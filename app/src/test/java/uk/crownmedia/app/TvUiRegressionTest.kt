@@ -215,6 +215,7 @@ class TvUiRegressionTest {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val categories = activity.findViewById<RecyclerView>(R.id.category_list)
         val search = activity.findViewById<EditText>(R.id.search_box)
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
         val play = activity.findViewById<Button>(R.id.live_channel_play)
         val favourite = activity.findViewById<Button>(R.id.live_channel_favourite)
         val group = activity.findViewById<Button>(R.id.live_channel_group)
@@ -225,6 +226,8 @@ class TvUiRegressionTest {
         assertTrue(channel.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)))
         assertTrue(search.hasFocus())
         assertTrue(search.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(categorySearch.hasFocus())
+        assertTrue(categorySearch.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
         assertTrue(categories.hasFocus())
         assertTrue(requireNotNull(categories.focusedChild).dispatchKeyEvent(
             KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT),
@@ -249,8 +252,10 @@ class TvUiRegressionTest {
         assertTrue(play.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
         assertTrue(grid.hasFocus())
 
-        val categorySearch = requireNotNull(categories.findViewHolderForAdapterPosition(0)?.itemView)
-        categorySearch.requestFocus()
+        val firstCategory = requireNotNull(categories.findViewHolderForAdapterPosition(0)?.itemView)
+        firstCategory.requestFocus()
+        assertTrue(firstCategory.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)))
+        assertTrue(categorySearch.hasFocus())
         assertTrue(categorySearch.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)))
         assertTrue(search.hasFocus())
     }
@@ -269,15 +274,9 @@ class TvUiRegressionTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         shadowOf(Looper.getMainLooper()).idle()
 
-        MainActivity::class.java.getDeclaredMethod("showCategorySearch").apply { isAccessible = true; invoke(activity) }
-        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
-        val input = dialog.window?.decorView?.let { decor -> findEditText(decor) }
-        requireNotNull(input)
-        shadowOf(Looper.getMainLooper()).idleFor(150, TimeUnit.MILLISECONDS)
+        val input = activity.findViewById<EditText>(R.id.category_search_box)
+        input.requestFocus()
         assertTrue(input.hasFocus())
-        assertSame(input, dialog.currentFocus)
-        assertEquals(dialog.getButton(AlertDialog.BUTTON_POSITIVE).id, input.nextFocusDownId)
-        assertEquals(input.id, dialog.getButton(AlertDialog.BUTTON_POSITIVE).nextFocusUpId)
         val inputConnection = requireNotNull(input.onCreateInputConnection(EditorInfo()))
         assertTrue(inputConnection.commitText("sport", 1))
         val adapter = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
@@ -290,29 +289,16 @@ class TvUiRegressionTest {
             assertTrue(condition())
         }
         awaitCategories { adapter.positionOf("sports") >= 0 && adapter.positionOf("news") == -1 }
-        assertTrue(adapter.positionOf(CATEGORY_SEARCH_ID) >= 0)
         assertTrue(adapter.positionOf("sports") >= 0)
         assertEquals(-1, adapter.positionOf("news"))
         assertEquals("", activity.findViewById<EditText>(R.id.search_box).text.toString())
         input.onEditorAction(EditorInfo.IME_ACTION_SEARCH)
         awaitCategories { adapter.positionOf("sports") >= 0 && adapter.positionOf("news") == -1 }
-        assertFalse(dialog.isShowing)
-        val searchRow = requireNotNull(
-            activity.findViewById<RecyclerView>(R.id.category_list)
-                .findViewHolderForAdapterPosition(0)?.itemView,
-        )
-        assertEquals("Search: sport", searchRow.findViewById<TextView>(R.id.category_name).text.toString())
+        assertEquals("sport", input.text.toString())
 
-        MainActivity::class.java.getDeclaredMethod("showCategorySearch").apply { isAccessible = true; invoke(activity) }
-        val clearDialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
-        val clearInput = requireNotNull(clearDialog.window?.decorView?.let(::findEditText))
-        assertEquals("sport", clearInput.text.toString())
-        clearInput.text.clear()
-        awaitCategories { adapter.positionOf("sports") in 1 until adapter.positionOf("news") }
-        assertTrue(adapter.positionOf("sports") in 1 until adapter.positionOf("news"))
-        clearDialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
-        awaitCategories { adapter.positionOf("sports") in 1 until adapter.positionOf("news") }
-        assertTrue(adapter.positionOf("sports") in 1 until adapter.positionOf("news"))
+        input.text.clear()
+        awaitCategories { adapter.positionOf("sports") in 0 until adapter.positionOf("news") }
+        assertTrue(adapter.positionOf("sports") in 0 until adapter.positionOf("news"))
     }
 
     @Test
@@ -329,16 +315,11 @@ class TvUiRegressionTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         shadowOf(Looper.getMainLooper()).idle()
 
-        MainActivity::class.java.getDeclaredMethod("showCategorySearch").apply { isAccessible = true; invoke(activity) }
-        val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
-        val input = requireNotNull(dialog.window?.decorView?.let(::findEditText))
+        val input = activity.findViewById<EditText>(R.id.category_search_box)
         input.setText("uk")
         input.onEditorAction(EditorInfo.IME_ACTION_SEARCH)
         shadowOf(Looper.getMainLooper()).idle()
         val adapter = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
-        fun searchLabel(): String? = activity.findViewById<RecyclerView>(R.id.category_list)
-            .findViewHolderForAdapterPosition(0)?.itemView
-            ?.findViewById<TextView>(R.id.category_name)?.text?.toString()
         fun awaitCategories(condition: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
             while (!condition() && System.nanoTime() < deadline) {
@@ -347,8 +328,8 @@ class TvUiRegressionTest {
             }
             assertTrue(condition())
         }
-        awaitCategories { adapter.positionOf("sports") > 0 && adapter.positionOf("news") > adapter.positionOf("sports") }
-        assertTrue(adapter.positionOf("sports") > 0)
+        awaitCategories { adapter.positionOf("sports") >= 0 && adapter.positionOf("news") > adapter.positionOf("sports") }
+        assertTrue(adapter.positionOf("sports") >= 0)
         assertTrue(adapter.positionOf("news") > adapter.positionOf("sports"))
 
         val selectCategory = MainActivity::class.java.getDeclaredMethod("selectCategory", XtreamCategory::class.java).apply {
@@ -361,16 +342,16 @@ class TvUiRegressionTest {
             invoke(activity)
         }
         shadowOf(Looper.getMainLooper()).idle()
-        assertEquals("Search: uk", searchLabel())
+        assertEquals("uk", input.text.toString())
 
         selectCategory.invoke(activity, XtreamCategory("news", "UK News"))
         shadowOf(Looper.getMainLooper()).idle()
         awaitCategories {
-            searchLabel() == "Search" &&
-                adapter.positionOf("sports") > 0 && adapter.positionOf("news") > adapter.positionOf("sports")
+            input.text.isEmpty() &&
+                adapter.positionOf("sports") >= 0 && adapter.positionOf("news") > adapter.positionOf("sports")
         }
-        assertEquals("Search", searchLabel())
-        assertTrue(adapter.positionOf("sports") > 0)
+        assertEquals("", input.text.toString())
+        assertTrue(adapter.positionOf("sports") >= 0)
         assertTrue(adapter.positionOf("news") > adapter.positionOf("sports"))
     }
 
@@ -405,14 +386,14 @@ class TvUiRegressionTest {
         val group = testStore.customChannelGroups(playlist.id).single()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
         while (
-            (adapter.positionOf("$CUSTOM_GROUP_CATEGORY_PREFIX${group.id}") != 1 || adapter.positionOf("sports") <= 1) &&
+            (adapter.positionOf("$CUSTOM_GROUP_CATEGORY_PREFIX${group.id}") != 0 || adapter.positionOf("sports") <= 0) &&
             System.nanoTime() < deadline
         ) {
             Thread.sleep(10)
             shadowOf(Looper.getMainLooper()).idle()
         }
-        assertEquals(1, adapter.positionOf("$CUSTOM_GROUP_CATEGORY_PREFIX${group.id}"))
-        assertTrue(adapter.positionOf("sports") > 1)
+        assertEquals(0, adapter.positionOf("$CUSTOM_GROUP_CATEGORY_PREFIX${group.id}"))
+        assertTrue(adapter.positionOf("sports") > 0)
     }
 
     @Test
@@ -813,8 +794,11 @@ class TvUiRegressionTest {
         assertEquals(R.id.category_list, menu.nextFocusDownId)
         assertEquals(R.id.category_list, navHome.nextFocusRightId)
         val search = activity.findViewById<EditText>(R.id.search_box)
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
         assertEquals("Search live channels", search.hint.toString())
-        assertEquals(R.id.category_list, search.nextFocusDownId)
+        assertEquals(R.id.category_search_box, search.nextFocusDownId)
+        assertEquals(R.id.category_list, categorySearch.nextFocusDownId)
+        assertEquals(R.id.search_box, categorySearch.nextFocusUpId)
         assertEquals(RecyclerView.VERTICAL, (categories.layoutManager as LinearLayoutManager).orientation)
         assertEquals(dp(192), activity.findViewById<View>(R.id.category_bar).layoutParams.width)
         assertEquals(0, activity.findViewById<View>(R.id.category_bar).layoutParams.height)
@@ -846,10 +830,13 @@ class TvUiRegressionTest {
 
 
     @Test
-    fun tvPagedSectionsExposeSearchAsFirstCompactCategoryAction() {
+    fun tvCategorySearchStaysFixedWhileTheCategoryListScrolls() {
         activity.findViewById<View>(R.id.nav_live).performClick()
         shadowOf(Looper.getMainLooper()).idle()
         val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
+        val values = (0 until 30).map { XtreamCategory("category-$it", "Category $it") }
+        (categories.adapter as CategoryAdapter).submit(values)
         categories.measure(
             View.MeasureSpec.makeMeasureSpec(dp(192), View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(dp(420), View.MeasureSpec.EXACTLY),
@@ -857,16 +844,14 @@ class TvUiRegressionTest {
         categories.layout(0, 0, dp(192), dp(420))
         shadowOf(Looper.getMainLooper()).idle()
 
-        assertTrue(requireNotNull(categories.adapter).itemCount >= 1)
-        val first = requireNotNull(categories.findViewHolderForAdapterPosition(0)?.itemView)
-        val label = first.findViewById<TextView>(R.id.category_name)
-        assertEquals("Search", label.text.toString())
-        assertNotNull(label.compoundDrawables[0])
-        assertEquals(dp(46), first.layoutParams.height)
-
-        first.performClick()
-        assertTrue(ShadowAlertDialog.getLatestAlertDialog().isShowing)
-        assertFalse(activity.findViewById<EditText>(R.id.search_box).hasFocus())
+        assertTrue(categorySearch.isShown)
+        assertSame(activity.findViewById<ViewGroup>(R.id.category_bar), categorySearch.parent)
+        assertTrue(categorySearch.parent !== categories)
+        assertEquals(dp(44), categorySearch.layoutParams.height)
+        categories.scrollToPosition(29)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(categorySearch.isShown)
+        assertEquals("", categorySearch.text.toString())
     }
 
     @Test
