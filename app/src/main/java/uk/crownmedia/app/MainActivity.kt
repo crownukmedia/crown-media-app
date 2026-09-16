@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.os.Parcelable
@@ -17,6 +18,7 @@ import android.text.TextWatcher
 import android.view.View
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -27,6 +29,9 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import android.widget.ArrayAdapter
+import android.widget.Button
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.constraintlayout.widget.ConstraintSet
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -71,15 +76,21 @@ import uk.crownmedia.data.xtream.XtreamProgramme
 import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import uk.crownmedia.data.xtream.preferredLiveExtension
 import uk.crownmedia.player.PlayerActivity
+import uk.crownmedia.player.InlineLivePreviewController
+import uk.crownmedia.player.InlineLivePreviewView
 import java.security.MessageDigest
 import java.text.DateFormat
 import java.util.Date
 import kotlin.math.roundToInt
+import kotlin.math.abs
 import java.util.EnumMap
 
 class MainActivity : AppCompatActivity() {
     private val internalPlayer = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (::store.isInitialized) restoreSearchPresentationAfterPlayback()
+        if (::store.isInitialized) {
+            restoreSearchPresentationAfterPlayback()
+            binding.contentGrid.post(::scheduleCurrentLivePreview)
+        }
     }
     private lateinit var binding: ActivityMainBinding
     private lateinit var store: AppStore
@@ -93,6 +104,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var categoriesAdapter: CategoryAdapter
     private lateinit var catalogAdapter: CatalogAdapter
     private lateinit var contentLayoutManager: GridLayoutManager
+    private lateinit var inlinePreviewController: InlineLivePreviewController
+    private var inlinePreviewJob: Job? = null
+    private var pendingInlinePreview: InlinePreviewTarget? = null
+    private var activeInlinePreview: InlinePreviewTarget? = null
     private var standardContentColumnCount = 1
     private var section = Section.HOME
     private var currentCategory = "all"
@@ -136,6 +151,12 @@ class MainActivity : AppCompatActivity() {
     private val tvNavigationLabels = mutableMapOf<Int, CharSequence>()
     private val pendingTvFocusMoves = mutableSetOf<Int>()
     private val epgCache = mutableMapOf<String, List<XtreamProgramme>>()
+    private var liveChannelBrowserOpen = false
+    private var liveChannelSelection: CatalogCard? = null
+    private var liveChannelEpgJob: Job? = null
+    private val categorySearchQueries = EnumMap<Section, String>(Section::class.java)
+    private val categorySearchContextIds = EnumMap<Section, String>(Section::class.java)
+    private var updatingCategorySearchBox = false
 
     override fun attachBaseContext(newBase: Context) {
         detectedDeviceClass = newBase.deviceClass()
@@ -163,15 +184,25 @@ class MainActivity : AppCompatActivity() {
         store = storeFactory(this)
         cache = CatalogCache(CrownDatabase.get(this).catalogDao())
         streamAvailability = StreamAvailability(this)
+        inlinePreviewController = InlineLivePreviewController(this) {
+            activeInlinePreview = null
+            if (liveChannelBrowserOpen && !isFinishing) {
+                findViewById<TextView>(R.id.live_channel_status).text = "Preview unavailable  •  Press OK to play"
+            }
+        }
         configureLogin()
         configureLists()
+        configureCategorySearch()
         configureNavigation()
         configureSearch()
+        configureLiveChannelDetails()
         ViewCompat.setAccessibilityHeading(binding.stateTitle, true)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (categoryMenuDialog?.isShowing == true) {
                     categoryMenuDialog?.dismiss()
+                } else if (liveChannelBrowserOpen) {
+                    closeLiveChannelBrowser()
                 } else if (tvNavigationExpanded) {
                     setTvNavigationExpanded(false)
                     focusCurrentSectionContent()
@@ -226,7 +257,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun configureLists() {
         val television = isTelevisionLayout()
-        categoriesAdapter = CategoryAdapter(::selectCategory, ::hideCategory, ::handleCategoryDpad)
+        categoriesAdapter = CategoryAdapter(
+            ::selectCategory,
+            ::hideCategory,
+            ::handleCategoryDpad,
+            ::categoryNavigationItems,
+        )
         binding.categoryList.layoutManager = LinearLayoutManager(
             this,
             if (television) RecyclerView.VERTICAL else RecyclerView.HORIZONTAL,
@@ -259,7 +295,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        catalogAdapter = CatalogAdapter(::openCard, ::cardOptions, ::handleCatalogDpad)
+        catalogAdapter = CatalogAdapter(
+            ::openCard,
+            ::cardOptions,
+            ::handleCatalogDpad,
+            ::onLivePreviewFocusChanged,
+            ::onLivePreviewHostAvailability,
+        )
         val initialColumns = when {
             television -> responsiveTvContentColumnCount(resources.configuration.screenWidthDp)
             resources.configuration.smallestScreenWidthDp >= 600 -> 4
@@ -277,6 +319,15 @@ class MainActivity : AppCompatActivity() {
         if (television) binding.contentGrid.itemAnimator = null
         contentLayoutManager.initialPrefetchItemCount = 8
         binding.contentGrid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (isTelevisionLayout() || section != Section.LIVE) return
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    recyclerView.post(::schedulePrimaryVisibleLivePreview)
+                } else {
+                    stopInlinePreview()
+                }
+            }
+
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 if (dy <= 0 || section !in (PAGED_SECTIONS + PAGINATED_FEATURE_SECTIONS)) return
                 val lastVisible = contentLayoutManager.findLastVisibleItemPosition()
@@ -295,6 +346,65 @@ class MainActivity : AppCompatActivity() {
             }
             if (!isFeatureRoot()) contentLayoutManager.spanCount = standardContentColumnCount
         }
+    }
+
+    private fun supportsLiveChannelBrowser(): Boolean =
+        isTelevisionLayout() || (!isTelevisionLayout() && deviceClass() == DeviceClass.TABLET)
+
+    private fun configureLiveChannelDetails() {
+        val play = findViewById<Button>(R.id.live_channel_play)
+        val favourite = findViewById<Button>(R.id.live_channel_favourite)
+        val group = findViewById<Button>(R.id.live_channel_group)
+        play.setOnClickListener { liveChannelSelection?.let { play(it, live = true) } }
+        favourite.setOnClickListener { toggleLiveChannelFavourite() }
+        group.setOnClickListener { liveChannelSelection?.let(::showChannelGroups) }
+        val actions = listOf(play, favourite, group)
+        val vertical = useVerticalLiveChannelActions(resources.configuration.screenWidthDp, isTelevisionLayout())
+        findViewById<LinearLayout>(R.id.live_channel_actions).orientation =
+            if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        actions.forEachIndexed { index, action ->
+            action.layoutParams = LinearLayout.LayoutParams(
+                if (vertical) LinearLayout.LayoutParams.MATCH_PARENT else 0,
+                dp(if (isTelevisionLayout()) 46 else 44),
+                if (vertical) 0f else 1f,
+            ).apply {
+                if (vertical && index > 0) topMargin = dp(6)
+                if (!vertical && index > 0) marginStart = dp(6)
+            }
+            action.nextFocusLeftId = if (vertical) binding.contentGrid.id else {
+                actions.getOrNull(index - 1)?.id ?: binding.contentGrid.id
+            }
+            action.nextFocusRightId = if (vertical) action.id else actions.getOrNull(index + 1)?.id ?: action.id
+            action.nextFocusUpId = if (vertical) actions.getOrNull(index - 1)?.id ?: action.id else action.id
+            action.nextFocusDownId = if (vertical) actions.getOrNull(index + 1)?.id ?: action.id else action.id
+            action.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (vertical) {
+                        requestRecyclerItemFocus(
+                            binding.contentGrid,
+                            liveChannelSelection?.let { selected ->
+                                catalogAdapter.currentItems.indexOfFirst { it.kind == selected.kind && it.id == selected.id }
+                            }?.takeIf { it >= 0 } ?: 0,
+                        )
+                    } else actions.getOrNull(index - 1)?.requestFocus() ?: focusSelectedLiveChannel()
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> if (vertical) view.requestFocus()
+                    else actions.getOrNull(index + 1)?.requestFocus() ?: view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_UP -> if (vertical) actions.getOrNull(index - 1)?.requestFocus() ?: view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (vertical) actions.getOrNull(index + 1)?.requestFocus() ?: view.requestFocus()
+                }
+                true
+            }
+        }
+    }
+
+    private fun focusSelectedLiveChannel() {
+        requestRecyclerItemFocus(
+            binding.contentGrid,
+            liveChannelSelection?.let { selected ->
+                catalogAdapter.currentItems.indexOfFirst { it.kind == selected.kind && it.id == selected.id }
+            }?.takeIf { it >= 0 } ?: 0,
+        )
     }
 
     private fun configureNavigation() {
@@ -355,7 +465,13 @@ class MainActivity : AppCompatActivity() {
                 view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
                     .translationZ(if (focused) 10f else 0f).setDuration(120).start()
                 if (focused && tvNavigationFocusEnabled) {
+                    val closedChannelBrowser = liveChannelBrowserOpen
+                    if (closedChannelBrowser) resetLiveChannelBrowser(renderGrid = true)
                     setTvNavigationExpanded(true)
+                    // ConstraintSet application can temporarily detach focus while Navbar 3 is
+                    // removed. Return it to the explicitly selected primary destination rather
+                    // than allowing spatial search to choose an unrelated category or channel.
+                    if (closedChannelBrowser) view.post { if (!view.hasFocus()) view.requestFocus() }
                 } else {
                     binding.root.post {
                         if (buttons.none(View::hasFocus)) setTvNavigationExpanded(false)
@@ -397,6 +513,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun collapseTvNavigationImmediately() {
+        if (!isTelevisionLayout()) return
+        tvNavigationAnimator?.cancel()
+        tvNavigationAnimator = null
+        tvNavigationExpanded = false
+        applyTvNavigationLabels(expanded = false)
+        binding.sideNav.layoutParams = binding.sideNav.layoutParams.apply {
+            width = dp(TV_NAV_COLLAPSED_WIDTH_DP)
+        }
+    }
+
     private fun applyTvNavigationLabels(expanded: Boolean) {
         tvNavigationButtons().forEach { button ->
             button.text = if (expanded) tvNavigationLabels[button.id] ?: "" else ""
@@ -421,12 +548,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleCatalogDpad(view: View, position: Int, keyCode: Int, event: KeyEvent): Boolean {
-        if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
+        if (event.action != KeyEvent.ACTION_DOWN) return false
         if (keyCode !in TV_DPAD_KEYS) return false
+        if (!isTelevisionLayout() && !liveChannelBrowserOpen) return false
         // Held remotes can deliver repeats faster than RecyclerView can lay out the next row.
         // Consume repeats while one frame-bounded focus transition is pending instead of stacking
         // scroll/focus callbacks against stale adapter positions.
         if (binding.contentGrid.id in pendingTvFocusMoves) return true
+        if (liveChannelBrowserOpen) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> if (position == 0 && binding.searchBox.isVisible) {
+                    binding.searchBox.requestFocus()
+                } else requestRecyclerItemFocus(binding.contentGrid, (position - 1).coerceAtLeast(0))
+                KeyEvent.KEYCODE_DPAD_DOWN -> requestRecyclerItemFocus(binding.contentGrid, (position + 1).coerceAtMost(catalogAdapter.itemCount - 1))
+                KeyEvent.KEYCODE_DPAD_LEFT -> restoreCategoryFocus(activeCategoryFocusId())
+                KeyEvent.KEYCODE_DPAD_RIGHT -> findViewById<Button>(R.id.live_channel_play).requestFocus()
+            }
+            return true
+        }
         val move = tvContentFocusMove(
             position,
             catalogAdapter.itemCount,
@@ -449,6 +588,15 @@ class MainActivity : AppCompatActivity() {
         if (!isTelevisionLayout() || event.action != KeyEvent.ACTION_DOWN) return false
         if (keyCode !in TV_DPAD_KEYS) return false
         if (binding.categoryList.id in pendingTvFocusMoves) return true
+        if (
+            keyCode == KeyEvent.KEYCODE_DPAD_UP &&
+            position == 0 &&
+            nestedSeries == null &&
+            binding.categorySearchBox.isVisible
+        ) {
+            binding.categorySearchBox.requestFocus()
+            return true
+        }
         val move = tvCategoryFocusMove(
             position,
             categoriesAdapter.itemCount,
@@ -470,7 +618,11 @@ class MainActivity : AppCompatActivity() {
         when {
             binding.contentGrid.isVisible && catalogAdapter.itemCount > 0 -> {
                 val key = if (nestedSeries != null) null else sectionState(section).focusedCardKey
-                restoreCardFocus(key)
+                val position = key?.let { requested ->
+                    catalogAdapter.currentItems.indexOfFirst { "${it.kind}:${it.id}" == requested }
+                        .takeIf { it >= 0 }
+                } ?: 0
+                requestRecyclerItemFocus(binding.contentGrid, position)
             }
             binding.stateAction.isVisible -> binding.stateAction.requestFocus()
             else -> fallback.requestFocus()
@@ -577,6 +729,89 @@ class MainActivity : AppCompatActivity() {
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        if (isTelevisionLayout()) {
+            binding.searchBox.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> navigationView(section).requestFocus()
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> if (binding.actionSearchClear.isVisible) {
+                        binding.actionSearchClear.requestFocus()
+                    } else view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (binding.categorySearchBox.isVisible) {
+                        binding.categorySearchBox.requestFocus()
+                    } else if (section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0) {
+                        restoreCategoryFocus(activeCategoryFocusId())
+                    } else focusVisibleCatalogDestination(view)
+                    else -> view.requestFocus()
+                }
+                true
+            }
+            binding.actionSearchClear.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> binding.searchBox.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (binding.categorySearchBox.isVisible) {
+                        binding.categorySearchBox.requestFocus()
+                    } else if (section in PAGED_SECTIONS && binding.categoryList.isVisible && categoriesAdapter.itemCount > 0) {
+                        restoreCategoryFocus(activeCategoryFocusId())
+                    } else focusVisibleCatalogDestination(view)
+                    else -> view.requestFocus()
+                }
+                true
+            }
+        }
+    }
+
+    private fun configureCategorySearch() {
+        binding.categorySearchBox.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (updatingCategorySearchBox || section !in PAGED_SECTIONS || nestedSeries != null) return
+                val query = s?.toString().orEmpty().trim()
+                if (query.isBlank()) {
+                    categorySearchQueries.remove(section)
+                    categorySearchContextIds.remove(section)
+                } else {
+                    categorySearchQueries[section] = query
+                    categorySearchContextIds.remove(section)
+                }
+                categoriesAdapter.submit(sectionState(section).categories, currentCategory)
+            }
+
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        binding.categorySearchBox.setOnEditorActionListener { _, actionId, event ->
+            val submitted = actionId == EditorInfo.IME_ACTION_SEARCH ||
+                actionId == EditorInfo.IME_ACTION_DONE ||
+                (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER)
+            if (!submitted) return@setOnEditorActionListener false
+            hideKeyboard(clearFocus = false)
+            focusFirstCategorySearchResult()
+            true
+        }
+        if (isTelevisionLayout()) {
+            binding.categorySearchBox.setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> navigationView(section).requestFocus()
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> focusVisibleCatalogDestination(view)
+                    KeyEvent.KEYCODE_DPAD_UP -> if (binding.searchBox.isVisible) binding.searchBox.requestFocus() else view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> focusFirstCategorySearchResult()
+                }
+                true
+            }
+        }
+    }
+
+    private fun syncCategorySearchBox(target: Section = section) {
+        if (target != section) return
+        val expected = categorySearchQueries[target].orEmpty()
+        if (binding.categorySearchBox.text.toString() == expected) return
+        updatingCategorySearchBox = true
+        binding.categorySearchBox.setText(expected)
+        binding.categorySearchBox.setSelection(binding.categorySearchBox.text.length)
+        updatingCategorySearchBox = false
     }
 
     private fun runActiveSearch(query: String) {
@@ -637,6 +872,9 @@ class MainActivity : AppCompatActivity() {
         }
         ensurePlaylistState()
         val changingTopLevelSection = section != value
+        if (changingTopLevelSection && section in PAGED_SECTIONS) resetCategorySearch(section)
+        if (changingTopLevelSection || value != Section.LIVE) resetLiveChannelBrowser(renderGrid = false)
+        if (changingTopLevelSection || value != Section.LIVE) stopInlinePreview()
         captureSectionState()
         detailJob?.cancel()
         detailJob = null
@@ -678,6 +916,11 @@ class MainActivity : AppCompatActivity() {
         binding.actionReload.isVisible = !television
         binding.actionPlaylist.isVisible = !television
         setCategoryNavigationVisible(value in CATEGORY_SECTIONS && !isFeatureRoot(value, state))
+        if (value in PAGED_SECTIONS) {
+            // Search is a local navigation action and must be available immediately, including
+            // while a cold provider category list is still loading.
+            categoriesAdapter.submit(state.categories, currentCategory)
+        }
         binding.screenTitle.text = when (value) {
             Section.HOME -> "Welcome to Crown Media"
             Section.LIVE -> "Live TV"
@@ -818,12 +1061,16 @@ class MainActivity : AppCompatActivity() {
         binding.categoryMenuButton.nextFocusRightId = binding.contentGrid.id
         binding.categoryMenuButton.nextFocusUpId = binding.searchBox.id
         binding.categoryMenuButton.nextFocusDownId = binding.categoryList.id
+        binding.categorySearchBox.nextFocusLeftId = activeNav.id
+        binding.categorySearchBox.nextFocusRightId = binding.contentGrid.id
+        binding.categorySearchBox.nextFocusUpId = binding.searchBox.id
+        binding.categorySearchBox.nextFocusDownId = binding.categoryList.id
         binding.categoryList.nextFocusLeftId = activeNav.id
         binding.categoryList.nextFocusRightId = binding.contentGrid.id
         binding.contentGrid.nextFocusLeftId = if (value in CATEGORY_SECTIONS && !featureRoot) binding.categoryList.id else activeNav.id
         binding.contentGrid.nextFocusUpId = if (value in PAGED_SECTIONS) binding.searchBox.id else binding.topBar.id
         binding.searchBox.nextFocusLeftId = activeNav.id
-        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categoryList.id else binding.contentGrid.id
+        binding.searchBox.nextFocusDownId = if (value in PAGED_SECTIONS) binding.categorySearchBox.id else binding.contentGrid.id
         binding.actionSearchClear.nextFocusLeftId = binding.searchBox.id
         binding.actionSearchClear.nextFocusDownId = binding.contentGrid.id
         binding.stateAction.nextFocusLeftId = if (value in CATEGORY_SECTIONS && !featureRoot) binding.categoryList.id else activeNav.id
@@ -853,7 +1100,10 @@ class MainActivity : AppCompatActivity() {
         loadJob?.cancel()
         val requestGeneration = contentRequestGeneration
         val requestedCategory = state.categoryId
-        if (state.cards.isEmpty()) showState("Loading", "", true, false, keepCategories = target in PAGED_SECTIONS)
+        if (state.cards.isEmpty()) {
+            if (target == Section.LIVE && liveChannelBrowserOpen) openLiveChannelBrowser(emptyList(), restoreFocus = false)
+            else showState("Loading", "", true, false, keepCategories = target in PAGED_SECTIONS)
+        }
         loadJob = lifecycleScope.launch {
             val cacheStarted = SystemClock.elapsedRealtime()
             val cachedResult = runCatching {
@@ -874,6 +1124,7 @@ class MainActivity : AppCompatActivity() {
                 state.scrollState = null
                 state.categoryScrollState = null
             }
+            if (nestedSeries == null) categoriesAdapter.submit(state.categories, state.categoryId)
             state.cards = page.cards
             state.nextOffset = page.consumed
             state.endReached = page.endReached
@@ -899,13 +1150,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectCategory(category: XtreamCategory) {
+        if (category.id == CATEGORY_SEARCH_ID) {
+            binding.categorySearchBox.requestFocus()
+            return
+        }
         if (category.id.startsWith("season:")) {
             selectSeriesSeason(category.id.substringAfter(':').toIntOrNull() ?: return)
             return
         }
         if (requiresPin(category.name)) { verifyPin { selectCategory(category) }; return }
+        updateCategorySearchContext(category.id)
         if (category.id == currentCategory) {
+            if (section == Section.LIVE && supportsLiveChannelBrowser() && !liveChannelBrowserOpen) {
+                openLiveChannelBrowser(sectionState(Section.LIVE).cards, restoreFocus = true)
+                return
+            }
             scrollCategoryIntoView(category.id)
+            return
+        }
+        if (section == Section.LIVE && category.id.startsWith(CUSTOM_GROUP_CATEGORY_PREFIX)) {
+            selectCustomChannelGroup(category)
             return
         }
         val restoreTvCategoryFocus = isTelevisionLayout() && binding.categoryList.hasFocus()
@@ -922,6 +1186,9 @@ class MainActivity : AppCompatActivity() {
             generation++
         }
         currentCategory = category.id
+        if (section == Section.LIVE && supportsLiveChannelBrowser()) {
+            openLiveChannelBrowser(emptyList(), restoreFocus = false)
+        }
         categoriesAdapter.submit(state.categories, currentCategory) {
             scrollCategoryIntoView(currentCategory)
             if (restoreTvCategoryFocus) restoreCategoryFocus(activeCategoryFocusId())
@@ -932,9 +1199,122 @@ class MainActivity : AppCompatActivity() {
         load()
     }
 
+    private fun categoryNavigationItems(values: List<XtreamCategory>): List<XtreamCategory> {
+        if (nestedSeries != null || section !in PAGED_SECTIONS) return values
+        val groups = if (
+            section == Section.LIVE && (isTelevisionLayout() || deviceClass() == DeviceClass.TABLET)
+        ) {
+            store.selected()?.let { playlist ->
+                store.customChannelGroups(playlist.id).map {
+                    XtreamCategory("$CUSTOM_GROUP_CATEGORY_PREFIX${it.id}", it.name)
+                }
+            }.orEmpty()
+        } else emptyList()
+        val query = categorySearchQueries[section].orEmpty().trim()
+        val candidates = (groups + values.filterNot { it.id == CATEGORY_SEARCH_ID })
+            .distinctBy(XtreamCategory::id)
+        val filtered = if (query.isBlank()) candidates else candidates.filter {
+            it.name.contains(query, ignoreCase = true)
+        }
+        return filtered
+    }
+
+    private fun focusFirstCategorySearchResult() {
+        if (categoriesAdapter.itemCount == 0) {
+            binding.categorySearchBox.requestFocus()
+        } else if (isTelevisionLayout()) {
+            requestRecyclerItemFocus(binding.categoryList, 0)
+        } else {
+            binding.categoryList.requestFocus()
+        }
+    }
+
+    private fun updateCategorySearchContext(categoryId: String) {
+        val query = categorySearchQueries[section].orEmpty().trim()
+        if (query.isBlank()) return
+        val contextId = categorySearchContextIds[section]
+        if (contextId == null) categorySearchContextIds[section] = categoryId
+        else if (contextId != categoryId) resetCategorySearch(section)
+    }
+
+    private fun resetCategorySearch(target: Section) {
+        categorySearchQueries.remove(target)
+        categorySearchContextIds.remove(target)
+        syncCategorySearchBox(target)
+    }
+
+    private fun focusDialogInput(dialog: AlertDialog, input: EditText) {
+        input.id = input.id.takeIf { it != View.NO_ID } ?: View.generateViewId()
+        input.isFocusable = true
+        input.isFocusableInTouchMode = true
+        input.showSoftInputOnFocus = true
+        val window = dialog.window ?: return
+        window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        val positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+        val negative = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+        val neutral = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+        val buttons = listOfNotNull(positive, negative, neutral)
+        input.nextFocusDownId = buttons.firstOrNull()?.id ?: input.id
+        buttons.forEachIndexed { index, button ->
+            button.nextFocusUpId = input.id
+            button.nextFocusLeftId = buttons.getOrNull(index - 1)?.id ?: button.id
+            button.nextFocusRightId = buttons.getOrNull(index + 1)?.id ?: button.id
+        }
+        input.requestFocus()
+        var initialActivationPending = true
+        val activateEditor = {
+            if (
+                dialog.isShowing &&
+                (initialActivationPending || dialog.currentFocus == null || dialog.currentFocus === input)
+            ) {
+                initialActivationPending = false
+                input.requestFocus()
+                input.setSelection(input.text.length)
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)?.let { manager ->
+                    manager.restartInput(input)
+                    manager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                }
+            }
+        }
+        window.decorView.post(activateEditor)
+        window.decorView.postDelayed(activateEditor, TV_INPUT_FOCUS_RETRY_MS)
+    }
+
+    private fun selectCustomChannelGroup(category: XtreamCategory) {
+        val playlist = store.selected() ?: return
+        val groupId = category.id.removePrefix(CUSTOM_GROUP_CATEGORY_PREFIX)
+        val group = store.customChannelGroups(playlist.id).firstOrNull { it.id == groupId } ?: return
+        val state = sectionState(Section.LIVE)
+        contentRequestGeneration++
+        state.categoryId = category.id
+        state.cards = emptyList()
+        state.nextOffset = 0
+        state.endReached = true
+        currentCategory = category.id
+        categoriesAdapter.submit(state.categories, currentCategory)
+        openLiveChannelBrowser(emptyList(), restoreFocus = false)
+        loadJob?.cancel()
+        loadJob = lifecycleScope.launch {
+            val items = cache.favoriteItemPage(
+                playlist.id,
+                Section.LIVE.cardKind,
+                group.channelIds.toList(),
+                CUSTOM_GROUP_RESULT_LIMIT,
+                0,
+                "provider",
+            )
+            if (section != Section.LIVE || currentCategory != category.id) return@launch
+            val favourites = store.favorites(playlist.id)
+            state.cards = items.filter { includeAdultContent() || !it.isAdult }
+                .map { it.toCard(Section.LIVE.cardKind, favourites) }
+            renderSectionState(state, restoreScroll = false)
+        }
+    }
+
     private fun scrollCategoryIntoView(categoryId: String) {
-        sectionState(section).categories.indexOfFirst { it.id == categoryId }
-            .takeIf { it >= 0 }
+        categoriesAdapter.positionOf(categoryId)
+            .takeIf { it != RecyclerView.NO_POSITION }
             ?.let(binding.categoryList::smoothScrollToPosition)
     }
 
@@ -978,6 +1358,8 @@ class MainActivity : AppCompatActivity() {
         catalogWarmJobs.clear()
         sectionStates.clear()
         contentCounts.clear()
+        categorySearchQueries.clear()
+        categorySearchContextIds.clear()
         searchWarmJob = null
         searchWarmCompletedFor = null
         masterSearchQuery = ""
@@ -1007,6 +1389,8 @@ class MainActivity : AppCompatActivity() {
             if (restoreScroll) state.categoryScrollState?.let { binding.categoryList.layoutManager?.onRestoreInstanceState(it) }
         }
         if (target in PAGED_SECTIONS) store.selected()?.let { loadCategoryCounts(it, target) }
+        val channelBrowser = target == Section.LIVE && liveChannelBrowserOpen && supportsLiveChannelBrowser()
+        catalogAdapter.setLiveChannelNavigation(channelBrowser)
         catalogAdapter.submit(state.cards) {
             if (section != target || sectionStates[target] !== state) return@submit
             val revealDestination = reveal@{
@@ -1016,6 +1400,16 @@ class MainActivity : AppCompatActivity() {
                 val focusKey = pendingContentFocusKey ?: if (binding.contentGrid.hasFocus()) focusedCardKey() else null
                 pendingContentFocusKey = null
                 if (focusKey != null && isTelevisionLayout()) restoreCardFocus(focusKey)
+                if (channelBrowser) {
+                    applyLiveChannelBrowserLayout()
+                    val selected = liveChannelSelection?.let { active ->
+                        state.cards.firstOrNull { it.id == active.id }
+                    } ?: state.cards.firstOrNull()
+                    selected?.let { showLiveChannelDetails(it, startPreview = false) }
+                    if (isTelevisionLayout() && selected != null) restoreCardFocus("${selected.kind}:${selected.id}")
+                } else if (target == Section.LIVE && !isTelevisionLayout()) {
+                    binding.contentGrid.post(::schedulePrimaryVisibleLivePreview)
+                }
             }
             // AsyncListDiffer commits before RecyclerView completes the layout/draw frame. Keep
             // the TV grid invisible for that frame so outgoing Home/last-route holders can never
@@ -1113,7 +1507,10 @@ class MainActivity : AppCompatActivity() {
                 val known = state.cards.asSequence().mapTo(HashSet()) { "${it.kind}:${it.id}" }
                 val combined = state.cards + page.cards.filter { known.add("${it.kind}:${it.id}") }
                 state.cards = if (target == Section.LIVE) sort(combined) else combined
-                if (section == target && currentCategory == categoryId) catalogAdapter.submit(state.cards)
+                if (section == target && currentCategory == categoryId) {
+                    if (target == Section.LIVE && liveChannelBrowserOpen) renderSectionState(state, restoreScroll = true)
+                    else catalogAdapter.submit(state.cards)
+                }
             }
         }
     }
@@ -1984,8 +2381,181 @@ class MainActivity : AppCompatActivity() {
         }.showCrown(preferredButton = null)
     }
 
+    private fun openLiveChannelBrowser(cards: List<CatalogCard>, restoreFocus: Boolean) {
+        if (!supportsLiveChannelBrowser() || section != Section.LIVE) return
+        liveChannelBrowserOpen = true
+        catalogAdapter.setLiveChannelNavigation(true)
+        contentLayoutManager.spanCount = 1
+        applyLiveChannelBrowserLayout()
+        if (cards.isEmpty()) {
+            findViewById<TextView>(R.id.live_channel_title).text = getString(R.string.loading)
+            findViewById<TextView>(R.id.live_channel_epg).text = ""
+            findViewById<TextView>(R.id.live_channel_status).text = getString(R.string.channel_preview_loading)
+        } else {
+            catalogAdapter.submit(cards) {
+                val selected = liveChannelSelection?.let { previous -> cards.firstOrNull { it.id == previous.id } }
+                    ?: cards.first()
+                showLiveChannelDetails(selected, startPreview = false)
+                if (restoreFocus) restoreCardFocus("${selected.kind}:${selected.id}")
+            }
+        }
+    }
+
+    private fun applyLiveChannelBrowserLayout() {
+        if (!liveChannelBrowserOpen || !supportsLiveChannelBrowser()) return
+        if (isTelevisionLayout()) collapseTvNavigationImmediately()
+        val set = ConstraintSet().apply { clone(binding.root) }
+        val channelWidthDp = responsiveLiveChannelNavigationWidthDp(resources.configuration.screenWidthDp, isTelevisionLayout())
+        set.constrainWidth(R.id.content_grid, dp(channelWidthDp))
+        set.clear(R.id.content_grid, ConstraintSet.END)
+        set.connect(R.id.content_grid, ConstraintSet.START, R.id.category_bar, ConstraintSet.END)
+        set.setVisibility(R.id.live_channel_details, View.VISIBLE)
+        if (isTelevisionLayout()) {
+            set.setVisibility(R.id.side_nav, View.VISIBLE)
+            set.clear(R.id.category_bar, ConstraintSet.START)
+            set.connect(R.id.category_bar, ConstraintSet.START, R.id.side_nav, ConstraintSet.END)
+        }
+        set.applyTo(binding.root)
+        binding.contentGrid.setPadding(dp(5), dp(5), dp(5), dp(10))
+        binding.contentGrid.isVisible = true
+        binding.statePanel.isVisible = false
+        findViewById<View>(R.id.live_channel_details).isVisible = true
+    }
+
+    private fun closeLiveChannelBrowser() {
+        if (!liveChannelBrowserOpen) return
+        val categoryId = currentCategory
+        // Move ownership away from the channel rail before the normal grid is rebound. Otherwise
+        // renderSectionState can correctly restore the previously focused channel after this
+        // method has restored Navbar 2, stealing focus back from the category hierarchy.
+        if (isTelevisionLayout()) binding.categoryList.requestFocus()
+        resetLiveChannelBrowser(renderGrid = true)
+        if (isTelevisionLayout()) restoreCategoryFocus(categoryId)
+        else binding.categoryList.requestFocus()
+    }
+
+    private fun resetLiveChannelBrowser(renderGrid: Boolean) {
+        if (!liveChannelBrowserOpen && !findViewById<View>(R.id.live_channel_details).isVisible) return
+        liveChannelBrowserOpen = false
+        liveChannelEpgJob?.cancel()
+        liveChannelEpgJob = null
+        liveChannelSelection = null
+        stopInlinePreview()
+        catalogAdapter.setLiveChannelNavigation(false)
+        if (isTelevisionLayout()) collapseTvNavigationImmediately()
+        val set = ConstraintSet().apply { clone(binding.root) }
+        set.constrainWidth(R.id.content_grid, ConstraintSet.MATCH_CONSTRAINT)
+        set.connect(R.id.content_grid, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END)
+        set.setVisibility(R.id.live_channel_details, View.GONE)
+        if (isTelevisionLayout()) {
+            set.setVisibility(R.id.side_nav, View.VISIBLE)
+            set.clear(R.id.category_bar, ConstraintSet.START)
+            set.connect(R.id.category_bar, ConstraintSet.START, R.id.side_nav, ConstraintSet.END)
+        }
+        set.applyTo(binding.root)
+        if (isTelevisionLayout()) {
+            binding.contentGrid.setPadding(dp(20), dp(16), dp(40), dp(28))
+            configureTvPresentation(section)
+        } else {
+            binding.contentGrid.setPadding(dp(8), dp(8), dp(8), dp(8))
+            contentLayoutManager.spanCount = standardContentColumnCount
+        }
+        if (renderGrid && section == Section.LIVE) renderSectionState(sectionState(Section.LIVE), restoreScroll = true)
+    }
+
+    private fun showLiveChannelDetails(card: CatalogCard, startPreview: Boolean) {
+        if (!liveChannelBrowserOpen || section != Section.LIVE) return
+        liveChannelSelection = card
+        val playlist = store.selected() ?: return
+        val number = card.channelNumber?.let { "$it  |  " }.orEmpty()
+        findViewById<TextView>(R.id.live_channel_title).text = "$number${card.title}"
+        findViewById<TextView>(R.id.live_channel_epg).text = getString(R.string.channel_epg_loading)
+        findViewById<TextView>(R.id.live_channel_status).text = listOfNotNull(
+            "Muted preview",
+            "Catch-Up".takeIf { card.catchUpDays > 0 },
+        ).joinToString("  •  ")
+        findViewById<Button>(R.id.live_channel_favourite).text = getString(
+            if ("live:${card.id}" in store.favorites(playlist.id)) R.string.remove_favourite else R.string.favourite,
+        )
+        findViewById<ImageView>(R.id.live_channel_artwork).load(card.preferredArtworkSource()) {
+            crossfade(false)
+            placeholder(R.drawable.crown_media_logo_header)
+            error(R.drawable.crown_media_logo_header)
+        }
+        liveChannelEpgJob?.cancel()
+        liveChannelEpgJob = lifecycleScope.launch {
+            val summary = runCatching { epgSummary(epgFor(playlist, card.id), playlist.serverTimezone) }
+                .getOrElse { getString(R.string.epg_unavailable) }
+            if (liveChannelBrowserOpen && liveChannelSelection?.id == card.id) {
+                findViewById<TextView>(R.id.live_channel_epg).text = summary
+            }
+        }
+        if (startPreview) {
+            val focused = binding.contentGrid.focusedChild ?: return
+            scheduleInlinePreview(
+                InlinePreviewTarget(card, focused, findViewById(R.id.live_channel_preview)),
+                LIVE_CHANNEL_BROWSER_PREVIEW_DELAY_MS,
+            )
+        }
+    }
+
+    private fun toggleLiveChannelFavourite() {
+        val playlist = store.selected() ?: return
+        val card = liveChannelSelection ?: return
+        val added = store.toggleFavorite(playlist.id, "live:${card.id}")
+        findViewById<Button>(R.id.live_channel_favourite).text = getString(
+            if (added) R.string.remove_favourite else R.string.favourite,
+        )
+        sectionStates[Section.FAVORITES]?.featureRootCards = emptyList()
+    }
+
+    private fun showChannelGroups(card: CatalogCard) {
+        val playlist = store.selected() ?: return
+        val groups = store.customChannelGroups(playlist.id)
+        val checked = groups.map { card.id in it.channelIds }.toBooleanArray()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.add_to_group)
+            .setMultiChoiceItems(groups.map(CustomChannelGroup::name).toTypedArray(), checked) { _, which, selected ->
+                groups.getOrNull(which)?.let { group ->
+                    store.setChannelInCustomGroup(playlist.id, group.id, card.id, selected)
+                }
+            }
+            .setNeutralButton(R.string.create_group) { _, _ -> promptCreateChannelGroup(card) }
+            .setPositiveButton("Done", null)
+            .showCrown(preferredButton = null)
+    }
+
+    private fun promptCreateChannelGroup(card: CatalogCard) {
+        val playlist = store.selected() ?: return
+        val input = EditText(this).apply {
+            hint = getString(R.string.new_group_name)
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_DONE
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.create_group)
+            .setView(input)
+            .setPositiveButton("Create") { _, _ ->
+                store.createCustomChannelGroup(playlist.id, input.text.toString())?.let { group ->
+                    store.setChannelInCustomGroup(playlist.id, group.id, card.id, true)
+                    categoriesAdapter.submit(sectionState(Section.LIVE).categories, currentCategory)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .showCrown(preferredButton = null)
+        input.setOnEditorActionListener { _, actionId, event ->
+            val submitted = actionId == EditorInfo.IME_ACTION_DONE ||
+                (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER)
+            if (!submitted) return@setOnEditorActionListener false
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            true
+        }
+        focusDialogInput(dialog, input)
+    }
+
     private fun play(card: CatalogCard, live: Boolean) {
         val playlist = store.selected() ?: return
+        stopInlinePreview()
         if (nestedSeries == null && activeSearchQuery().trim().length >= MIN_SEARCH_LENGTH) {
             pendingContentFocusKey = "${card.kind}:${card.id}"
         }
@@ -2030,6 +2600,168 @@ class MainActivity : AppCompatActivity() {
         if (!PlayerActivity.launchExternal(this, url, title, packageName)) {
             Toast.makeText(this, "Selected external player is not installed", Toast.LENGTH_LONG).show()
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (::binding.isInitialized) binding.contentGrid.post(::scheduleCurrentLivePreview)
+    }
+
+    override fun onStop() {
+        stopInlinePreview(releasePlayer = true)
+        super.onStop()
+    }
+
+    private fun onLivePreviewFocusChanged(
+        card: CatalogCard,
+        cardView: View,
+        host: InlineLivePreviewView,
+        focused: Boolean,
+    ) {
+        if (section != Section.LIVE) return
+        if (liveChannelBrowserOpen && supportsLiveChannelBrowser()) {
+            val target = InlinePreviewTarget(card, cardView, findViewById(R.id.live_channel_preview))
+            if (focused) {
+                showLiveChannelDetails(card, startPreview = false)
+                scheduleInlinePreview(target, LIVE_CHANNEL_BROWSER_PREVIEW_DELAY_MS)
+            } else if (pendingInlinePreview.matches(target) || activeInlinePreview.matches(target)) {
+                stopInlinePreview()
+            }
+            return
+        }
+        if (!isTelevisionLayout()) return
+        val target = InlinePreviewTarget(card, cardView, host)
+        if (focused) scheduleInlinePreview(target, TV_PREVIEW_DELAY_MS)
+        else if (pendingInlinePreview.matches(target) || activeInlinePreview.matches(target)) stopInlinePreview()
+    }
+
+    private fun onLivePreviewHostAvailability(
+        card: CatalogCard,
+        cardView: View,
+        host: InlineLivePreviewView,
+        available: Boolean,
+    ) {
+        val target = InlinePreviewTarget(card, cardView, host)
+        if (liveChannelBrowserOpen) {
+            if (!available && (pendingInlinePreview?.cardView === cardView || activeInlinePreview?.cardView === cardView)) stopInlinePreview()
+            return
+        }
+        if (!available) {
+            if (pendingInlinePreview.matches(target) || activeInlinePreview.matches(target)) stopInlinePreview()
+            return
+        }
+        if (!isTelevisionLayout() && section == Section.LIVE && binding.contentGrid.scrollState == RecyclerView.SCROLL_STATE_IDLE) {
+            binding.contentGrid.post(::schedulePrimaryVisibleLivePreview)
+        }
+    }
+
+    private fun scheduleCurrentLivePreview() {
+        if (section != Section.LIVE || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
+        if (liveChannelBrowserOpen) {
+            val focused = binding.contentGrid.focusedChild ?: return
+            val position = binding.contentGrid.getChildAdapterPosition(focused)
+            val card = catalogAdapter.itemAt(position)?.takeIf { it.kind == "live" } ?: return
+            showLiveChannelDetails(card, startPreview = true)
+            return
+        }
+        if (isTelevisionLayout()) {
+            val focused = binding.contentGrid.focusedChild ?: return
+            val position = binding.contentGrid.getChildAdapterPosition(focused)
+            val card = catalogAdapter.itemAt(position)?.takeIf { it.kind == "live" } ?: return
+            val host = focused.findViewById<InlineLivePreviewView>(R.id.inline_preview) ?: return
+            scheduleInlinePreview(InlinePreviewTarget(card, focused, host), TV_PREVIEW_DELAY_MS)
+        } else schedulePrimaryVisibleLivePreview()
+    }
+
+    private fun schedulePrimaryVisibleLivePreview() {
+        if (
+            isTelevisionLayout() || section != Section.LIVE ||
+            binding.contentGrid.scrollState != RecyclerView.SCROLL_STATE_IDLE ||
+            !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        ) return
+        val target = primaryVisibleLivePreviewTarget() ?: run {
+            stopInlinePreview()
+            return
+        }
+        scheduleInlinePreview(target, MOBILE_PREVIEW_DELAY_MS)
+    }
+
+    private fun primaryVisibleLivePreviewTarget(): InlinePreviewTarget? {
+        val grid = binding.contentGrid
+        if (grid.width <= 0 || grid.height <= 0) return null
+        val viewportCenter = (grid.paddingTop + grid.height - grid.paddingBottom) / 2
+        val targets = mutableMapOf<Int, InlinePreviewTarget>()
+        val visibility = buildList {
+            repeat(grid.childCount) { childIndex ->
+                val child = grid.getChildAt(childIndex)
+                val position = grid.getChildAdapterPosition(child)
+                val card = catalogAdapter.itemAt(position)?.takeIf { it.kind == "live" } ?: return@repeat
+                val visibleRect = Rect()
+                if (!child.getLocalVisibleRect(visibleRect) || child.width <= 0 || child.height <= 0) return@repeat
+                val visibleArea = visibleRect.width().toLong() * visibleRect.height().toLong()
+                val totalArea = child.width.toLong() * child.height.toLong()
+                val host = child.findViewById<InlineLivePreviewView>(R.id.inline_preview) ?: return@repeat
+                targets[position] = InlinePreviewTarget(card, child, host)
+                add(
+                    LivePreviewVisibility(
+                        adapterPosition = position,
+                        visibleFraction = visibleArea.toFloat() / totalArea.toFloat(),
+                        centerDistancePx = abs((child.top + child.bottom) / 2 - viewportCenter),
+                    ),
+                )
+            }
+        }
+        return primaryLivePreviewPosition(visibility)?.let(targets::get)
+    }
+
+    private fun scheduleInlinePreview(target: InlinePreviewTarget, delayMs: Long) {
+        if (target.card.kind != "live" || section != Section.LIVE) return
+        if (activeInlinePreview.matches(target) || pendingInlinePreview.matches(target)) return
+        inlinePreviewJob?.cancel()
+        inlinePreviewJob = null
+        pendingInlinePreview = target
+        if (activeInlinePreview != null) {
+            inlinePreviewController.stop()
+            activeInlinePreview = null
+        }
+        inlinePreviewJob = lifecycleScope.launch {
+            delay(delayMs)
+            if (!currentCoroutineContext().isActive || pendingInlinePreview !== target) return@launch
+            pendingInlinePreview = null
+            inlinePreviewJob = null
+            if (!target.cardView.isAttachedToWindow || section != Section.LIVE) return@launch
+            val stillSelected = if (liveChannelBrowserOpen) {
+                target.cardView.hasFocus()
+            } else if (isTelevisionLayout()) {
+                target.cardView.hasFocus()
+            } else {
+                binding.contentGrid.scrollState == RecyclerView.SCROLL_STATE_IDLE &&
+                    primaryVisibleLivePreviewTarget()?.matches(target) == true
+            }
+            if (!stillSelected || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+            val playlist = store.selected() ?: return@launch
+            val extension = preferredLiveExtension(playlist.allowedFormats)
+            val url = api.streamUrl(playlist.credentials, "live", target.card.id, extension)
+            healthJob?.cancel()
+            activeInlinePreview = target
+            if (liveChannelBrowserOpen) {
+                findViewById<TextView>(R.id.live_channel_status).text = listOfNotNull(
+                    "Muted preview",
+                    "Catch-Up".takeIf { target.card.catchUpDays > 0 },
+                    "Press OK for full screen",
+                ).joinToString("  •  ")
+            }
+            inlinePreviewController.start(target.host, url)
+        }
+    }
+
+    private fun stopInlinePreview(releasePlayer: Boolean = false) {
+        inlinePreviewJob?.cancel()
+        inlinePreviewJob = null
+        pendingInlinePreview = null
+        activeInlinePreview = null
+        if (!::inlinePreviewController.isInitialized) return
+        if (releasePlayer) inlinePreviewController.release() else inlinePreviewController.stop()
     }
 
     private fun showMovie(card: CatalogCard) {
@@ -3131,7 +3863,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 val state = sectionState(Section.LIVE)
                 state.categories = displayed
-                if (state.categories.none { it.id == state.categoryId }) state.categoryId = "all"
+                if (
+                    !state.categoryId.startsWith(CUSTOM_GROUP_CATEGORY_PREFIX) &&
+                    state.categories.none { it.id == state.categoryId }
+                ) {
+                    state.categoryId = "all"
+                }
                 if (section == Section.LIVE) {
                     currentCategory = state.categoryId
                     categoriesAdapter.submit(displayed, currentCategory)
@@ -3151,7 +3888,7 @@ class MainActivity : AppCompatActivity() {
             id, itemKind, name, imageUrl,
             listOfNotNull(year, genre, rating?.let { "Rating $it" }).joinToString(" • ").ifBlank { itemKind.uppercase() },
             badge, extension, categoryId, healthHint = healthHint,
-            isAdult = isAdult, catchUpDays = catchUpDays,
+            isAdult = isAdult, catchUpDays = catchUpDays, channelNumber = providerOrder,
         )
     }
 
@@ -3206,6 +3943,8 @@ class MainActivity : AppCompatActivity() {
     private fun setCategoryNavigationVisible(visible: Boolean) {
         binding.categoryBar.isVisible = visible
         val nested = nestedSeries != null
+        binding.categorySearchBox.isVisible = visible && !nested && section in PAGED_SECTIONS
+        if (binding.categorySearchBox.isVisible) syncCategorySearchBox()
         binding.categoryMenuButton.isVisible = visible && section in CATEGORY_SECTIONS && (!isTelevisionLayout() || nested)
         binding.root.findViewById<TextView>(R.id.category_panel_title)?.text =
             getString(if (nested) R.string.seasons else R.string.categories)
@@ -3351,6 +4090,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private data class InlinePreviewTarget(
+        val card: CatalogCard,
+        val cardView: View,
+        val host: InlineLivePreviewView,
+    )
+
+    private fun InlinePreviewTarget?.matches(other: InlinePreviewTarget): Boolean =
+        this != null &&
+            card.kind == other.card.kind &&
+            card.id == other.card.id &&
+            cardView === other.cardView &&
+            host === other.host
+
     companion object {
         private const val PAGE_SIZE = 60
         private const val NETWORK_BATCH_SIZE = 240
@@ -3359,15 +4111,22 @@ class MainActivity : AppCompatActivity() {
         private const val MIN_SEARCH_LENGTH = 2
         private const val SEARCH_RESULT_LIMIT = 500
         private const val QR_CONNECT_UI_ENABLED = false
-        private const val TV_NAV_COLLAPSED_WIDTH_DP = 88
-        private const val TV_NAV_MIN_EXPANDED_WIDTH_DP = 220
-        private const val TV_NAV_MAX_EXPANDED_WIDTH_DP = 260
+        private const val TV_NAV_COLLAPSED_WIDTH_DP = 72
+        private const val TV_NAV_MIN_EXPANDED_WIDTH_DP = 184
+        private const val TV_NAV_MAX_EXPANDED_WIDTH_DP = 216
         private const val TV_NAV_ANIMATION_MS = 180L
-        private const val TV_NAV_ICON_PADDING_DP = 16
-        private const val TV_NAV_BUTTON_PADDING_DP = 16
-        private const val TV_CATEGORY_MIN_WIDTH_DP = 180
-        private const val TV_CATEGORY_MAX_WIDTH_DP = 240
+        private const val TV_NAV_ICON_PADDING_DP = 12
+        private const val TV_NAV_BUTTON_PADDING_DP = 10
+        private const val TV_INPUT_FOCUS_RETRY_MS = 120L
+        private const val TV_CATEGORY_MIN_WIDTH_DP = 168
+        private const val TV_CATEGORY_MAX_WIDTH_DP = 216
         private const val TV_CONTENT_MIN_CARD_WIDTH_DP = 145
+        private const val TV_SAFE_AREA_START_DP = 16
+        private const val LIVE_ACTIONS_HORIZONTAL_MIN_WIDTH_DP = 520
+        internal const val TV_PREVIEW_DELAY_MS = 350L
+        internal const val MOBILE_PREVIEW_DELAY_MS = 450L
+        internal const val LIVE_CHANNEL_BROWSER_PREVIEW_DELAY_MS = 140L
+        private const val CUSTOM_GROUP_RESULT_LIMIT = 2_000
         private val TV_DPAD_KEYS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT,
             KeyEvent.KEYCODE_DPAD_RIGHT,
@@ -3386,15 +4145,28 @@ class MainActivity : AppCompatActivity() {
         internal var storeFactory: (android.content.Context) -> AppStore = ::AppStore
 
         internal fun responsiveTvNavigationWidthDp(screenWidthDp: Int): Int =
-            (screenWidthDp * 0.32f).toInt()
+            (screenWidthDp * 0.2875f).toInt()
                 .coerceIn(TV_NAV_MIN_EXPANDED_WIDTH_DP, TV_NAV_MAX_EXPANDED_WIDTH_DP)
 
         internal fun responsiveTvCategoryNavigationWidthDp(screenWidthDp: Int): Int =
-            (screenWidthDp * 0.22f).toInt()
+            (screenWidthDp * 0.20f).toInt()
                 .coerceIn(TV_CATEGORY_MIN_WIDTH_DP, TV_CATEGORY_MAX_WIDTH_DP)
 
+        internal fun responsiveLiveChannelNavigationWidthDp(screenWidthDp: Int, television: Boolean): Int =
+            (screenWidthDp * if (television) 0.22f else 0.30f).roundToInt()
+                .coerceIn(if (television) 220 else 200, if (television) 300 else 260)
+
+        internal fun useVerticalLiveChannelActions(screenWidthDp: Int, television: Boolean): Boolean {
+            val reservedNavigation = responsiveLiveChannelNavigationWidthDp(screenWidthDp, television) +
+                if (television) {
+                    TV_SAFE_AREA_START_DP + TV_NAV_COLLAPSED_WIDTH_DP +
+                        responsiveTvCategoryNavigationWidthDp(screenWidthDp)
+                } else 0
+            return screenWidthDp - reservedNavigation < LIVE_ACTIONS_HORIZONTAL_MIN_WIDTH_DP
+        }
+
         internal fun responsiveTvContentColumnCount(screenWidthDp: Int): Int {
-            val available = screenWidthDp - TV_NAV_COLLAPSED_WIDTH_DP -
+            val available = screenWidthDp - TV_SAFE_AREA_START_DP - TV_NAV_COLLAPSED_WIDTH_DP -
                 responsiveTvCategoryNavigationWidthDp(screenWidthDp) - 60
             return (available.toFloat() / TV_CONTENT_MIN_CARD_WIDTH_DP).roundToInt().coerceIn(2, 5)
         }

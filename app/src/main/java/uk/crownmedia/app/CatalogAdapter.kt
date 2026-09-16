@@ -9,6 +9,7 @@ import android.widget.ImageView
 import android.text.TextUtils
 import android.content.res.ColorStateList
 import android.content.res.Resources
+import android.util.TypedValue
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.AsyncListDiffer
@@ -22,6 +23,7 @@ import coil.size.Precision
 import uk.crownmedia.app.databinding.ItemCategoryBinding
 import uk.crownmedia.app.databinding.ItemContentBinding
 import uk.crownmedia.data.xtream.XtreamCategory
+import uk.crownmedia.player.InlineLivePreviewView
 import java.net.URI
 
 data class CatalogCard(
@@ -37,6 +39,7 @@ data class CatalogCard(
     val healthHint: Int = 0,
     val isAdult: Boolean = false,
     val catchUpDays: Int = 0,
+    val channelNumber: Int? = null,
 )
 
 internal fun CatalogCard.preferredArtworkSource(): Any {
@@ -84,6 +87,7 @@ class CategoryAdapter(
     private val onClick: (XtreamCategory) -> Unit,
     private val onLongClick: (XtreamCategory) -> Unit,
     private val onDpad: (View, Int, Int, KeyEvent) -> Boolean = { _, _, _, _ -> false },
+    private val navigationItems: (List<XtreamCategory>) -> List<XtreamCategory> = { it },
 ) : RecyclerView.Adapter<CategoryAdapter.Holder>() {
     data class Row(val category: XtreamCategory, val selected: Boolean)
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<Row>() {
@@ -93,7 +97,7 @@ class CategoryAdapter(
     private var counts: Map<String, Int> = emptyMap()
 
     fun submit(values: List<XtreamCategory>, selectedId: String = "all", committed: (() -> Unit)? = null) {
-        differ.submitList(values.map { Row(it, it.id == selectedId) }, committed)
+        differ.submitList(navigationItems(values).map { Row(it, it.id == selectedId) }, committed)
     }
 
     /** TV-003/TV-004: apply per-category item counts without resubmitting the list (keeps focus/scroll). */
@@ -114,11 +118,38 @@ class CategoryAdapter(
     inner class Holder(private val binding: ItemCategoryBinding) : RecyclerView.ViewHolder(binding.root) {
         fun bind(row: Row) {
             val value = row.category
+            val search = value.id == CATEGORY_SEARCH_ID
+            val customGroup = value.id.startsWith(CUSTOM_GROUP_CATEGORY_PREFIX)
+            val deviceClass = binding.root.context.deviceClass()
             binding.categoryName.text = value.name
             binding.categoryName.ellipsize = TextUtils.TruncateAt.END
             binding.categoryName.maxLines = 1
             binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
-            binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
+            binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(
+                when {
+                    search -> R.drawable.ic_nav_search
+                    customGroup -> R.drawable.ic_custom_group
+                    else -> 0
+                },
+                0,
+                0,
+                0,
+            )
+            binding.categoryName.compoundDrawablePadding = if (search || customGroup) {
+                (8 * binding.root.resources.displayMetrics.density).toInt()
+            } else 0
+            if (deviceClass == DeviceClass.TABLET) {
+                val density = binding.root.resources.displayMetrics.density
+                binding.root.layoutParams = binding.root.layoutParams.apply { height = (44 * density).toInt() }
+                (binding.root.layoutParams as? ViewGroup.MarginLayoutParams)?.marginEnd = (6 * density).toInt()
+                binding.categoryName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                binding.categoryName.setPadding((10 * density).toInt(), 0, (10 * density).toInt(), 0)
+                binding.categoryCount.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                binding.categoryActions.layoutParams = binding.categoryActions.layoutParams.apply {
+                    width = (44 * density).toInt()
+                    height = (44 * density).toInt()
+                }
+            }
             val count = counts[value.id]?.takeIf {
                 it > 0 && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             }
@@ -129,16 +160,19 @@ class CategoryAdapter(
             binding.root.nextFocusLeftId = if (
                 binding.root.context.appLayout() != AppLayout.TELEVISION && bindingAdapterPosition == 0
             ) R.id.category_menu_button else View.NO_ID
-            binding.categoryActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
+            binding.categoryActions.isVisible = !search && binding.root.context.appLayout() != AppLayout.TELEVISION && value.id != "all" && value.id != "favorites" && !value.id.startsWith("season:")
             binding.categoryActions.contentDescription = binding.root.context.getString(R.string.options_for, value.name)
             binding.categoryActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
-            binding.root.setOnLongClickListener { onLongClick(value); true }
+            binding.root.setOnLongClickListener {
+                if (!search) onLongClick(value)
+                true
+            }
             binding.root.setOnKeyListener { view, keyCode, event ->
                 val position = bindingAdapterPosition
                 if (position != RecyclerView.NO_POSITION && onDpad(view, position, keyCode, event)) {
                     true
-                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
+                } else if (keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP && !search && value.id !in setOf("all", "favorites") && !value.id.startsWith("season:")) {
                     onLongClick(value)
                     true
                 } else false
@@ -148,12 +182,18 @@ class CategoryAdapter(
     }
 }
 
+internal const val CATEGORY_SEARCH_ID = "__search__"
+internal const val CUSTOM_GROUP_CATEGORY_PREFIX = "custom_group:"
+
 class CatalogAdapter(
     private val onClick: (CatalogCard) -> Unit,
     private val onLongClick: (CatalogCard) -> Unit,
     private val onDpad: (View, Int, Int, KeyEvent) -> Boolean = { _, _, _, _ -> false },
+    private val onPreviewFocusChanged: (CatalogCard, View, InlineLivePreviewView, Boolean) -> Unit = { _, _, _, _ -> },
+    private val onPreviewHostAvailability: (CatalogCard, View, InlineLivePreviewView, Boolean) -> Unit = { _, _, _, _ -> },
 ) : RecyclerView.Adapter<CatalogAdapter.Holder>() {
     private var uniformLandscapeCards = false
+    private var liveChannelNavigation = false
     private val differ = AsyncListDiffer(this, object : DiffUtil.ItemCallback<CatalogCard>() {
         override fun areItemsTheSame(oldItem: CatalogCard, newItem: CatalogCard) = oldItem.id == newItem.id && oldItem.kind == newItem.kind
         override fun areContentsTheSame(oldItem: CatalogCard, newItem: CatalogCard) = oldItem == newItem
@@ -165,6 +205,11 @@ class CatalogAdapter(
         uniformLandscapeCards = enabled
         notifyItemRangeChanged(0, itemCount)
     }
+    fun setLiveChannelNavigation(enabled: Boolean) {
+        if (liveChannelNavigation == enabled) return
+        liveChannelNavigation = enabled
+        notifyItemRangeChanged(0, itemCount)
+    }
     fun submit(values: List<CatalogCard>, committed: (() -> Unit)? = null) = differ.submitList(values, committed)
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(ItemContentBinding.inflate(LayoutInflater.from(parent.context), parent, false))
     override fun getItemCount() = differ.currentList.size
@@ -172,10 +217,18 @@ class CatalogAdapter(
 
     inner class Holder(private val binding: ItemContentBinding) : RecyclerView.ViewHolder(binding.root) {
         private var optionsOpenedFromKey = false
+        private var boundCard: CatalogCard? = null
 
         fun bind(value: CatalogCard) {
+            boundCard?.let { previous ->
+                onPreviewHostAvailability(previous, binding.root, binding.inlinePreview, false)
+            }
+            binding.inlinePreview.clearPreviewSurface()
+            boundCard = value
             optionsOpenedFromKey = false
-            binding.title.text = value.title
+            binding.title.text = if (liveChannelNavigation) {
+                value.channelNumber?.let { "$it  |  ${value.title}" } ?: value.title
+            } else value.title
             binding.meta.text = value.meta
             binding.badge.text = value.badge
             binding.badge.visibility = if (value.badge.isBlank()) View.GONE else View.VISIBLE
@@ -193,7 +246,40 @@ class CatalogAdapter(
             val artworkHeightDp = if (poster) 220 else if (television) 118 else 104
             val artworkHeight = (artworkHeightDp * binding.root.resources.displayMetrics.density).toInt()
             val artworkContainer = binding.artwork.parent as View
-            artworkContainer.layoutParams = artworkContainer.layoutParams.apply { height = artworkHeight }
+            artworkContainer.isVisible = !liveChannelNavigation
+            artworkContainer.layoutParams = artworkContainer.layoutParams.apply { height = if (liveChannelNavigation) 0 else artworkHeight }
+            binding.meta.isVisible = !liveChannelNavigation
+            binding.badge.isVisible = !liveChannelNavigation && value.badge.isNotBlank()
+            if (liveChannelNavigation) {
+                val density = binding.root.resources.displayMetrics.density
+                (binding.root.layoutParams as? ViewGroup.MarginLayoutParams)?.apply {
+                    marginStart = (4 * density).toInt()
+                    marginEnd = (4 * density).toInt()
+                    topMargin = (3 * density).toInt()
+                    bottomMargin = (3 * density).toInt()
+                }
+                binding.root.radius = 8 * density
+                binding.title.minHeight = (42 * density).toInt()
+                binding.title.maxLines = 1
+                binding.title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                binding.title.setPadding((11 * density).toInt(), 0, (11 * density).toInt(), 0)
+                binding.title.gravity = android.view.Gravity.CENTER_VERTICAL
+            } else {
+                val density = binding.root.resources.displayMetrics.density
+                val margin = ((if (television) 8 else 6) * density).toInt()
+                (binding.root.layoutParams as? ViewGroup.MarginLayoutParams)?.setMargins(margin, margin, margin, margin)
+                binding.root.radius = 14 * density
+                binding.title.minHeight = if (television) 0 else (46 * density).toInt()
+                binding.title.maxLines = if (television) 1 else 2
+                binding.title.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (television) 17f else 14f)
+                binding.title.setPadding(
+                    ((if (television) 12 else 10) * density).toInt(),
+                    ((if (television) 11 else 8) * density).toInt(),
+                    ((if (television) 12 else 10) * density).toInt(),
+                    0,
+                )
+                binding.title.gravity = android.view.Gravity.NO_GRAVITY
+            }
             val artworkDensity = binding.root.resources.displayMetrics.density
             val brandInset = (12 * artworkDensity).toInt()
             val tileInset = (8 * artworkDensity).toInt()
@@ -240,7 +326,7 @@ class CatalogAdapter(
                 )
             }
             binding.root.contentDescription = listOf(value.title, value.meta, value.badge).filter { it.isNotBlank() }.joinToString(", ")
-            binding.moreActions.isVisible = binding.root.context.appLayout() != AppLayout.TELEVISION && value.kind != "home"
+            binding.moreActions.isVisible = !liveChannelNavigation && binding.root.context.appLayout() != AppLayout.TELEVISION && value.kind != "home"
             binding.moreActions.contentDescription = binding.root.context.getString(R.string.options_for, value.title)
             binding.moreActions.setOnClickListener { onLongClick(value) }
             binding.root.setOnClickListener { onClick(value) }
@@ -286,6 +372,9 @@ class CatalogAdapter(
             binding.root.setOnFocusChangeListener { _, focused ->
                 if (!focused) optionsOpenedFromKey = false
                 applyEmphasis(focused)
+                if ((television || liveChannelNavigation) && value.kind == "live") {
+                    onPreviewFocusChanged(value, binding.root, binding.inlinePreview, focused)
+                }
             }
             binding.root.setOnHoverListener { _, event ->
                 when (event.actionMasked) {
@@ -298,6 +387,18 @@ class CatalogAdapter(
             // listener. Synchronize the visual state immediately so the first focused tile never
             // appears with its resting border until the user moves the remote.
             applyEmphasis(binding.root.hasFocus())
+            if ((television || liveChannelNavigation) && binding.root.hasFocus() && value.kind == "live") {
+                onPreviewFocusChanged(value, binding.root, binding.inlinePreview, true)
+            }
+            if (binding.root.isAttachedToWindow && value.kind == "live") {
+                onPreviewHostAvailability(value, binding.root, binding.inlinePreview, true)
+            }
+        }
+
+        fun previewHostAvailability(available: Boolean) {
+            boundCard?.takeIf { it.kind == "live" }?.let { card ->
+                onPreviewHostAvailability(card, binding.root, binding.inlinePreview, available)
+            }
         }
 
         private fun applyEmphasis(emphasized: Boolean) {
@@ -326,7 +427,22 @@ class CatalogAdapter(
             binding.root.strokeWidth = ((if (emphasized) 3 else 1) * density).toInt().coerceAtLeast(1)
         }
 
-        fun recycle() = binding.artwork.dispose()
+        fun recycle() {
+            previewHostAvailability(false)
+            binding.inlinePreview.clearPreviewSurface()
+            binding.artwork.dispose()
+            boundCard = null
+        }
+    }
+
+    override fun onViewAttachedToWindow(holder: Holder) {
+        super.onViewAttachedToWindow(holder)
+        holder.previewHostAvailability(true)
+    }
+
+    override fun onViewDetachedFromWindow(holder: Holder) {
+        holder.previewHostAvailability(false)
+        super.onViewDetachedFromWindow(holder)
     }
 
     override fun onViewRecycled(holder: Holder) {

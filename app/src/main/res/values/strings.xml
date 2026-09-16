@@ -87,6 +87,17 @@
     <string name="loading_programme_guide">Loading programme guide…</string>
     <string name="epg_unavailable">EPG unavailable</string>
     <string name="play_channel">Play channel</string>
+    <string name="favourite">Favourite</string>
+    <string name="add_to_group">Add to Group</string>
+    <string name="remove_favourite">Remove Favourite</string>
+    <string name="category_search_title">Search categories</string>
+    <string name="category_search_hint">Category name</string>
+    <string name="category_search_active">Search: %1$s</string>
+    <string name="create_group">Create new group</string>
+    <string name="new_group_name">Group name</string>
+    <string name="no_matching_categories">No matching categories</string>
+    <string name="channel_preview_loading">Starting muted preview…</string>
+    <string name="channel_epg_loading">Loading programme information…</string>
     <string name="now">Now</string>
     <string name="next">Next</string>
     <string name="catch_up_badge">CATCH UP</string>

@@ -8,6 +8,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.EditText
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -33,6 +35,7 @@ import kotlinx.coroutines.runBlocking
 import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamItem
+import uk.crownmedia.data.xtream.XtreamCategory
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -105,6 +108,10 @@ class PostLoginMobileUiTest {
         assertEquals((48 * density).toInt(), categoryAction.layoutParams.width)
         assertEquals((48 * density).toInt(), categoryAction.layoutParams.height)
         assertTrue(activity.findViewById<View>(R.id.side_nav).isShown)
+        val preview = card.findViewById<View>(R.id.inline_preview)
+        assertEquals(View.GONE, preview.visibility)
+        assertFalse(preview.isFocusable)
+        assertFalse(preview.isClickable)
     }
 
     @Test
@@ -277,16 +284,22 @@ class PostLoginMobileUiTest {
     fun searchAndCategoryRowsHaveIndependentVerticalSpace() {
         val density = activity.resources.displayMetrics.density
         val categoryBar = activity.findViewById<ViewGroup>(R.id.category_bar)
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
+        val categoryStrip = activity.findViewById<ViewGroup>(R.id.category_strip)
         val menu = activity.findViewById<View>(R.id.category_menu_button)
         val categories = activity.findViewById<RecyclerView>(R.id.category_list)
         val state = activity.findViewById<View>(R.id.state_panel)
 
         assertEquals((4 * density).toInt(), (categoryBar.layoutParams as ViewGroup.MarginLayoutParams).topMargin)
-        assertEquals((56 * density).toInt(), categoryBar.layoutParams.height)
-        assertEquals(categoryBar, menu.parent)
-        assertEquals(categoryBar, categories.parent)
-        assertEquals(0, categoryBar.indexOfChild(menu))
-        assertEquals(1, categoryBar.indexOfChild(categories))
+        assertEquals((104 * density).toInt(), categoryBar.layoutParams.height)
+        assertEquals(categoryBar, categorySearch.parent)
+        assertEquals(categoryBar, categoryStrip.parent)
+        assertEquals(categoryStrip, menu.parent)
+        assertEquals(categoryStrip, categories.parent)
+        assertEquals(0, categoryBar.indexOfChild(categorySearch))
+        assertEquals(1, categoryBar.indexOfChild(categoryStrip))
+        assertEquals(0, categoryStrip.indexOfChild(menu))
+        assertEquals(1, categoryStrip.indexOfChild(categories))
         assertEquals(RecyclerView.HORIZONTAL, (categories.layoutManager as LinearLayoutManager).orientation)
         assertEquals(R.id.category_bar, (state.layoutParams as ConstraintLayout.LayoutParams).topToBottom)
     }
@@ -309,6 +322,87 @@ class PostLoginMobileUiTest {
     }
 
     @Test
+    @Config(qualifiers = "sw700dp-port")
+    fun tabletCategoryNavigationIsCompactAndReusesScopedSearch() {
+        val playlist = requireNotNull(testStore.selected())
+        runBlocking {
+            val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+            cache.saveCategories(
+                playlist.id,
+                "live",
+                listOf(XtreamCategory("sports", "UK Sports"), XtreamCategory("news", "Sky News")),
+            )
+            testStore.markCatalogRefreshed(playlist.id, "live", null)
+        }
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list)
+        categories.measure(
+            View.MeasureSpec.makeMeasureSpec(700, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(48, View.MeasureSpec.EXACTLY),
+        )
+        categories.layout(0, 0, 700, 48)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        val input = activity.findViewById<EditText>(R.id.category_search_box)
+        assertTrue(input.isShown)
+        assertEquals((44 * activity.resources.displayMetrics.density).toInt(), input.layoutParams.height)
+        assertFalse(activity.findViewById<EditText>(R.id.search_box).hasFocus())
+        input.setText("news")
+        shadowOf(Looper.getMainLooper()).idle()
+        val adapter = categories.adapter as CategoryAdapter
+        awaitCategoryAdapter("tablet count=${adapter.itemCount}") {
+            adapter.positionOf("news") >= 0 && adapter.positionOf("sports") == -1
+        }
+        assertTrue(adapter.positionOf("news") >= 0)
+        assertEquals(-1, adapter.positionOf("sports"))
+        val actions = activity.findViewById<LinearLayout>(R.id.live_channel_actions)
+        assertEquals(LinearLayout.VERTICAL, actions.orientation)
+        listOf(R.id.live_channel_play, R.id.live_channel_favourite, R.id.live_channel_group).forEach { id ->
+            val params = activity.findViewById<Button>(id).layoutParams as LinearLayout.LayoutParams
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, params.width)
+            assertEquals((44 * activity.resources.displayMetrics.density).toInt(), params.height)
+            assertEquals(0f, params.weight, 0f)
+        }
+    }
+
+    @Test
+    fun phoneCategorySearchFiltersLiveMoviesAndSeriesWithoutChangingMainSearch() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        listOf("live", "movie", "series").forEach { kind ->
+            cache.saveCategories(
+                playlist.id,
+                kind,
+                listOf(XtreamCategory("$kind-sports", "Sports"), XtreamCategory("$kind-sky", "Sky $kind")),
+            )
+            testStore.markCatalogRefreshed(playlist.id, kind, null)
+        }
+        val destinations = listOf(R.id.nav_live, R.id.nav_movies, R.id.nav_series)
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
+        val mainSearch = activity.findViewById<EditText>(R.id.search_box)
+        val adapter = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
+
+        destinations.zip(listOf("live", "movie", "series")).forEach { (destination, kind) ->
+            activity.findViewById<View>(destination).performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(categorySearch.isShown)
+            awaitCategoryAdapter("$kind categories did not load") {
+                adapter.positionOf("$kind-sports") >= 0 && adapter.positionOf("$kind-sky") >= 0
+            }
+            categorySearch.setText("sky")
+            awaitCategoryAdapter("$kind filter was not applied") {
+                adapter.positionOf("$kind-sky") >= 0 && adapter.positionOf("$kind-sports") == -1
+            }
+            assertEquals("", mainSearch.text.toString())
+            categorySearch.text.clear()
+            awaitCategoryAdapter("$kind original order was not restored") {
+                adapter.positionOf("$kind-sports") in 0 until adapter.positionOf("$kind-sky")
+            }
+        }
+    }
+
+    @Test
     fun mobileNavigationReservesCountLineForEachContentType() {
         assertTrue(activity.findViewById<TextView>(R.id.nav_live).text.startsWith("Live\n("))
         assertTrue(activity.findViewById<TextView>(R.id.nav_movies).text.startsWith("Movies\n("))
@@ -326,6 +420,15 @@ class PostLoginMobileUiTest {
         assertTrue(logo.isShown)
         assertTrue(activity.findViewById<View>(R.id.side_nav).isShown)
         assertTrue(activity.findViewById<View>(R.id.content_grid).isShown)
+    }
+
+    private fun awaitCategoryAdapter(message: String, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (!condition() && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        assertTrue(message, condition())
     }
 
     private class FakeSecureStore : CrownSecureStore {
@@ -349,4 +452,10 @@ class PostLoginMobileUiTest {
         catchUp = false,
         catchUpDays = 0,
     )
+
+    private fun findEditText(view: View): EditText? {
+        if (view is EditText) return view
+        if (view !is ViewGroup) return null
+        return (0 until view.childCount).firstNotNullOfOrNull { findEditText(view.getChildAt(it)) }
+    }
 }
