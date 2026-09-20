@@ -1,25 +1,27 @@
 <resources>
-    <color name="crown_background">#07090D</color>
-    <color name="crown_surface">#111722</color>
-    <color name="crown_surface_raised">#20294A</color>
-    <color name="crown_primary">#8B63E8</color>
-    <color name="crown_primary_tv">#6840C7</color>
-    <color name="crown_primary_bright">#D36AF1</color>
-    <color name="crown_text">#F7F8FA</color>
-    <color name="crown_text_secondary">#AAB3C2</color>
-    <color name="crown_error">#FF6B6B</color>
+    <!-- Review palette: premium neutral entertainment surfaces with Crown violet identity. -->
+    <color name="crown_background">#08090C</color>
+    <color name="crown_surface">#13161C</color>
+    <color name="crown_surface_raised">#1C212B</color>
+    <color name="crown_primary">#8E63E9</color>
+    <color name="crown_primary_tv">#7550D4</color>
+    <color name="crown_primary_bright">#C96EEA</color>
+    <color name="crown_text">#F5F7FA</color>
+    <color name="crown_text_secondary">#A8B0BD</color>
+    <color name="crown_error">#FF5B64</color>
     <color name="crown_success">#59D499</color>
     <color name="crown_gold">#9A6FEB</color>
-    <color name="crown_border">#3A4268</color>
+    <color name="crown_border">#303743</color>
+    <color name="crown_entertainment_red">#E5093D</color>
     <!-- Restrained content accents: section identity without replacing Crown violet/pink. -->
-    <color name="crown_accent_live">#FF6F7D</color>
+    <color name="crown_accent_live">#E5485D</color>
     <color name="crown_accent_movies">#F2B75D</color>
     <color name="crown_accent_series">#55C7B5</color>
     <color name="crown_accent_guide">#58BCE8</color>
     <color name="crown_accent_favourites">#F2C75C</color>
     <color name="crown_accent_catch_up">#62D49D</color>
     <color name="crown_accent_manage">#A98CF3</color>
-    <color name="crown_icon_canvas">#101522</color>
-    <color name="crown_icon_layer">#19233A</color>
+    <color name="crown_icon_canvas">#101218</color>
+    <color name="crown_icon_layer">#1A1F29</color>
     <color name="white">#FFFFFF</color>
 </resources>

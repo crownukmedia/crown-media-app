@@ -70,6 +70,7 @@ import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.design.StreamAvailability
 import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamCategory
+import uk.crownmedia.data.xtream.XtreamCastMember
 import uk.crownmedia.data.xtream.XtreamClient
 import uk.crownmedia.data.xtream.XtreamItem
 import uk.crownmedia.data.xtream.XtreamProgramme
@@ -2142,6 +2143,20 @@ class MainActivity : AppCompatActivity() {
         ).joinToString("  •  ")
     }
 
+    private fun epgDetailsSummary(entries: List<XtreamProgramme>, providerTimezone: String?): String {
+        val now = System.currentTimeMillis() / 1000
+        val current = entries.firstOrNull(::isCurrentProgramme)
+        val next = entries.firstOrNull { (it.startTimestamp ?: Long.MIN_VALUE) > now }
+        if (current == null && next == null) return getString(R.string.epg_unavailable)
+        return listOfNotNull(
+            current?.let {
+                val range = "${programmeTime(it.startTimestamp, providerTimezone)}–${programmeTime(it.stopTimestamp, providerTimezone)}"
+                listOfNotNull("${getString(R.string.now)} $range  ${it.title}", it.description?.takeIf(String::isNotBlank)).joinToString("\n")
+            },
+            next?.let { "${getString(R.string.next)} ${programmeTime(it.startTimestamp, providerTimezone)}  ${it.title}" },
+        ).joinToString("\n")
+    }
+
     private fun isCurrentProgramme(programme: XtreamProgramme): Boolean {
         val start = programme.startTimestamp ?: return false
         val stop = programme.stopTimestamp ?: return false
@@ -2482,12 +2497,27 @@ class MainActivity : AppCompatActivity() {
             placeholder(R.drawable.crown_media_logo_header)
             error(R.drawable.crown_media_logo_header)
         }
+        findViewById<ImageView>(R.id.live_channel_logo).isVisible = false
         liveChannelEpgJob?.cancel()
         liveChannelEpgJob = lifecycleScope.launch {
-            val summary = runCatching { epgSummary(epgFor(playlist, card.id), playlist.serverTimezone) }
-                .getOrElse { getString(R.string.epg_unavailable) }
+            val entries = runCatching { epgFor(playlist, card.id) }.getOrDefault(emptyList())
+            val summary = epgDetailsSummary(entries, playlist.serverTimezone)
             if (liveChannelBrowserOpen && liveChannelSelection?.id == card.id) {
                 findViewById<TextView>(R.id.live_channel_epg).text = summary
+                validRemoteImageUrl(entries.firstOrNull(::isCurrentProgramme)?.imageUrl)?.let { image ->
+                    findViewById<ImageView>(R.id.live_channel_logo).apply {
+                        isVisible = true
+                        load(card.preferredArtworkSource()) {
+                            crossfade(false)
+                            placeholder(R.drawable.crown_media_logo_header)
+                            error(R.drawable.crown_media_logo_header)
+                        }
+                    }
+                    findViewById<ImageView>(R.id.live_channel_artwork).load(image) {
+                        crossfade(true)
+                        error(card.preferredArtworkSource())
+                    }
+                }
             }
         }
         if (startPreview) {
@@ -2773,13 +2803,14 @@ class MainActivity : AppCompatActivity() {
                 if (section !in setOf(Section.MOVIES, Section.SEARCH, Section.FAVORITES) || store.selected()?.id != playlist.id) return@onSuccess
                 hideState()
                 val message = listOfNotNull(
-                    listOfNotNull(movie.year, movie.rating?.let { "★ $it" }, movie.duration, movie.genre).joinToString("  •  ").takeIf(String::isNotBlank),
-                    movie.cast?.let { "Cast\n$it" },
+                    listOfNotNull(movie.releaseDate ?: movie.year, movie.rating?.let { "★ $it" }, movie.duration).joinToString("  •  ").takeIf(String::isNotBlank),
+                    movie.genre?.let { "Genre  $it" },
+                    movie.director?.let { "Director  $it" },
+                    listOfNotNull(movie.language?.let { "Language  $it" }, movie.country?.let { "Country  $it" }).joinToString("  •  ").takeIf(String::isNotBlank),
                     movie.plot,
                 ).joinToString("\n\n")
                 val builder = AlertDialog.Builder(this@MainActivity).setTitle(movie.name)
-                if (isTelevisionLayout()) builder.setView(contentDetailsView(card, message))
-                else builder.setMessage(message.ifBlank { "No metadata supplied." })
+                builder.setView(contentDetailsView(card.copy(imageUrl = movie.imageUrl ?: card.imageUrl), message, movie.backdropUrl, movie.castMembers))
                 builder
                     .setPositiveButton("Play") { _, _ -> play(card.copy(extension = movie.extension), false) }
                     .setNeutralButton(if (movie.trailer.isNullOrBlank()) "Favorite" else "Trailer") { _, _ ->
@@ -2816,8 +2847,7 @@ class MainActivity : AppCompatActivity() {
         hideState()
         if (details.episodes.values.all { it.isEmpty() }) {
             val builder = AlertDialog.Builder(this).setTitle(details.name)
-            if (isTelevisionLayout()) builder.setView(contentDetailsView(card, details.plot ?: "No episodes supplied."))
-            else builder.setMessage(details.plot ?: "No episodes supplied.")
+            builder.setView(contentDetailsView(card.copy(imageUrl = details.cover ?: card.imageUrl), seriesMetadata(details).ifBlank { "No episodes supplied." }, details.backdrop, details.castMembers))
             builder.setPositiveButton("Close", null).showCrown()
             return
         }
@@ -2826,21 +2856,19 @@ class MainActivity : AppCompatActivity() {
             nestedSeries = SeriesDetailState(card, details, details.episodes.keys.minOrNull() ?: 1)
             renderSeriesDetails()
         }
-        if (isTelevisionLayout()) {
-            AlertDialog.Builder(this)
-                .setTitle(details.name)
-                .setView(contentDetailsView(card, listOfNotNull(details.genre, details.plot).joinToString("\n\n")))
-                .setPositiveButton("Browse episodes") { _, _ -> openEpisodes() }
-                .setNegativeButton("Back", null)
-                .showCrown()
-        } else openEpisodes()
+        AlertDialog.Builder(this)
+            .setTitle(details.name)
+            .setView(contentDetailsView(card.copy(imageUrl = details.cover ?: card.imageUrl), seriesMetadata(details), details.backdrop, details.castMembers))
+            .setPositiveButton("Browse episodes") { _, _ -> openEpisodes() }
+            .setNegativeButton("Back", null)
+            .showCrown()
     }
 
     private fun renderSeriesDetails() {
         val nested = nestedSeries ?: return
         val seasons = nested.details.episodes.keys.sorted().map { XtreamCategory("season:$it", "Season $it") }
         val episodes = nested.details.episodes[nested.season].orEmpty().sortedBy { it.episodeNumber }.map { episode ->
-            val meta = listOf("S${nested.season} E${episode.episodeNumber}", episode.duration).filterNotNull().filter(String::isNotBlank).joinToString(" • ")
+            val meta = listOf("S${nested.season} E${episode.episodeNumber}", episode.releaseDate, episode.rating?.let { "★ $it" }, episode.duration).filterNotNull().filter(String::isNotBlank).joinToString(" • ")
             CatalogCard(episode.id, "episode", episode.title, episode.imageUrl, meta, "S${nested.season}", episode.extension)
         }
         binding.screenTitle.text = nested.details.name
@@ -2996,9 +3024,42 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun contentDetailsView(card: CatalogCard, body: String): View {
+    private fun seriesMetadata(details: XtreamSeriesDetails): String = listOfNotNull(
+        listOfNotNull(details.releaseDate, details.rating?.let { "★ $it" }, details.duration).joinToString("  •  ").takeIf(String::isNotBlank),
+        details.genre?.let { "Genre  $it" },
+        details.director?.let { "Director  $it" },
+        listOfNotNull(details.language?.let { "Language  $it" }, details.country?.let { "Country  $it" }).joinToString("  •  ").takeIf(String::isNotBlank),
+        details.plot,
+    ).joinToString("\n\n")
+
+    private fun contentDetailsView(
+        card: CatalogCard,
+        body: String,
+        backdropUrl: String? = null,
+        castMembers: List<XtreamCastMember> = emptyList(),
+    ): View {
         val view = layoutInflater.inflate(R.layout.dialog_content_details, FrameLayout(this), false)
         view.findViewById<TextView>(R.id.detail_body).text = body.ifBlank { "No metadata supplied." }
+        val validBackdrop = validRemoteImageUrl(backdropUrl)
+        view.findViewById<ImageView>(R.id.detail_backdrop).apply {
+            isVisible = validBackdrop != null
+            if (isVisible) load(validBackdrop) { crossfade(true); error(null) }
+        }
+        val castContainer = view.findViewById<LinearLayout>(R.id.detail_cast)
+        castMembers.forEach { member ->
+            val item = layoutInflater.inflate(R.layout.item_cast_member, castContainer, false)
+            item.findViewById<TextView>(R.id.cast_name).text = member.name
+            validRemoteImageUrl(member.imageUrl)?.let { imageUrl ->
+                item.findViewById<ImageView>(R.id.cast_image).apply {
+                    isVisible = true
+                    load(imageUrl) { crossfade(true); error(null) }
+                }
+            }
+            castContainer.addView(item)
+        }
+        val hasCast = castMembers.isNotEmpty()
+        view.findViewById<View>(R.id.detail_cast_label).isVisible = hasCast
+        view.findViewById<View>(R.id.detail_cast_scroll).isVisible = hasCast
         val artwork = view.findViewById<ImageView>(R.id.detail_artwork)
         val source = card.preferredArtworkSource()
         val inset = (12 * resources.displayMetrics.density).toInt()
@@ -3007,22 +3068,27 @@ class MainActivity : AppCompatActivity() {
             artwork.setPadding(inset, inset, inset, inset)
         }
         showBrand()
-        artwork.load(source) {
-            placeholder(R.drawable.crown_media_logo_header)
-            error(R.drawable.crown_media_logo_header)
-            crossfade(false)
-            listener(
-                onSuccess = { _, _ ->
-                    if (source == R.drawable.crown_media_logo_header) showBrand()
-                    else {
+        if (source is Int) {
+            artwork.setImageResource(source)
+        } else {
+            artwork.load(source) {
+                placeholder(R.drawable.crown_media_logo_header)
+                error(R.drawable.crown_media_logo_header)
+                crossfade(false)
+                listener(
+                    onSuccess = { _, _ ->
                         artwork.scaleType = if (card.kind == "live") ImageView.ScaleType.CENTER_INSIDE else ImageView.ScaleType.CENTER_CROP
                         artwork.setPadding(0, 0, 0, 0)
-                    }
-                },
-                onError = { _, _ -> showBrand() },
-            )
+                    },
+                    onError = { _, _ -> showBrand() },
+                )
+            }
         }
         return view
+    }
+
+    private fun validRemoteImageUrl(value: String?): String? = value?.trim()?.takeIf { candidate ->
+        runCatching { Uri.parse(candidate) }.getOrNull()?.scheme?.lowercase() in setOf("http", "https")
     }
 
     private fun search(query: String) {

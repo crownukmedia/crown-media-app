@@ -155,6 +155,8 @@ class TvUiRegressionTest {
         shadowOf(Looper.getMainLooper()).idle()
 
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.live_channel_details).visibility)
+        assertNotNull(activity.findViewById<ImageView>(R.id.live_channel_logo))
+        assertEquals(4, activity.findViewById<TextView>(R.id.live_channel_epg).maxLines)
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.side_nav).visibility)
         assertEquals(dp(72), activity.findViewById<View>(R.id.side_nav).layoutParams.width)
         assertEquals(1, (grid.layoutManager as GridLayoutManager).spanCount)

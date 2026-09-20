@@ -4,6 +4,8 @@ import android.content.Intent
 import android.view.KeyEvent
 import android.view.View
 import androidx.media3.common.Player
+import androidx.media3.common.C
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import org.junit.After
@@ -62,6 +64,10 @@ class PlayerLaunchRegressionTest {
                 .get(activity) as Player
             assertEquals(PlayerActivity.SEEK_INCREMENT_MS, player.seekBackIncrement)
             assertEquals(PlayerActivity.SEEK_INCREMENT_MS, player.seekForwardIncrement)
+            val selector = PlayerActivity::class.java.getDeclaredField("trackSelector").apply { isAccessible = true }
+                .get(activity) as DefaultTrackSelector
+            assertFalse(selector.parameters.disabledTrackTypes.contains(C.TRACK_TYPE_AUDIO))
+            assertEquals(View.GONE, activity!!.findViewById<View>(R.id.audio_tracks).visibility)
             activity!!.onBackPressedDispatcher.onBackPressed()
             assertTrue(activity!!.isFinishing)
             controller.pause().stop().destroy()

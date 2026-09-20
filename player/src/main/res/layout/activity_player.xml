@@ -4,7 +4,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#05070B"
+    android:background="#08090C"
     tools:viewBindingIgnore="true">
 
     <androidx.media3.ui.PlayerView
@@ -12,6 +12,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:keepScreenOn="true"
+        android:nextFocusUp="@id/audio_tracks"
         app:show_buffering="never"
         app:show_subtitle_button="true"
         app:use_controller="true" />
@@ -29,11 +30,22 @@
         android:textSize="18sp"
         android:textStyle="bold" />
 
+    <Button
+        android:id="@+id/audio_tracks"
+        android:layout_width="wrap_content"
+        android:layout_height="48dp"
+        android:layout_gravity="top|end"
+        android:layout_margin="24dp"
+        android:minWidth="96dp"
+        android:nextFocusDown="@id/player_view"
+        android:text="@string/audio_tracks_action"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/playback_loading"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#6605070B"
+        android:background="#6608090C"
         android:gravity="center"
         android:orientation="vertical"
         android:importantForAccessibility="yes"
@@ -59,7 +71,7 @@
         android:id="@+id/playback_error"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#DD05070B"
+        android:background="#DD08090C"
         android:focusable="true"
         android:gravity="center"
         android:orientation="vertical"
@@ -80,7 +92,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:gravity="center"
-            android:textColor="#C7CBD6"
+            android:textColor="#A8B0BD"
             android:textSize="15sp" />
 
         <LinearLayout
