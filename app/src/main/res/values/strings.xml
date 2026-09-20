@@ -88,10 +88,6 @@
     <string name="loading_programme_guide">Loading programme guide…</string>
     <string name="epg_unavailable">EPG unavailable</string>
     <string name="play_channel">Play channel</string>
-    <string name="open_programme_guide">Open guide</string>
-    <string name="open_catch_up">Browse Catch Up</string>
-    <string name="tv_guide">TV Guide</string>
-    <string name="favourite_channel">Favourite channel</string>
     <string name="favourite">Favourite</string>
     <string name="add_to_group">Add to Group</string>
     <string name="remove_favourite">Remove Favourite</string>
