@@ -21,6 +21,7 @@ import com.google.android.material.card.MaterialCardView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -112,6 +113,7 @@ class PostLoginMobileUiTest {
         assertEquals(View.GONE, preview.visibility)
         assertFalse(preview.isFocusable)
         assertFalse(preview.isClickable)
+        assertNull(activity.findViewById<View>(R.id.live_preview_audio_toggle))
     }
 
     @Test

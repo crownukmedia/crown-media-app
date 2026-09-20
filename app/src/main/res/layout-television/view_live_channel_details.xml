@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/live_channel_details"
     android:layout_width="0dp"
     android:layout_height="0dp"
@@ -29,6 +31,30 @@
             android:id="@+id/live_channel_preview"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+        <androidx.appcompat.widget.AppCompatButton
+            android:id="@+id/live_preview_audio_toggle"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_gravity="start|bottom"
+            android:layout_margin="14dp"
+            android:background="@drawable/bg_chip_tv"
+            android:contentDescription="@string/unmute_live_preview"
+            android:drawableStart="@drawable/ic_volume_off"
+            android:drawablePadding="8dp"
+            android:focusable="true"
+            android:gravity="center"
+            android:minWidth="118dp"
+            android:paddingStart="14dp"
+            android:paddingEnd="16dp"
+            android:text="@string/unmute"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            app:backgroundTint="@null"
+            app:drawableTint="@color/white"
+            tools:ignore="InconsistentLayout" />
 
         <ImageView android:id="@+id/live_channel_logo" android:layout_width="64dp" android:layout_height="64dp" android:layout_gravity="end|bottom" android:layout_margin="14dp" android:background="@drawable/bg_logo_surface" android:contentDescription="@null" android:padding="6dp" android:scaleType="fitCenter" android:visibility="gone" />
     </FrameLayout>
