@@ -9,12 +9,4 @@
     <string name="retry_playback">Retry</string>
     <string name="back_to_channels">Back to channels</string>
     <string name="back_to_content">Back to content</string>
-    <string name="audio_tracks_title">Audio / Language</string>
-    <string name="audio_tracks_action">Audio</string>
-    <string name="audio_track_default">Original audio</string>
-    <string name="audio_channels">%1$d channels</string>
-    <string name="no_audio_track">This stream does not contain an audio track.</string>
-    <string name="unsupported_audio_track">This device cannot decode the available audio format (%1$s). Try an external player.</string>
-    <string name="unknown_audio_format">unknown format</string>
-    <string name="open_external_player">Open external player</string>
 </resources>

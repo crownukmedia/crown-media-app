@@ -67,7 +67,7 @@ class PlayerLaunchRegressionTest {
             val selector = PlayerActivity::class.java.getDeclaredField("trackSelector").apply { isAccessible = true }
                 .get(activity) as DefaultTrackSelector
             assertFalse(selector.parameters.disabledTrackTypes.contains(C.TRACK_TYPE_AUDIO))
-            assertEquals(View.GONE, activity!!.findViewById<View>(R.id.audio_tracks).visibility)
+            assertNotNull(playerView.findViewById<View>(androidx.media3.ui.R.id.exo_settings))
             activity!!.onBackPressedDispatcher.onBackPressed()
             assertTrue(activity!!.isFinishing)
             controller.pause().stop().destroy()

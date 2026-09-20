@@ -129,6 +129,49 @@ class PostLoginMobileUiTest {
     }
 
     @Test
+    fun catchUpUsesModernScopedCategorySearchWithoutForcingDesktopDetailsOnPhone() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.saveCategories(
+            playlist.id,
+            "live",
+            listOf(XtreamCategory("news", "News"), XtreamCategory("sports", "Sports")),
+        )
+        cache.saveItems(
+            playlist.id,
+            "live",
+            null,
+            listOf(
+                searchItem("news-archive", "News archive").copy(
+                    categoryId = "news", extension = "ts", catchUp = true, catchUpDays = 7,
+                ),
+                searchItem("sports-archive", "Sports archive").copy(
+                    categoryId = "sports", extension = "ts", catchUp = true, catchUpDays = 3,
+                ),
+            ),
+        )
+        testStore.markCatalogRefreshed(playlist.id, "live", null)
+
+        openHomeFeature("catch_up")
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        waitForCardCount(grid, 2)
+        awaitCategoryAdapter("Catch-Up categories did not load") {
+            val adapter = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
+            adapter.positionOf("news") >= 0 && adapter.positionOf("sports") >= 0
+        }
+
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
+        assertTrue(categorySearch.isShown)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.live_channel_details).visibility)
+        categorySearch.setText("sports")
+        awaitCategoryAdapter("Catch-Up category search was not applied") {
+            categories.positionOf("sports") >= 0 && categories.positionOf("news") == -1
+        }
+        assertEquals(-1, categories.positionOf("news"))
+    }
+
+    @Test
     fun homeTileAccentPreservesResponsiveMobileArtworkGeometry() {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         shadowOf(Looper.getMainLooper()).idle()
@@ -332,6 +375,16 @@ class PostLoginMobileUiTest {
                 "live",
                 listOf(XtreamCategory("sports", "UK Sports"), XtreamCategory("news", "Sky News")),
             )
+            cache.saveItems(
+                playlist.id,
+                "live",
+                null,
+                listOf(
+                    searchItem("tablet-archive", "Tablet archive").copy(
+                        categoryId = "sports", extension = "ts", catchUp = true, catchUpDays = 7,
+                    ),
+                ),
+            )
             testStore.markCatalogRefreshed(playlist.id, "live", null)
         }
         activity.findViewById<View>(R.id.nav_live).performClick()
@@ -364,6 +417,17 @@ class PostLoginMobileUiTest {
             assertEquals((44 * activity.resources.displayMetrics.density).toInt(), params.height)
             assertEquals(0f, params.weight, 0f)
         }
+
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        openHomeFeature("catch_up")
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        awaitCategoryAdapter("Tablet Catch-Up channel browser did not open") {
+            (grid.adapter as CatalogAdapter).currentItems.singleOrNull()?.id == "tablet-archive" &&
+                activity.findViewById<View>(R.id.live_channel_details).visibility == View.VISIBLE
+        }
+        assertEquals(1, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals("Browse Catch Up", activity.findViewById<Button>(R.id.live_channel_play).text.toString())
     }
 
     @Test

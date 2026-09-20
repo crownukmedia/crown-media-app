@@ -12,19 +12,15 @@ import android.view.KeyEvent
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.media3.common.C
 import androidx.media3.common.AudioAttributes
-import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.TrackSelectionOverride
-import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -40,7 +36,6 @@ import okhttp3.OkHttpClient
 import uk.crownmedia.core.design.StreamAvailability
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
-import java.util.Locale
 
 @UnstableApi
 class PlayerActivity : AppCompatActivity() {
@@ -52,7 +47,6 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var playbackLoadingMessage: TextView
     private lateinit var playbackRetry: Button
     private lateinit var playbackBack: Button
-    private lateinit var audioTracks: Button
     private lateinit var availability: StreamAvailability
     private var player: ExoPlayer? = null
     private var contentKey = ""
@@ -65,8 +59,6 @@ class PlayerActivity : AppCompatActivity() {
     private var isLive = false
     private var hasReachedReady = false
     private var userPaused = false
-    private var audioFallbackTriggered = false
-    private var currentAudioTracks: List<AudioTrackEntry> = emptyList()
     private var trackSelector: DefaultTrackSelector? = null
     private lateinit var recoveryPolicy: PlaybackRecoveryPolicy
     private val timeoutHandler = Handler(Looper.getMainLooper())
@@ -104,7 +96,6 @@ class PlayerActivity : AppCompatActivity() {
         playbackLoadingMessage = findViewById(R.id.playback_loading_message)
         playbackRetry = findViewById(R.id.playback_retry)
         playbackBack = findViewById(R.id.playback_back)
-        audioTracks = findViewById(R.id.audio_tracks)
         listOf(playbackRetry, playbackBack).forEach { button ->
             button.setOnFocusChangeListener { view, focused ->
                 view.animate().scaleX(if (focused) 1.03f else 1f).scaleY(if (focused) 1.03f else 1f)
@@ -119,7 +110,6 @@ class PlayerActivity : AppCompatActivity() {
         recoveryPolicy = PlaybackRecoveryPolicy(isLive)
         playbackLoadingMessage.setText(if (isLive) R.string.opening_channel else R.string.opening_video)
         playbackBack.setText(if (isLive) R.string.back_to_channels else R.string.back_to_content)
-        audioTracks.setOnClickListener { showAudioTrackSelector() }
         contentKey = hash(intent.getStringExtra(EXTRA_URL).orEmpty())
     }
 
@@ -142,12 +132,13 @@ class PlayerActivity : AppCompatActivity() {
             .setDefaultRequestProperties(mapOf("Accept" to "*/*", "Accept-Encoding" to "identity"))
         val dataSource = DefaultDataSource.Factory(this, httpDataSource)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSource)
-        val renderersFactory = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
+        val renderersFactory = DefaultRenderersFactory(this)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         val selector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
                 .setExceedAudioConstraintsIfNecessary(true)
-                .setExceedRendererCapabilitiesIfNecessary(true)
                 .build()
         }
         trackSelector = selector
@@ -182,9 +173,6 @@ class PlayerActivity : AppCompatActivity() {
             if (saved != C.TIME_UNSET) instance.seekTo(saved)
         }
         instance.addListener(object : Player.Listener {
-            override fun onTracksChanged(tracks: Tracks) {
-                handleAudioTracks(tracks)
-            }
             override fun onPlayerError(error: PlaybackException) {
                 logFailure("player_error", error)
                 if (!attemptRecovery(error.errorCode in 2000..3999, allowFallback = true)) {
@@ -245,7 +233,6 @@ class PlayerActivity : AppCompatActivity() {
             failureRecorded = false
             successRecorded = false
             fallbackAttempted = false
-            audioFallbackTriggered = false
             hasReachedReady = false
             userPaused = false
             recoveryPolicy.onStablePlayback()
@@ -287,113 +274,6 @@ class PlayerActivity : AppCompatActivity() {
         fallbackAttempted = true
         currentUrl = fallback
         return true
-    }
-
-    private fun handleAudioTracks(tracks: Tracks) {
-        val groups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-        currentAudioTracks = groups.flatMapIndexed { groupIndex, group ->
-            (0 until group.length).map { trackIndex ->
-                val format = group.getTrackFormat(trackIndex)
-                AudioTrackEntry(
-                    group = group,
-                    groupIndex = groupIndex,
-                    trackIndex = trackIndex,
-                    format = format,
-                    supported = group.isTrackSupported(trackIndex),
-                    selected = group.isTrackSelected(trackIndex),
-                )
-            }
-        }
-        audioTracks.visibility = if (currentAudioTracks.isEmpty()) View.GONE else View.VISIBLE
-        if (currentAudioTracks.isEmpty()) return
-
-        val candidates = currentAudioTracks.map { entry ->
-            AudioTrackCandidate(
-                groupIndex = entry.groupIndex,
-                trackIndex = entry.trackIndex,
-                supported = entry.supported,
-                selected = entry.selected,
-                selectionFlags = entry.format.selectionFlags,
-                language = entry.format.language,
-            )
-        }
-        val preferred = AudioTrackPolicy.preferred(candidates, Locale.getDefault().language)
-        if (preferred != null && currentAudioTracks.none { it.selected && it.supported }) {
-            selectAudioTrack(preferred.groupIndex, preferred.trackIndex)
-            return
-        }
-        if (preferred == null && isLive && !audioFallbackTriggered) {
-            audioFallbackTriggered = true
-            if (switchToFallbackUrl()) restartWithSelectedFallback()
-        }
-    }
-
-    private fun restartWithSelectedFallback() {
-        failureStage = "audio_fallback"
-        timeoutHandler.removeCallbacks(startupTimeout)
-        timeoutHandler.removeCallbacks(rebufferTimeout)
-        timeoutHandler.removeCallbacks(stablePlayback)
-        player?.stop()
-        playbackError.isVisible = false
-        playbackLoading.isVisible = true
-        playbackLoadingMessage.setText(R.string.reconnecting_channel)
-        timeoutHandler.removeCallbacks(automaticRetry)
-        timeoutHandler.post(automaticRetry)
-    }
-
-    private fun selectAudioTrack(groupIndex: Int, trackIndex: Int) {
-        val entry = currentAudioTracks.firstOrNull {
-            it.groupIndex == groupIndex && it.trackIndex == trackIndex && it.supported
-        } ?: return
-        trackSelector?.parameters = trackSelector?.buildUponParameters()
-            ?.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
-            ?.clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-            ?.setOverrideForType(TrackSelectionOverride(entry.group.mediaTrackGroup, entry.trackIndex))
-            ?.build() ?: return
-    }
-
-    private fun showAudioTrackSelector() {
-        val entries = currentAudioTracks
-        if (entries.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle(R.string.audio_tracks_title)
-                .setMessage(R.string.no_audio_track)
-                .setPositiveButton(android.R.string.ok, null)
-                .show()
-            return
-        }
-        val supported = entries.filter(AudioTrackEntry::supported)
-        if (supported.isEmpty()) {
-            val formats = entries.mapNotNull { it.format.sampleMimeType }.distinct().joinToString()
-            AlertDialog.Builder(this)
-                .setTitle(R.string.audio_tracks_title)
-                .setMessage(getString(R.string.unsupported_audio_track, formats.ifBlank { getString(R.string.unknown_audio_format) }))
-                .setPositiveButton(R.string.open_external_player) { _, _ ->
-                    launchExternal(this, currentUrl, playerTitle.text.toString(), null)
-                }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
-            return
-        }
-        val selectedIndex = supported.indexOfFirst(AudioTrackEntry::selected).coerceAtLeast(0)
-        AlertDialog.Builder(this)
-            .setTitle(R.string.audio_tracks_title)
-            .setSingleChoiceItems(supported.map(::audioTrackLabel).toTypedArray(), selectedIndex) { dialog, which ->
-                supported.getOrNull(which)?.let { selectAudioTrack(it.groupIndex, it.trackIndex) }
-                dialog.dismiss()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun audioTrackLabel(entry: AudioTrackEntry): String {
-        val language = entry.format.label?.takeIf(String::isNotBlank)
-            ?: entry.format.language?.takeIf(String::isNotBlank)?.let { code ->
-                Locale.forLanguageTag(code).getDisplayLanguage(Locale.getDefault()).takeIf(String::isNotBlank)
-            }
-            ?: getString(R.string.audio_track_default)
-        val channels = entry.format.channelCount.takeIf { it > 0 }?.let { getString(R.string.audio_channels, it) }
-        return listOfNotNull(language, channels).joinToString(" • ")
     }
 
     private fun showUnavailable(detail: String) {
@@ -482,18 +362,7 @@ class PlayerActivity : AppCompatActivity() {
         playerView.player = null
         player = null
         trackSelector = null
-        currentAudioTracks = emptyList()
-        audioTracks.visibility = View.GONE
     }
-
-    private data class AudioTrackEntry(
-        val group: Tracks.Group,
-        val groupIndex: Int,
-        val trackIndex: Int,
-        val format: Format,
-        val supported: Boolean,
-        val selected: Boolean,
-    )
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (playbackError.isVisible) return super.dispatchKeyEvent(event)
@@ -507,10 +376,6 @@ class PlayerActivity : AppCompatActivity() {
             return super.dispatchKeyEvent(event)
         }
         when (event.keyCode) {
-            KeyEvent.KEYCODE_LANGUAGE_SWITCH -> {
-                if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) showAudioTrackSelector()
-                return true
-            }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) {
                     player?.let { activePlayer ->

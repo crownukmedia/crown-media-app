@@ -434,26 +434,16 @@ class TvUiRegressionTest {
     }
 
     @Test
-    fun newHomeTilesOpenDedicatedTwoColumnSelectionHubsBeforeContent() {
+    fun favouritesHomeTileKeepsItsGroupedTwoColumnSelectionHub() {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val adapter = grid.adapter as CatalogAdapter
         val openCard = MainActivity::class.java.getDeclaredMethod("openCard", CatalogCard::class.java).apply { isAccessible = true }
 
-        listOf(
-            "epg" to "EPG / TV Guide",
-            "favorites" to "Favourites",
-            "catch_up" to "Catch Up",
-        ).forEach { (id, title) ->
-            openCard.invoke(activity, requireNotNull(adapter.currentItems.firstOrNull { it.id == id }))
-            assertEquals(title, activity.findViewById<TextView>(R.id.screen_title).text.toString())
-            assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
-            assertEquals(2, (grid.layoutManager as GridLayoutManager).spanCount)
-            assertEquals(R.id.nav_home, activity.findViewById<View>(R.id.content_grid).nextFocusLeftId)
-            activity.findViewById<View>(R.id.nav_home).performClick()
-            shadowOf(Looper.getMainLooper()).idle()
-            assertEquals(3, (grid.layoutManager as GridLayoutManager).spanCount)
-            assertEquals(9, (grid.adapter as CatalogAdapter).currentItems.size)
-        }
+        openCard.invoke(activity, requireNotNull(adapter.currentItems.firstOrNull { it.id == "favorites" }))
+        assertEquals("Favourites", activity.findViewById<TextView>(R.id.screen_title).text.toString())
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+        assertEquals(2, (grid.layoutManager as GridLayoutManager).spanCount)
+        assertEquals(R.id.nav_home, activity.findViewById<View>(R.id.content_grid).nextFocusLeftId)
     }
 
     @Test
@@ -542,7 +532,13 @@ class TvUiRegressionTest {
 
         assertEquals(listOf("live"), (grid.adapter as CatalogAdapter).currentItems.map { it.kind })
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_bar).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_search_box).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.live_channel_details).visibility)
         assertEquals(2, requireNotNull(activity.findViewById<RecyclerView>(R.id.category_list).adapter).itemCount)
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.live_channel_details).visibility)
+        assertEquals(listOf("live"), (grid.adapter as CatalogAdapter).currentItems.map { it.kind })
 
         activity.onBackPressedDispatcher.onBackPressed()
         val backDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
@@ -558,7 +554,7 @@ class TvUiRegressionTest {
     }
 
     @Test
-    fun epgAndCatchUpRequireCategorySelectionAndCatchUpOmitsUnavailableCategories() = runBlocking {
+    fun epgAndCatchUpOpenModernChannelBrowsersAndCatchUpOmitsUnavailableCategories() = runBlocking {
         val playlist = requireNotNull(testStore.selected())
         val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
         cache.deletePlaylist(playlist.id)
@@ -585,27 +581,37 @@ class TvUiRegressionTest {
 
         MainActivity::class.java.getDeclaredMethod("showHome").apply { isAccessible = true; invoke(activity) }
         openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == "epg" }))
-        waitForTitles(grid, setOf("All Live TV", "News", "No Catch Up"))
-        assertTrue((grid.adapter as CatalogAdapter).currentItems.all { it.kind == "feature_category" })
-        assertEquals(View.GONE, activity.findViewById<View>(R.id.category_bar).visibility)
+        waitForTitles(grid, setOf("Archive channel", "Plain channel"))
+        assertTrue((grid.adapter as CatalogAdapter).currentItems.all { it.kind == "live" })
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_bar).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_search_box).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.live_channel_details).visibility)
+        assertEquals("Open guide", activity.findViewById<Button>(R.id.live_channel_play).text.toString())
+        val epgCategories = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
+        assertTrue(epgCategories.positionOf("news") >= 0)
+        assertTrue(epgCategories.positionOf("empty") >= 0)
 
-        activity.onBackPressedDispatcher.onBackPressed()
+        activity.findViewById<View>(R.id.nav_home).performClick()
         val homeDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
         while ((grid.adapter as CatalogAdapter).currentItems.none { it.id == "catch_up" } && System.nanoTime() < homeDeadline) {
             shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
         }
         openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.id == "catch_up" }))
-        waitForTitles(grid, setOf("All Catch Up", "News"))
-        assertEquals(setOf("All Catch Up", "News"), (grid.adapter as CatalogAdapter).currentItems.map { it.title }.toSet())
-        assertFalse((grid.adapter as CatalogAdapter).currentItems.any { it.title == "No Catch Up" })
-
-        openCard.invoke(activity, requireNotNull((grid.adapter as CatalogAdapter).currentItems.firstOrNull { it.title == "News" }))
-        val contentDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-        while ((grid.adapter as CatalogAdapter).currentItems.singleOrNull()?.id != "archive" && System.nanoTime() < contentDeadline) {
-            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
-        }
+        waitForTitles(grid, setOf("Archive channel"))
         assertEquals(listOf("archive"), (grid.adapter as CatalogAdapter).currentItems.map { it.id })
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_bar).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.category_search_box).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.live_channel_details).visibility)
+        assertEquals("Browse Catch Up", activity.findViewById<Button>(R.id.live_channel_play).text.toString())
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
+        val categories = activity.findViewById<RecyclerView>(R.id.category_list).adapter as CategoryAdapter
+        assertTrue(categories.positionOf("news") >= 0)
+        assertEquals(-1, categories.positionOf("empty"))
+        categorySearch.setText("news")
+        waitForCategoryState("Catch-Up category filter was not applied") {
+            categories.positionOf("news") >= 0 && categories.positionOf("all") == -1
+        }
+        assertEquals(-1, categories.positionOf("all"))
     }
 
     @Test
@@ -1356,6 +1362,14 @@ class TvUiRegressionTest {
         while ((grid.adapter as CatalogAdapter).currentItems.map { it.title }.toSet() != expected && System.nanoTime() < deadline) {
             shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
         }
+    }
+
+    private fun waitForCategoryState(message: String, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (!condition() && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+        }
+        assertTrue(message, condition())
     }
 
     private fun findEditText(view: View): EditText? {
