@@ -13,7 +13,7 @@
         android:layout_height="match_parent"
         android:keepScreenOn="true"
         app:show_buffering="never"
-        app:show_subtitle_button="true"
+        app:show_subtitle_button="false"
         app:use_controller="true" />
 
     <TextView

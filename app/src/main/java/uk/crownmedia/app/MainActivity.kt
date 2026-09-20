@@ -75,7 +75,9 @@ import uk.crownmedia.data.xtream.XtreamClient
 import uk.crownmedia.data.xtream.XtreamItem
 import uk.crownmedia.data.xtream.XtreamProgramme
 import uk.crownmedia.data.xtream.XtreamSeriesDetails
+import uk.crownmedia.data.xtream.XtreamSubtitle
 import uk.crownmedia.data.xtream.preferredLiveExtension
+import uk.crownmedia.player.ExternalSubtitle
 import uk.crownmedia.player.PlayerActivity
 import uk.crownmedia.player.InlineLivePreviewController
 import uk.crownmedia.player.InlineLivePreviewView
@@ -2621,6 +2623,7 @@ class MainActivity : AppCompatActivity() {
                     card.id,
                     card.kind,
                     fallbackUrl,
+                    card.externalSubtitles,
                 ),
             )
         }
@@ -2812,7 +2815,15 @@ class MainActivity : AppCompatActivity() {
                 val builder = AlertDialog.Builder(this@MainActivity).setTitle(movie.name)
                 builder.setView(contentDetailsView(card.copy(imageUrl = movie.imageUrl ?: card.imageUrl), message, movie.backdropUrl, movie.castMembers))
                 builder
-                    .setPositiveButton("Play") { _, _ -> play(card.copy(extension = movie.extension), false) }
+                    .setPositiveButton("Play") { _, _ ->
+                        play(
+                            card.copy(
+                                extension = movie.extension,
+                                externalSubtitles = movie.subtitles.mapNotNull { it.toExternalSubtitle() },
+                            ),
+                            false,
+                        )
+                    }
                     .setNeutralButton(if (movie.trailer.isNullOrBlank()) "Favorite" else "Trailer") { _, _ ->
                         movie.trailer?.takeIf { it.isNotBlank() }?.let(::openTrailer) ?: run {
                             store.toggleFavorite(playlist.id, "movie:${card.id}")
@@ -2869,7 +2880,16 @@ class MainActivity : AppCompatActivity() {
         val seasons = nested.details.episodes.keys.sorted().map { XtreamCategory("season:$it", "Season $it") }
         val episodes = nested.details.episodes[nested.season].orEmpty().sortedBy { it.episodeNumber }.map { episode ->
             val meta = listOf("S${nested.season} E${episode.episodeNumber}", episode.releaseDate, episode.rating?.let { "★ $it" }, episode.duration).filterNotNull().filter(String::isNotBlank).joinToString(" • ")
-            CatalogCard(episode.id, "episode", episode.title, episode.imageUrl, meta, "S${nested.season}", episode.extension)
+            CatalogCard(
+                episode.id,
+                "episode",
+                episode.title,
+                episode.imageUrl,
+                meta,
+                "S${nested.season}",
+                episode.extension,
+                externalSubtitles = episode.subtitles.mapNotNull { it.toExternalSubtitle() },
+            )
         }
         binding.screenTitle.text = nested.details.name
         binding.screenSubtitle.text = listOfNotNull(nested.details.genre, "Season ${nested.season}", "Back returns to Series").joinToString("  •  ")
@@ -3031,6 +3051,15 @@ class MainActivity : AppCompatActivity() {
         listOfNotNull(details.language?.let { "Language  $it" }, details.country?.let { "Country  $it" }).joinToString("  •  ").takeIf(String::isNotBlank),
         details.plot,
     ).joinToString("\n\n")
+
+    private fun XtreamSubtitle.toExternalSubtitle(): ExternalSubtitle? = ExternalSubtitle.fromProvider(
+        uri = url,
+        format = format,
+        language = language,
+        label = label,
+        isDefault = isDefault,
+        isForced = isForced,
+    )
 
     private fun contentDetailsView(
         card: CatalogCard,

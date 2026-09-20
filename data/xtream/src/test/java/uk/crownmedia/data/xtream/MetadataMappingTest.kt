@@ -39,6 +39,32 @@ class MetadataMappingTest {
         assertEquals("8.1", series.episodes.getValue(1).single().rating)
     }
 
+    @Test fun movieMapsOnlyRealProviderSubtitleUrls() = runBlocking {
+        val client = clientFor(
+            """{"info":{"name":"Film","subtitles":[{"file":"https://cdn.example/en.srt","language":"en","label":"English"},{"url":"/subs/es.vtt","lang":"es","name":"Spanish","default":1},{"url":"file:///private/ar.srt","language":"ar"}]},"movie_data":{"container_extension":"mkv","captions":{"Arabic":"https://cdn.example/ar.ass"}}}""",
+        )
+
+        val subtitles = client.movieInfo(credentials, "7").subtitles
+
+        assertEquals(listOf("en", "es", null), subtitles.map(XtreamSubtitle::language))
+        assertEquals(listOf("English", "Spanish", "Arabic"), subtitles.map(XtreamSubtitle::label))
+        assertEquals("http://example.test/subs/es.vtt", subtitles[1].url)
+        assertTrue(subtitles[1].isDefault)
+        assertTrue(subtitles.none { it.url.startsWith("file:") })
+    }
+
+    @Test fun seriesMapsEpisodeExternalSubtitlesWithoutChangingSeriesMetadata() = runBlocking {
+        val client = clientFor(
+            """{"info":{"name":"Show"},"episodes":{"1":[{"id":9,"title":"Pilot","episode_num":1,"container_extension":"mkv","subtitle_tracks":["https://cdn.example/en.srt"],"info":{"subtitles":[{"src":"https://cdn.example/ar.vtt","language":"ar","forced":true}]}}]}}""",
+        )
+
+        val subtitles = client.seriesInfo(credentials, "8").episodes.getValue(1).single().subtitles
+
+        assertEquals(2, subtitles.size)
+        assertEquals(listOf("https://cdn.example/en.srt", "https://cdn.example/ar.vtt"), subtitles.map(XtreamSubtitle::url))
+        assertTrue(subtitles.last().isForced)
+    }
+
     @Test fun epgMapsArtworkWithoutChangingScheduleFields() = runBlocking {
         val title = Base64.getEncoder().encodeToString("Now".toByteArray())
         val description = Base64.getEncoder().encodeToString("Details".toByteArray())
