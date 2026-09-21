@@ -155,6 +155,8 @@ class TvUiRegressionTest {
         shadowOf(Looper.getMainLooper()).idle()
 
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.live_channel_details).visibility)
+        assertNotNull(activity.findViewById<ImageView>(R.id.live_channel_logo))
+        assertEquals(4, activity.findViewById<TextView>(R.id.live_channel_epg).maxLines)
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.side_nav).visibility)
         assertEquals(dp(72), activity.findViewById<View>(R.id.side_nav).layoutParams.width)
         assertEquals(1, (grid.layoutManager as GridLayoutManager).spanCount)
@@ -201,7 +203,10 @@ class TvUiRegressionTest {
             playlist.id,
             "live",
             null,
-            listOf(searchItem("401", "Sky Sports Main Event").copy(categoryId = "sports", providerOrder = 401)),
+            listOf(
+                searchItem("401", "Sky Sports Main Event").copy(categoryId = "sports", providerOrder = 401),
+                searchItem("402", "Sky Sports Football").copy(categoryId = "sports", providerOrder = 402),
+            ),
         )
         testStore.markCatalogRefreshed(playlist.id, "live", null)
         testStore.markCatalogRefreshed(playlist.id, "live", "sports")
@@ -216,10 +221,11 @@ class TvUiRegressionTest {
         val categories = activity.findViewById<RecyclerView>(R.id.category_list)
         val search = activity.findViewById<EditText>(R.id.search_box)
         val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
+        val previewAudio = activity.findViewById<Button>(R.id.live_preview_audio_toggle)
         val play = activity.findViewById<Button>(R.id.live_channel_play)
         val favourite = activity.findViewById<Button>(R.id.live_channel_favourite)
         val group = activity.findViewById<Button>(R.id.live_channel_group)
-        waitForTitles(grid, setOf("Sky Sports Main Event"))
+        waitForTitles(grid, setOf("Sky Sports Main Event", "Sky Sports Football"))
         val channel = requireNotNull(grid.findViewHolderForAdapterPosition(0)?.itemView)
 
         channel.requestFocus()
@@ -237,6 +243,15 @@ class TvUiRegressionTest {
         assertTrue(requireNotNull(grid.focusedChild).dispatchKeyEvent(
             KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT),
         ))
+        assertTrue(previewAudio.hasFocus())
+        assertEquals(activity.getString(R.string.unmute), previewAudio.text.toString())
+        assertEquals(activity.getString(R.string.unmute_live_preview), previewAudio.contentDescription)
+        previewAudio.performClick()
+        assertTrue(previewAudio.hasFocus())
+        assertTrue(previewAudio.isSelected)
+        assertEquals(activity.getString(R.string.mute), previewAudio.text.toString())
+        assertTrue(activity.findViewById<TextView>(R.id.live_channel_status).text.toString().startsWith("Preview audio on"))
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
         assertTrue(play.hasFocus())
         val verticalActions = activity.findViewById<LinearLayout>(R.id.live_channel_actions).orientation == LinearLayout.VERTICAL
         val forwardActionKey = if (verticalActions) KeyEvent.KEYCODE_DPAD_DOWN else KeyEvent.KEYCODE_DPAD_RIGHT
@@ -250,7 +265,15 @@ class TvUiRegressionTest {
         assertTrue(favourite.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, backwardActionKey)))
         assertTrue(play.hasFocus())
         assertTrue(play.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
+        assertTrue(previewAudio.hasFocus())
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)))
         assertTrue(grid.hasFocus())
+        assertTrue(requireNotNull(grid.focusedChild).dispatchKeyEvent(
+            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN),
+        ))
+        assertEquals(activity.getString(R.string.unmute), previewAudio.text.toString())
+        assertFalse(previewAudio.isSelected)
+        assertTrue(activity.findViewById<TextView>(R.id.live_channel_status).text.toString().startsWith("Muted preview"))
 
         val firstCategory = requireNotNull(categories.findViewHolderForAdapterPosition(0)?.itemView)
         firstCategory.requestFocus()

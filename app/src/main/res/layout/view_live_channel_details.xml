@@ -26,6 +26,18 @@
             android:id="@+id/live_channel_preview"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+        <ImageView
+            android:id="@+id/live_channel_logo"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_gravity="end|bottom"
+            android:layout_margin="12dp"
+            android:background="@drawable/bg_logo_surface"
+            android:contentDescription="@null"
+            android:padding="5dp"
+            android:scaleType="fitCenter"
+            android:visibility="gone" />
     </FrameLayout>
 
     <TextView
@@ -45,7 +57,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="5dp"
         android:ellipsize="end"
-        android:maxLines="2"
+        android:maxLines="4"
         android:textColor="@color/crown_text_secondary"
         android:textSize="14sp" />
 

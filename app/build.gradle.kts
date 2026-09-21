@@ -66,6 +66,7 @@ dependencies {
     implementation(project(":data:xtream"))
     implementation(project(":data:activation"))
     implementation(project(":player"))
+    implementation(files("../player/libs/media3-decoder-ffmpeg-1.4.1.aar"))
     implementation(project(":features:activation"))
     implementation(project(":features:home"))
     implementation(project(":features:live"))

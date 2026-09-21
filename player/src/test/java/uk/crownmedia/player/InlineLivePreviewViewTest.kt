@@ -4,6 +4,7 @@ import android.view.View
 import androidx.media3.common.util.UnstableApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -17,6 +18,18 @@ class InlineLivePreviewViewTest {
     @Test
     fun previewRenderTimeoutFitsTheThreeSecondInteractionBudget() {
         assertEquals(2_200L, INLINE_PREVIEW_RENDER_TIMEOUT_MS)
+    }
+
+    @Test
+    fun previewAudioDefaultsToMutedAndStopRestoresThatDefault() {
+        val controller = InlineLivePreviewController(RuntimeEnvironment.getApplication())
+
+        assertTrue(controller.isMuted)
+        controller.setMuted(false)
+        assertFalse(controller.isMuted)
+
+        controller.stop()
+        assertTrue(controller.isMuted)
     }
 
     @Test
