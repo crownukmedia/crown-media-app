@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="playback_unavailable">Content is currently unavailable.</string>
     <string name="playback_error_detail">The stream could not start. Try again, or return to the content list.</string>
     <string name="playback_timeout_detail">The stream took too long to respond. Try again, or return to the content list.</string>
@@ -9,4 +9,10 @@
     <string name="retry_playback">Retry</string>
     <string name="back_to_channels">Back to channels</string>
     <string name="back_to_content">Back to content</string>
+    <string name="player_settings">Settings</string>
+    <string name="playback_speed">Playback speed</string>
+    <string name="audio_tracks">Audio</string>
+    <string name="subtitles">Subtitles</string>
+    <string name="close_settings">Close</string>
+    <string name="exo_track_selection_none" tools:override="true">Off</string>
 </resources>

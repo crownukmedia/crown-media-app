@@ -23,6 +23,7 @@ import coil.size.Precision
 import uk.crownmedia.app.databinding.ItemCategoryBinding
 import uk.crownmedia.app.databinding.ItemContentBinding
 import uk.crownmedia.data.xtream.XtreamCategory
+import uk.crownmedia.player.ExternalSubtitle
 import uk.crownmedia.player.InlineLivePreviewView
 import java.net.URI
 
@@ -40,6 +41,7 @@ data class CatalogCard(
     val isAdult: Boolean = false,
     val catchUpDays: Int = 0,
     val channelNumber: Int? = null,
+    val externalSubtitles: List<ExternalSubtitle> = emptyList(),
 )
 
 internal fun CatalogCard.preferredArtworkSource(): Any {

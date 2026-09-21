@@ -23,7 +23,7 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 /**
- * Owns at most one muted Live stream and moves it between card surfaces. It intentionally has no
+ * Owns at most one Live preview stream and moves it between card surfaces. It intentionally has no
  * retry/fallback loop: preview failure returns to artwork and never affects full playback.
  */
 @UnstableApi
@@ -39,8 +39,10 @@ class InlineLivePreviewController(
     private var activeMediaId: String? = null
     private var generation = 0L
     private val timeout = Runnable { failActivePreview() }
+    var isMuted: Boolean = true
+        private set
 
-    fun start(target: InlineLivePreviewView, url: String) {
+    fun start(target: InlineLivePreviewView, url: String, muted: Boolean = true) {
         if (url.isBlank()) return
         stop()
         generation++
@@ -52,7 +54,7 @@ class InlineLivePreviewController(
         target.prepare(previewSurface)
         previewSurface.player = instance
         instance.setMediaItem(mediaItem(url, activeMediaId.orEmpty()))
-        instance.volume = 0f
+        setMuted(muted)
         instance.prepare()
         instance.playWhenReady = true
         handler.postDelayed(timeout, INLINE_PREVIEW_RENDER_TIMEOUT_MS)
@@ -64,12 +66,20 @@ class InlineLivePreviewController(
         handler.removeCallbacks(timeout)
         player?.run {
             playWhenReady = false
+            volume = 0f
             stop()
             clearMediaItems()
         }
+        isMuted = true
         host?.reset()
         host = null
         activeMediaId = null
+    }
+
+    /** Changes preview volume in place without replacing or preparing the current media item. */
+    fun setMuted(muted: Boolean) {
+        isMuted = muted
+        player?.volume = if (muted) 0f else 1f
     }
 
     fun release() {

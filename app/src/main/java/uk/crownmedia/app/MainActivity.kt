@@ -70,11 +70,14 @@ import uk.crownmedia.core.database.CrownDatabase
 import uk.crownmedia.core.design.StreamAvailability
 import uk.crownmedia.core.model.ProviderCredentials
 import uk.crownmedia.data.xtream.XtreamCategory
+import uk.crownmedia.data.xtream.XtreamCastMember
 import uk.crownmedia.data.xtream.XtreamClient
 import uk.crownmedia.data.xtream.XtreamItem
 import uk.crownmedia.data.xtream.XtreamProgramme
 import uk.crownmedia.data.xtream.XtreamSeriesDetails
+import uk.crownmedia.data.xtream.XtreamSubtitle
 import uk.crownmedia.data.xtream.preferredLiveExtension
+import uk.crownmedia.player.ExternalSubtitle
 import uk.crownmedia.player.PlayerActivity
 import uk.crownmedia.player.InlineLivePreviewController
 import uk.crownmedia.player.InlineLivePreviewView
@@ -154,6 +157,8 @@ class MainActivity : AppCompatActivity() {
     private var liveChannelBrowserOpen = false
     private var liveChannelSelection: CatalogCard? = null
     private var liveChannelEpgJob: Job? = null
+    private var livePreviewMuted = true
+    private var livePreviewAudioControlEnabled = false
     private val categorySearchQueries = EnumMap<Section, String>(Section::class.java)
     private val categorySearchContextIds = EnumMap<Section, String>(Section::class.java)
     private var updatingCategorySearchBox = false
@@ -186,6 +191,9 @@ class MainActivity : AppCompatActivity() {
         streamAvailability = StreamAvailability(this)
         inlinePreviewController = InlineLivePreviewController(this) {
             activeInlinePreview = null
+            livePreviewMuted = true
+            livePreviewAudioControlEnabled = false
+            updateLivePreviewAudioControl()
             if (liveChannelBrowserOpen && !isFinishing) {
                 findViewById<TextView>(R.id.live_channel_status).text = "Preview unavailable  •  Press OK to play"
             }
@@ -355,9 +363,27 @@ class MainActivity : AppCompatActivity() {
         val play = findViewById<Button>(R.id.live_channel_play)
         val favourite = findViewById<Button>(R.id.live_channel_favourite)
         val group = findViewById<Button>(R.id.live_channel_group)
+        val previewAudio = findViewById<Button?>(R.id.live_preview_audio_toggle)
         play.setOnClickListener { liveChannelSelection?.let { play(it, live = true) } }
         favourite.setOnClickListener { toggleLiveChannelFavourite() }
         group.setOnClickListener { liveChannelSelection?.let(::showChannelGroups) }
+        previewAudio?.apply {
+            setOnClickListener { toggleLivePreviewAudio() }
+            nextFocusLeftId = binding.contentGrid.id
+            nextFocusRightId = play.id
+            nextFocusUpId = id
+            nextFocusDownId = play.id
+            setOnKeyListener { view, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> focusSelectedLiveChannel()
+                    KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> play.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_UP -> view.requestFocus()
+                }
+                true
+            }
+        }
+        updateLivePreviewAudioControl()
         val actions = listOf(play, favourite, group)
         val vertical = useVerticalLiveChannelActions(resources.configuration.screenWidthDp, isTelevisionLayout())
         findViewById<LinearLayout>(R.id.live_channel_actions).orientation =
@@ -371,16 +397,20 @@ class MainActivity : AppCompatActivity() {
                 if (vertical && index > 0) topMargin = dp(6)
                 if (!vertical && index > 0) marginStart = dp(6)
             }
-            action.nextFocusLeftId = if (vertical) binding.contentGrid.id else {
+            action.nextFocusLeftId = if (index == 0 && previewAudio != null) previewAudio.id else if (vertical) binding.contentGrid.id else {
                 actions.getOrNull(index - 1)?.id ?: binding.contentGrid.id
             }
             action.nextFocusRightId = if (vertical) action.id else actions.getOrNull(index + 1)?.id ?: action.id
-            action.nextFocusUpId = if (vertical) actions.getOrNull(index - 1)?.id ?: action.id else action.id
+            action.nextFocusUpId = if (index == 0 && previewAudio != null) previewAudio.id else if (vertical) {
+                actions.getOrNull(index - 1)?.id ?: action.id
+            } else action.id
             action.nextFocusDownId = if (vertical) actions.getOrNull(index + 1)?.id ?: action.id else action.id
             action.setOnKeyListener { view, keyCode, event ->
                 if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
                 when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> if (vertical) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (index == 0 && previewAudio != null) {
+                        previewAudio.requestFocus()
+                    } else if (vertical) {
                         requestRecyclerItemFocus(
                             binding.contentGrid,
                             liveChannelSelection?.let { selected ->
@@ -390,7 +420,8 @@ class MainActivity : AppCompatActivity() {
                     } else actions.getOrNull(index - 1)?.requestFocus() ?: focusSelectedLiveChannel()
                     KeyEvent.KEYCODE_DPAD_RIGHT -> if (vertical) view.requestFocus()
                     else actions.getOrNull(index + 1)?.requestFocus() ?: view.requestFocus()
-                    KeyEvent.KEYCODE_DPAD_UP -> if (vertical) actions.getOrNull(index - 1)?.requestFocus() ?: view.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_UP -> if (index == 0 && previewAudio != null) previewAudio.requestFocus()
+                    else if (vertical) actions.getOrNull(index - 1)?.requestFocus() ?: view.requestFocus()
                     KeyEvent.KEYCODE_DPAD_DOWN -> if (vertical) actions.getOrNull(index + 1)?.requestFocus() ?: view.requestFocus()
                 }
                 true
@@ -405,6 +436,44 @@ class MainActivity : AppCompatActivity() {
                 catalogAdapter.currentItems.indexOfFirst { it.kind == selected.kind && it.id == selected.id }
             }?.takeIf { it >= 0 } ?: 0,
         )
+    }
+
+    private fun toggleLivePreviewAudio() {
+        if (!isTelevisionLayout() || !livePreviewAudioControlEnabled) return
+        livePreviewMuted = !livePreviewMuted
+        inlinePreviewController.setMuted(livePreviewMuted)
+        updateLivePreviewAudioControl()
+        liveChannelSelection?.let { updateLivePreviewStatus(it, activeInlinePreview != null) }
+        findViewById<Button?>(R.id.live_preview_audio_toggle)?.announceForAccessibility(
+            getString(if (livePreviewMuted) R.string.muted_preview else R.string.preview_audio_on),
+        )
+    }
+
+    private fun updateLivePreviewAudioControl() {
+        findViewById<Button?>(R.id.live_preview_audio_toggle)?.apply {
+            isEnabled = livePreviewAudioControlEnabled
+            alpha = if (isEnabled) 1f else 0.56f
+            isSelected = !livePreviewMuted
+            text = getString(if (livePreviewMuted) R.string.unmute else R.string.mute)
+            contentDescription = getString(
+                if (livePreviewMuted) R.string.unmute_live_preview else R.string.mute_live_preview,
+            )
+            setCompoundDrawablesRelativeWithIntrinsicBounds(
+                if (livePreviewMuted) R.drawable.ic_volume_off else R.drawable.ic_volume_on,
+                0,
+                0,
+                0,
+            )
+            compoundDrawablePadding = dp(8)
+        }
+    }
+
+    private fun updateLivePreviewStatus(card: CatalogCard, includeFullscreenHint: Boolean) {
+        findViewById<TextView>(R.id.live_channel_status).text = listOfNotNull(
+            getString(if (livePreviewMuted) R.string.muted_preview else R.string.preview_audio_on),
+            "Catch-Up".takeIf { card.catchUpDays > 0 },
+            "Press OK for full screen".takeIf { includeFullscreenHint },
+        ).joinToString("  •  ")
     }
 
     private fun configureNavigation() {
@@ -562,7 +631,10 @@ class MainActivity : AppCompatActivity() {
                 } else requestRecyclerItemFocus(binding.contentGrid, (position - 1).coerceAtLeast(0))
                 KeyEvent.KEYCODE_DPAD_DOWN -> requestRecyclerItemFocus(binding.contentGrid, (position + 1).coerceAtMost(catalogAdapter.itemCount - 1))
                 KeyEvent.KEYCODE_DPAD_LEFT -> restoreCategoryFocus(activeCategoryFocusId())
-                KeyEvent.KEYCODE_DPAD_RIGHT -> findViewById<Button>(R.id.live_channel_play).requestFocus()
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    findViewById<Button?>(R.id.live_preview_audio_toggle)?.requestFocus()
+                        ?: findViewById<Button>(R.id.live_channel_play).requestFocus()
+                }
             }
             return true
         }
@@ -2142,6 +2214,20 @@ class MainActivity : AppCompatActivity() {
         ).joinToString("  •  ")
     }
 
+    private fun epgDetailsSummary(entries: List<XtreamProgramme>, providerTimezone: String?): String {
+        val now = System.currentTimeMillis() / 1000
+        val current = entries.firstOrNull(::isCurrentProgramme)
+        val next = entries.firstOrNull { (it.startTimestamp ?: Long.MIN_VALUE) > now }
+        if (current == null && next == null) return getString(R.string.epg_unavailable)
+        return listOfNotNull(
+            current?.let {
+                val range = "${programmeTime(it.startTimestamp, providerTimezone)}–${programmeTime(it.stopTimestamp, providerTimezone)}"
+                listOfNotNull("${getString(R.string.now)} $range  ${it.title}", it.description?.takeIf(String::isNotBlank)).joinToString("\n")
+            },
+            next?.let { "${getString(R.string.next)} ${programmeTime(it.startTimestamp, providerTimezone)}  ${it.title}" },
+        ).joinToString("\n")
+    }
+
     private fun isCurrentProgramme(programme: XtreamProgramme): Boolean {
         val start = programme.startTimestamp ?: return false
         val stop = programme.stopTimestamp ?: return false
@@ -2388,6 +2474,8 @@ class MainActivity : AppCompatActivity() {
         contentLayoutManager.spanCount = 1
         applyLiveChannelBrowserLayout()
         if (cards.isEmpty()) {
+            livePreviewAudioControlEnabled = false
+            updateLivePreviewAudioControl()
             findViewById<TextView>(R.id.live_channel_title).text = getString(R.string.loading)
             findViewById<TextView>(R.id.live_channel_epg).text = ""
             findViewById<TextView>(R.id.live_channel_status).text = getString(R.string.channel_preview_loading)
@@ -2440,6 +2528,9 @@ class MainActivity : AppCompatActivity() {
         liveChannelEpgJob?.cancel()
         liveChannelEpgJob = null
         liveChannelSelection = null
+        livePreviewMuted = true
+        livePreviewAudioControlEnabled = false
+        updateLivePreviewAudioControl()
         stopInlinePreview()
         catalogAdapter.setLiveChannelNavigation(false)
         if (isTelevisionLayout()) collapseTvNavigationImmediately()
@@ -2465,15 +2556,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun showLiveChannelDetails(card: CatalogCard, startPreview: Boolean) {
         if (!liveChannelBrowserOpen || section != Section.LIVE) return
+        val selectionChanged = liveChannelSelection?.id != card.id
         liveChannelSelection = card
+        if (selectionChanged) {
+            livePreviewMuted = true
+            livePreviewAudioControlEnabled = true
+            inlinePreviewController.setMuted(true)
+            updateLivePreviewAudioControl()
+        }
         val playlist = store.selected() ?: return
         val number = card.channelNumber?.let { "$it  |  " }.orEmpty()
         findViewById<TextView>(R.id.live_channel_title).text = "$number${card.title}"
         findViewById<TextView>(R.id.live_channel_epg).text = getString(R.string.channel_epg_loading)
-        findViewById<TextView>(R.id.live_channel_status).text = listOfNotNull(
-            "Muted preview",
-            "Catch-Up".takeIf { card.catchUpDays > 0 },
-        ).joinToString("  •  ")
+        updateLivePreviewStatus(card, includeFullscreenHint = activeInlinePreview?.card?.id == card.id)
         findViewById<Button>(R.id.live_channel_favourite).text = getString(
             if ("live:${card.id}" in store.favorites(playlist.id)) R.string.remove_favourite else R.string.favourite,
         )
@@ -2482,12 +2577,27 @@ class MainActivity : AppCompatActivity() {
             placeholder(R.drawable.crown_media_logo_header)
             error(R.drawable.crown_media_logo_header)
         }
+        findViewById<ImageView>(R.id.live_channel_logo).isVisible = false
         liveChannelEpgJob?.cancel()
         liveChannelEpgJob = lifecycleScope.launch {
-            val summary = runCatching { epgSummary(epgFor(playlist, card.id), playlist.serverTimezone) }
-                .getOrElse { getString(R.string.epg_unavailable) }
+            val entries = runCatching { epgFor(playlist, card.id) }.getOrDefault(emptyList())
+            val summary = epgDetailsSummary(entries, playlist.serverTimezone)
             if (liveChannelBrowserOpen && liveChannelSelection?.id == card.id) {
                 findViewById<TextView>(R.id.live_channel_epg).text = summary
+                validRemoteImageUrl(entries.firstOrNull(::isCurrentProgramme)?.imageUrl)?.let { image ->
+                    findViewById<ImageView>(R.id.live_channel_logo).apply {
+                        isVisible = true
+                        load(card.preferredArtworkSource()) {
+                            crossfade(false)
+                            placeholder(R.drawable.crown_media_logo_header)
+                            error(R.drawable.crown_media_logo_header)
+                        }
+                    }
+                    findViewById<ImageView>(R.id.live_channel_artwork).load(image) {
+                        crossfade(true)
+                        error(card.preferredArtworkSource())
+                    }
+                }
             }
         }
         if (startPreview) {
@@ -2591,6 +2701,7 @@ class MainActivity : AppCompatActivity() {
                     card.id,
                     card.kind,
                     fallbackUrl,
+                    card.externalSubtitles,
                 ),
             )
         }
@@ -2624,8 +2735,15 @@ class MainActivity : AppCompatActivity() {
             if (focused) {
                 showLiveChannelDetails(card, startPreview = false)
                 scheduleInlinePreview(target, LIVE_CHANNEL_BROWSER_PREVIEW_DELAY_MS)
-            } else if (pendingInlinePreview.matches(target) || activeInlinePreview.matches(target)) {
-                stopInlinePreview()
+            } else {
+                binding.root.post {
+                    if (
+                        !findViewById<View>(R.id.live_channel_details).hasFocus() &&
+                        (pendingInlinePreview.matches(target) || activeInlinePreview.matches(target))
+                    ) {
+                        stopInlinePreview()
+                    }
+                }
             }
             return
         }
@@ -2731,7 +2849,8 @@ class MainActivity : AppCompatActivity() {
             inlinePreviewJob = null
             if (!target.cardView.isAttachedToWindow || section != Section.LIVE) return@launch
             val stillSelected = if (liveChannelBrowserOpen) {
-                target.cardView.hasFocus()
+                liveChannelSelection?.id == target.card.id &&
+                    (target.cardView.hasFocus() || findViewById<View>(R.id.live_channel_details).hasFocus())
             } else if (isTelevisionLayout()) {
                 target.cardView.hasFocus()
             } else {
@@ -2745,13 +2864,11 @@ class MainActivity : AppCompatActivity() {
             healthJob?.cancel()
             activeInlinePreview = target
             if (liveChannelBrowserOpen) {
-                findViewById<TextView>(R.id.live_channel_status).text = listOfNotNull(
-                    "Muted preview",
-                    "Catch-Up".takeIf { target.card.catchUpDays > 0 },
-                    "Press OK for full screen",
-                ).joinToString("  •  ")
+                livePreviewAudioControlEnabled = true
+                updateLivePreviewAudioControl()
+                updateLivePreviewStatus(target.card, includeFullscreenHint = true)
             }
-            inlinePreviewController.start(target.host, url)
+            inlinePreviewController.start(target.host, url, muted = livePreviewMuted)
         }
     }
 
@@ -2761,7 +2878,12 @@ class MainActivity : AppCompatActivity() {
         pendingInlinePreview = null
         activeInlinePreview = null
         if (!::inlinePreviewController.isInitialized) return
-        if (releasePlayer) inlinePreviewController.release() else inlinePreviewController.stop()
+        if (releasePlayer) {
+            livePreviewMuted = true
+            livePreviewAudioControlEnabled = liveChannelSelection != null && liveChannelBrowserOpen
+            updateLivePreviewAudioControl()
+            inlinePreviewController.release()
+        } else inlinePreviewController.stop()
     }
 
     private fun showMovie(card: CatalogCard) {
@@ -2773,15 +2895,24 @@ class MainActivity : AppCompatActivity() {
                 if (section !in setOf(Section.MOVIES, Section.SEARCH, Section.FAVORITES) || store.selected()?.id != playlist.id) return@onSuccess
                 hideState()
                 val message = listOfNotNull(
-                    listOfNotNull(movie.year, movie.rating?.let { "★ $it" }, movie.duration, movie.genre).joinToString("  •  ").takeIf(String::isNotBlank),
-                    movie.cast?.let { "Cast\n$it" },
+                    listOfNotNull(movie.releaseDate ?: movie.year, movie.rating?.let { "★ $it" }, movie.duration).joinToString("  •  ").takeIf(String::isNotBlank),
+                    movie.genre?.let { "Genre  $it" },
+                    movie.director?.let { "Director  $it" },
+                    listOfNotNull(movie.language?.let { "Language  $it" }, movie.country?.let { "Country  $it" }).joinToString("  •  ").takeIf(String::isNotBlank),
                     movie.plot,
                 ).joinToString("\n\n")
                 val builder = AlertDialog.Builder(this@MainActivity).setTitle(movie.name)
-                if (isTelevisionLayout()) builder.setView(contentDetailsView(card, message))
-                else builder.setMessage(message.ifBlank { "No metadata supplied." })
+                builder.setView(contentDetailsView(card.copy(imageUrl = movie.imageUrl ?: card.imageUrl), message, movie.backdropUrl, movie.castMembers))
                 builder
-                    .setPositiveButton("Play") { _, _ -> play(card.copy(extension = movie.extension), false) }
+                    .setPositiveButton("Play") { _, _ ->
+                        play(
+                            card.copy(
+                                extension = movie.extension,
+                                externalSubtitles = movie.subtitles.mapNotNull { it.toExternalSubtitle() },
+                            ),
+                            false,
+                        )
+                    }
                     .setNeutralButton(if (movie.trailer.isNullOrBlank()) "Favorite" else "Trailer") { _, _ ->
                         movie.trailer?.takeIf { it.isNotBlank() }?.let(::openTrailer) ?: run {
                             store.toggleFavorite(playlist.id, "movie:${card.id}")
@@ -2816,8 +2947,7 @@ class MainActivity : AppCompatActivity() {
         hideState()
         if (details.episodes.values.all { it.isEmpty() }) {
             val builder = AlertDialog.Builder(this).setTitle(details.name)
-            if (isTelevisionLayout()) builder.setView(contentDetailsView(card, details.plot ?: "No episodes supplied."))
-            else builder.setMessage(details.plot ?: "No episodes supplied.")
+            builder.setView(contentDetailsView(card.copy(imageUrl = details.cover ?: card.imageUrl), seriesMetadata(details).ifBlank { "No episodes supplied." }, details.backdrop, details.castMembers))
             builder.setPositiveButton("Close", null).showCrown()
             return
         }
@@ -2826,22 +2956,29 @@ class MainActivity : AppCompatActivity() {
             nestedSeries = SeriesDetailState(card, details, details.episodes.keys.minOrNull() ?: 1)
             renderSeriesDetails()
         }
-        if (isTelevisionLayout()) {
-            AlertDialog.Builder(this)
-                .setTitle(details.name)
-                .setView(contentDetailsView(card, listOfNotNull(details.genre, details.plot).joinToString("\n\n")))
-                .setPositiveButton("Browse episodes") { _, _ -> openEpisodes() }
-                .setNegativeButton("Back", null)
-                .showCrown()
-        } else openEpisodes()
+        AlertDialog.Builder(this)
+            .setTitle(details.name)
+            .setView(contentDetailsView(card.copy(imageUrl = details.cover ?: card.imageUrl), seriesMetadata(details), details.backdrop, details.castMembers))
+            .setPositiveButton("Browse episodes") { _, _ -> openEpisodes() }
+            .setNegativeButton("Back", null)
+            .showCrown()
     }
 
     private fun renderSeriesDetails() {
         val nested = nestedSeries ?: return
         val seasons = nested.details.episodes.keys.sorted().map { XtreamCategory("season:$it", "Season $it") }
         val episodes = nested.details.episodes[nested.season].orEmpty().sortedBy { it.episodeNumber }.map { episode ->
-            val meta = listOf("S${nested.season} E${episode.episodeNumber}", episode.duration).filterNotNull().filter(String::isNotBlank).joinToString(" • ")
-            CatalogCard(episode.id, "episode", episode.title, episode.imageUrl, meta, "S${nested.season}", episode.extension)
+            val meta = listOf("S${nested.season} E${episode.episodeNumber}", episode.releaseDate, episode.rating?.let { "★ $it" }, episode.duration).filterNotNull().filter(String::isNotBlank).joinToString(" • ")
+            CatalogCard(
+                episode.id,
+                "episode",
+                episode.title,
+                episode.imageUrl,
+                meta,
+                "S${nested.season}",
+                episode.extension,
+                externalSubtitles = episode.subtitles.mapNotNull { it.toExternalSubtitle() },
+            )
         }
         binding.screenTitle.text = nested.details.name
         binding.screenSubtitle.text = listOfNotNull(nested.details.genre, "Season ${nested.season}", "Back returns to Series").joinToString("  •  ")
@@ -2996,9 +3133,51 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun contentDetailsView(card: CatalogCard, body: String): View {
+    private fun seriesMetadata(details: XtreamSeriesDetails): String = listOfNotNull(
+        listOfNotNull(details.releaseDate, details.rating?.let { "★ $it" }, details.duration).joinToString("  •  ").takeIf(String::isNotBlank),
+        details.genre?.let { "Genre  $it" },
+        details.director?.let { "Director  $it" },
+        listOfNotNull(details.language?.let { "Language  $it" }, details.country?.let { "Country  $it" }).joinToString("  •  ").takeIf(String::isNotBlank),
+        details.plot,
+    ).joinToString("\n\n")
+
+    private fun XtreamSubtitle.toExternalSubtitle(): ExternalSubtitle? = ExternalSubtitle.fromProvider(
+        uri = url,
+        format = format,
+        language = language,
+        label = label,
+        isDefault = isDefault,
+        isForced = isForced,
+    )
+
+    private fun contentDetailsView(
+        card: CatalogCard,
+        body: String,
+        backdropUrl: String? = null,
+        castMembers: List<XtreamCastMember> = emptyList(),
+    ): View {
         val view = layoutInflater.inflate(R.layout.dialog_content_details, FrameLayout(this), false)
         view.findViewById<TextView>(R.id.detail_body).text = body.ifBlank { "No metadata supplied." }
+        val validBackdrop = validRemoteImageUrl(backdropUrl)
+        view.findViewById<ImageView>(R.id.detail_backdrop).apply {
+            isVisible = validBackdrop != null
+            if (isVisible) load(validBackdrop) { crossfade(true); error(null) }
+        }
+        val castContainer = view.findViewById<LinearLayout>(R.id.detail_cast)
+        castMembers.forEach { member ->
+            val item = layoutInflater.inflate(R.layout.item_cast_member, castContainer, false)
+            item.findViewById<TextView>(R.id.cast_name).text = member.name
+            validRemoteImageUrl(member.imageUrl)?.let { imageUrl ->
+                item.findViewById<ImageView>(R.id.cast_image).apply {
+                    isVisible = true
+                    load(imageUrl) { crossfade(true); error(null) }
+                }
+            }
+            castContainer.addView(item)
+        }
+        val hasCast = castMembers.isNotEmpty()
+        view.findViewById<View>(R.id.detail_cast_label).isVisible = hasCast
+        view.findViewById<View>(R.id.detail_cast_scroll).isVisible = hasCast
         val artwork = view.findViewById<ImageView>(R.id.detail_artwork)
         val source = card.preferredArtworkSource()
         val inset = (12 * resources.displayMetrics.density).toInt()
@@ -3007,22 +3186,27 @@ class MainActivity : AppCompatActivity() {
             artwork.setPadding(inset, inset, inset, inset)
         }
         showBrand()
-        artwork.load(source) {
-            placeholder(R.drawable.crown_media_logo_header)
-            error(R.drawable.crown_media_logo_header)
-            crossfade(false)
-            listener(
-                onSuccess = { _, _ ->
-                    if (source == R.drawable.crown_media_logo_header) showBrand()
-                    else {
+        if (source is Int) {
+            artwork.setImageResource(source)
+        } else {
+            artwork.load(source) {
+                placeholder(R.drawable.crown_media_logo_header)
+                error(R.drawable.crown_media_logo_header)
+                crossfade(false)
+                listener(
+                    onSuccess = { _, _ ->
                         artwork.scaleType = if (card.kind == "live") ImageView.ScaleType.CENTER_INSIDE else ImageView.ScaleType.CENTER_CROP
                         artwork.setPadding(0, 0, 0, 0)
-                    }
-                },
-                onError = { _, _ -> showBrand() },
-            )
+                    },
+                    onError = { _, _ -> showBrand() },
+                )
+            }
         }
         return view
+    }
+
+    private fun validRemoteImageUrl(value: String?): String? = value?.trim()?.takeIf { candidate ->
+        runCatching { Uri.parse(candidate) }.getOrNull()?.scheme?.lowercase() in setOf("http", "https")
     }
 
     private fun search(query: String) {

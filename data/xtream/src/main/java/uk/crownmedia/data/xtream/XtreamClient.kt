@@ -12,6 +12,7 @@ import com.squareup.moshi.JsonReader
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -35,6 +36,17 @@ data class XtreamAccount(
 
 data class XtreamCategory(val id: String, val name: String)
 
+data class XtreamCastMember(val name: String, val imageUrl: String? = null)
+
+data class XtreamSubtitle(
+    val url: String,
+    val format: String? = null,
+    val language: String? = null,
+    val label: String? = null,
+    val isDefault: Boolean = false,
+    val isForced: Boolean = false,
+)
+
 data class XtreamItem(
     val id: String,
     val categoryId: String,
@@ -53,8 +65,15 @@ data class XtreamItem(
     val director: String? = null,
     val genre: String? = null,
     val trailer: String? = null,
+    val backdropUrl: String? = null,
+    val releaseDate: String? = null,
+    val language: String? = null,
+    val country: String? = null,
+    val castMembers: List<XtreamCastMember> = emptyList(),
+    val tmdbId: String? = null,
     val providerOrder: Int? = null,
     val isAdult: Boolean = false,
+    val subtitles: List<XtreamSubtitle> = emptyList(),
 )
 
 data class XtreamProgramme(
@@ -64,6 +83,7 @@ data class XtreamProgramme(
     val end: String?,
     val startTimestamp: Long?,
     val stopTimestamp: Long?,
+    val imageUrl: String? = null,
 )
 
 data class XtreamEpisode(
@@ -75,6 +95,9 @@ data class XtreamEpisode(
     val imageUrl: String?,
     val plot: String?,
     val duration: String?,
+    val rating: String? = null,
+    val releaseDate: String? = null,
+    val subtitles: List<XtreamSubtitle> = emptyList(),
 )
 
 data class XtreamSeriesDetails(
@@ -87,6 +110,14 @@ data class XtreamSeriesDetails(
     val rating: String?,
     val trailer: String?,
     val episodes: Map<Int, List<XtreamEpisode>>,
+    val director: String? = null,
+    val releaseDate: String? = null,
+    val duration: String? = null,
+    val language: String? = null,
+    val country: String? = null,
+    val castMembers: List<XtreamCastMember> = emptyList(),
+    val backdrops: List<String> = emptyList(),
+    val tmdbId: String? = null,
 )
 
 /** Clean-room client for the documented Xtream Codes compatible player_api.php surface. */
@@ -186,6 +217,8 @@ class XtreamClient(
         val root = objectCall(credentials, "get_vod_info", mapOf("vod_id" to id))
         val info = root.optJSONObject("info") ?: JSONObject()
         val movie = root.optJSONObject("movie_data") ?: JSONObject()
+        val castMembers = info.castMembers()
+        val releaseDate = info.firstString("releasedate", "release_date", "releaseDate", "year")
         XtreamItem(
             id = id,
             categoryId = movie.flexString("category_id").orEmpty(),
@@ -195,9 +228,21 @@ class XtreamClient(
             addedEpochSeconds = movie.flexLong("added"),
             extension = movie.optString("container_extension", "mp4"),
             epgChannelId = null, catchUp = false, catchUpDays = 0,
-            plot = info.optString("plot").nullIfBlank(), year = info.flexString("releasedate") ?: info.flexString("year"),
+            plot = info.firstString("plot", "description", "overview"), year = releaseDate?.take(4),
             duration = info.flexString("duration"), cast = info.flexString("cast"), director = info.flexString("director"),
             genre = info.flexString("genre"), trailer = info.flexString("youtube_trailer"),
+            backdropUrl = info.stringList("backdrop_path", "backdrop", "backdrop_url").firstOrNull(),
+            releaseDate = releaseDate,
+            language = info.firstString("language", "original_language", "audio"),
+            country = info.firstString("country", "country_of_origin", "origin_country"),
+            castMembers = castMembers,
+            tmdbId = info.firstString("tmdb_id", "tmdb"),
+            subtitles = (
+                root.subtitleTracks(credentials.serverUrl) +
+                    info.subtitleTracks(credentials.serverUrl) +
+                    movie.subtitleTracks(credentials.serverUrl)
+                )
+                .distinctBy(XtreamSubtitle::identity),
         )
     }
 
@@ -214,15 +259,28 @@ class XtreamClient(
                 XtreamEpisode(
                     episodeId, e.flexIntOrNull("season") ?: season, e.flexIntOrNull("episode_num") ?: 0,
                     e.optString("title", "Episode"), e.optString("container_extension", "mp4"),
-                    meta.optString("movie_image").nullIfBlank(), meta.optString("plot").nullIfBlank(), meta.flexString("duration"),
+                    meta.firstString("movie_image", "cover", "image"), meta.firstString("plot", "description", "overview"),
+                    meta.flexString("duration"), meta.flexString("rating"),
+                    meta.firstString("releasedate", "release_date", "air_date"),
+                    subtitles = (e.subtitleTracks(credentials.serverUrl) + meta.subtitleTracks(credentials.serverUrl))
+                        .distinctBy(XtreamSubtitle::identity),
                 )
             }
         }
-        val backdrops = info.optJSONArray("backdrop_path")?.strings().orEmpty()
+        val backdrops = info.stringList("backdrop_path", "backdrop", "backdrop_url")
+        val releaseDate = info.firstString("releasedate", "release_date", "year")
         XtreamSeriesDetails(
             info.optString("name", "Series"), info.optString("plot").nullIfBlank(), info.optString("cover").nullIfBlank(),
             backdrops.firstOrNull(), info.flexString("cast"), info.flexString("genre"), info.flexString("rating"),
             info.flexString("youtube_trailer"), episodeMap,
+            director = info.flexString("director"),
+            releaseDate = releaseDate,
+            duration = info.firstString("duration", "episode_run_time", "runtime"),
+            language = info.firstString("language", "original_language"),
+            country = info.firstString("country", "country_of_origin", "origin_country"),
+            castMembers = info.castMembers(),
+            backdrops = backdrops,
+            tmdbId = info.firstString("tmdb_id", "tmdb"),
         )
     }
 
@@ -242,6 +300,7 @@ class XtreamClient(
                 decodeBase64(e.optString("title")), decodeBase64(e.optString("description")).nullIfBlank(),
                 e.optString("start").nullIfBlank(), e.optString("end").nullIfBlank(),
                 e.flexLong("start_timestamp"), e.flexLong("stop_timestamp"),
+                e.firstString("icon", "programme_icon", "image", "image_url"),
             )
         }
 
@@ -427,6 +486,113 @@ private fun JSONObject.flexString(key: String): String? = if (!has(key) || isNul
 private fun JSONObject.flexInt(key: String): Int = flexIntOrNull(key) ?: 0
 private fun JSONObject.flexIntOrNull(key: String): Int? = flexString(key)?.toIntOrNull()
 private fun JSONObject.flexLong(key: String): Long? = flexString(key)?.toLongOrNull()?.takeIf { it > 0 }
+private fun JSONObject.firstString(vararg keys: String): String? = keys.firstNotNullOfOrNull(::flexString)
+private fun JSONObject.stringList(vararg keys: String): List<String> {
+    keys.forEach { key ->
+        if (!has(key) || isNull(key)) return@forEach
+        val value = opt(key)
+        val values = when (value) {
+            is JSONArray -> value.strings()
+            is String -> listOf(value)
+            else -> emptyList()
+        }.mapNotNull(String?::nullIfBlank)
+        if (values.isNotEmpty()) return values
+    }
+    return emptyList()
+}
+private fun JSONObject.castMembers(): List<XtreamCastMember> {
+    val value = opt("cast") ?: opt("actors") ?: opt("credits")
+    val structured = when (value) {
+        is JSONArray -> (0 until value.length()).mapNotNull { index ->
+            when (val actor = value.opt(index)) {
+                is JSONObject -> actor.firstString("name", "actor_name", "original_name")?.let { name ->
+                    XtreamCastMember(name, actor.firstString("profile_path", "profile", "image", "image_url"))
+                }
+                is String -> actor.nullIfBlank()?.let(::XtreamCastMember)
+                else -> null
+            }
+        }
+        else -> emptyList()
+    }
+    if (structured.isNotEmpty()) return structured.distinctBy { it.name.lowercase() }
+    return flexString("cast").orEmpty().split(',', '|').mapNotNull { name ->
+        name.trim().nullIfBlank()?.let(::XtreamCastMember)
+    }.distinctBy { it.name.lowercase() }
+}
+
+private fun JSONObject.subtitleTracks(serverUrl: String): List<XtreamSubtitle> =
+    SUBTITLE_KEYS.flatMap { key -> subtitleValue(opt(key), serverUrl) }
+
+private fun subtitleValue(value: Any?, serverUrl: String, labelHint: String? = null, depth: Int = 0): List<XtreamSubtitle> {
+    if (depth > 2 || value == null || value == JSONObject.NULL) return emptyList()
+    return when (value) {
+        is String -> subtitleTrack(value, serverUrl, label = labelHint)?.let(::listOf).orEmpty()
+        is JSONArray -> (0 until value.length()).flatMap { index ->
+            subtitleValue(value.opt(index), serverUrl, depth = depth + 1)
+        }
+        is JSONObject -> {
+            val url = value.firstString("url", "file", "src", "path", "subtitle_url", "subtitleUrl")
+            if (url != null) {
+                subtitleTrack(
+                    rawUrl = url,
+                    serverUrl = serverUrl,
+                    format = value.firstString("format", "type", "mime_type", "mimeType", "codec"),
+                    language = value.firstString("language", "lang", "language_code", "languageCode"),
+                    label = value.firstString("label", "name", "title") ?: labelHint,
+                    isDefault = value.truthy("default", "is_default", "isDefault"),
+                    isForced = value.truthy("forced", "is_forced", "isForced"),
+                )?.let(::listOf).orEmpty()
+            } else {
+                value.keys().asSequence().flatMap { key ->
+                    subtitleValue(value.opt(key), serverUrl, key, depth + 1).asSequence()
+                }.toList()
+            }
+        }
+        else -> emptyList()
+    }
+}
+
+private fun subtitleTrack(
+    rawUrl: String,
+    serverUrl: String,
+    format: String? = null,
+    language: String? = null,
+    label: String? = null,
+    isDefault: Boolean = false,
+    isForced: Boolean = false,
+): XtreamSubtitle? {
+    val url = rawUrl.trim().nullIfBlank() ?: return null
+    val base = runCatching { normalizeServerUrl(serverUrl).toHttpUrl() }.getOrNull() ?: return null
+    val resolved = url.toHttpUrlOrNull() ?: base.resolve(url) ?: return null
+    if (resolved.scheme !in setOf("http", "https")) return null
+    return XtreamSubtitle(
+        url = resolved.toString(),
+        format = format?.nullIfBlank(),
+        language = language?.nullIfBlank(),
+        label = label?.nullIfBlank(),
+        isDefault = isDefault,
+        isForced = isForced,
+    )
+}
+
+private fun JSONObject.truthy(vararg keys: String): Boolean = keys.any { key ->
+    when (flexString(key)?.trim()?.lowercase()) {
+        "1", "true", "yes", "on" -> true
+        else -> false
+    }
+}
+
+private fun XtreamSubtitle.identity(): String = listOf(url, language, label).joinToString("|")
+
+private val SUBTITLE_KEYS = listOf(
+    "subtitles",
+    "subtitle",
+    "subtitle_tracks",
+    "subtitleTracks",
+    "captions",
+    "closed_captions",
+    "closedCaptions",
+)
 private fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
 private fun JSONArray.strings(): List<String> = (0 until length()).mapNotNull { optString(it).nullIfBlank() }
 private fun decodeBase64(value: String): String = try {

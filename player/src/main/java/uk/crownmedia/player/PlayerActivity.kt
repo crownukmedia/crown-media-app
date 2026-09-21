@@ -3,6 +3,7 @@ package uk.crownmedia.player
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -16,19 +17,25 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
+import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.media3.common.util.UnstableApi
+import androidx.appcompat.app.AlertDialog
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import uk.crownmedia.core.design.StreamAvailability
@@ -57,6 +64,7 @@ class PlayerActivity : AppCompatActivity() {
     private var isLive = false
     private var hasReachedReady = false
     private var userPaused = false
+    private var trackSelector: DefaultTrackSelector? = null
     private lateinit var recoveryPolicy: PlaybackRecoveryPolicy
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val startupTimeout = Runnable {
@@ -86,6 +94,11 @@ class PlayerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_player)
         playerView = findViewById(R.id.player_view)
+        playerView.setShowSubtitleButton(false)
+        configureSubtitleRendering()
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.setOnClickListener {
+            showPlayerSettings()
+        }
         playerTitle = findViewById(R.id.player_title)
         playbackError = findViewById(R.id.playback_error)
         playbackLoading = findViewById(R.id.playback_loading)
@@ -129,13 +142,33 @@ class PlayerActivity : AppCompatActivity() {
             .setDefaultRequestProperties(mapOf("Accept" to "*/*", "Accept-Encoding" to "identity"))
         val dataSource = DefaultDataSource.Factory(this, httpDataSource)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSource)
-        val renderersFactory = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
+        val renderersFactory = DefaultRenderersFactory(this)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        val selector = DefaultTrackSelector(this).apply {
+            parameters = buildUponParameters()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .setExceedAudioConstraintsIfNecessary(true)
+                .build()
+        }
+        trackSelector = selector
         val instance = ExoPlayer.Builder(this, renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setTrackSelector(selector)
             .setSeekBackIncrementMs(SEEK_INCREMENT_MS)
             .setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
             .build()
+        instance.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .build(),
+            true,
+        )
+        instance.setHandleAudioBecomingNoisy(true)
+        instance.volume = 1f
         player = instance
         playerView.player = instance
         val mime = when {
@@ -143,7 +176,7 @@ class PlayerActivity : AppCompatActivity() {
             url.contains(".mpd", true) -> MimeTypes.APPLICATION_MPD
             else -> null
         }
-        val item = MediaItem.Builder().setUri(url).apply { if (mime != null) setMimeType(mime) }.build()
+        val item = buildMediaItem(url, mime, externalSubtitles())
         logPrepare(url, mime)
         instance.setMediaItem(item)
         if (resumeEnabled) {
@@ -245,6 +278,102 @@ class PlayerActivity : AppCompatActivity() {
         return true
     }
 
+    private fun configureSubtitleRendering() {
+        playerView.subtitleView?.apply {
+            setUserDefaultStyle()
+            setUserDefaultTextSize()
+            setApplyEmbeddedStyles(true)
+            setApplyEmbeddedFontSizes(true)
+            val television = resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+                Configuration.UI_MODE_TYPE_TELEVISION
+            setBottomPaddingFraction(
+                if (television) TV_SUBTITLE_BOTTOM_PADDING_FRACTION
+                else SubtitleView.DEFAULT_BOTTOM_PADDING_FRACTION,
+            )
+        }
+    }
+
+    private fun showPlayerSettings() {
+        val activePlayer = player ?: return
+        val entries = buildList {
+            add(PlayerSetting.PLAYBACK_SPEED)
+            if (supportedTrackGroups(activePlayer.currentTracks, C.TRACK_TYPE_AUDIO).isNotEmpty()) {
+                add(PlayerSetting.AUDIO)
+            }
+            if (supportedTrackGroups(activePlayer.currentTracks, C.TRACK_TYPE_TEXT).isNotEmpty()) {
+                add(PlayerSetting.SUBTITLES)
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.player_settings)
+            .setItems(entries.map { getString(it.title) }.toTypedArray()) { _, position ->
+                when (entries[position]) {
+                    PlayerSetting.PLAYBACK_SPEED -> showPlaybackSpeedSettings(activePlayer)
+                    PlayerSetting.AUDIO -> showTrackSettings(activePlayer, C.TRACK_TYPE_AUDIO)
+                    PlayerSetting.SUBTITLES -> showTrackSettings(activePlayer, C.TRACK_TYPE_TEXT)
+                }
+            }
+            .setNegativeButton(R.string.close_settings, null)
+            .show()
+    }
+
+    private fun showPlaybackSpeedSettings(activePlayer: Player) {
+        val checked = PLAYBACK_SPEEDS.indices.minByOrNull { index ->
+            kotlin.math.abs(PLAYBACK_SPEEDS[index] - activePlayer.playbackParameters.speed)
+        } ?: DEFAULT_PLAYBACK_SPEED_INDEX
+        AlertDialog.Builder(this)
+            .setTitle(R.string.playback_speed)
+            .setSingleChoiceItems(PLAYBACK_SPEED_LABELS, checked) { dialog, position ->
+                activePlayer.setPlaybackSpeed(PLAYBACK_SPEEDS[position])
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.close_settings, null)
+            .show()
+    }
+
+    private fun showTrackSettings(activePlayer: Player, trackType: Int) {
+        val groups = supportedTrackGroups(activePlayer.currentTracks, trackType)
+        if (groups.isEmpty()) return
+        val groupSet = groups.map(Tracks.Group::getMediaTrackGroup).toSet()
+        val current = activePlayer.trackSelectionParameters
+        val currentOverrides = current.overrides.filterKeys(groupSet::contains)
+        TrackSelectionDialogBuilder(
+            this,
+            getString(if (trackType == C.TRACK_TYPE_TEXT) R.string.subtitles else R.string.audio_tracks),
+            groups,
+        ) { disabled, overrides ->
+            val updated = activePlayer.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(trackType)
+                .setTrackTypeDisabled(trackType, disabled)
+            overrides.values.forEach { override: TrackSelectionOverride -> updated.addOverride(override) }
+            activePlayer.trackSelectionParameters = updated.build()
+        }
+            .setAllowAdaptiveSelections(false)
+            .setAllowMultipleOverrides(false)
+            .setShowDisableOption(trackType == C.TRACK_TYPE_TEXT)
+            .setIsDisabled(trackType in current.disabledTrackTypes)
+            .setOverrides(currentOverrides)
+            .build()
+            .show()
+    }
+
+    private fun externalSubtitles(): List<ExternalSubtitle> {
+        val uris = intent.getStringArrayListExtra(EXTRA_SUBTITLE_URIS).orEmpty()
+        val mimeTypes = intent.getStringArrayListExtra(EXTRA_SUBTITLE_MIME_TYPES).orEmpty()
+        val languages = intent.getStringArrayListExtra(EXTRA_SUBTITLE_LANGUAGES).orEmpty()
+        val labels = intent.getStringArrayListExtra(EXTRA_SUBTITLE_LABELS).orEmpty()
+        val flags = intent.getIntArrayExtra(EXTRA_SUBTITLE_SELECTION_FLAGS) ?: intArrayOf()
+        return uris.indices.mapNotNull { index ->
+            ExternalSubtitle(
+                uri = uris[index].takeIf(String::isNotBlank) ?: return@mapNotNull null,
+                mimeType = mimeTypes.getOrNull(index)?.takeIf(String::isNotBlank) ?: return@mapNotNull null,
+                language = languages.getOrNull(index)?.takeIf(String::isNotBlank),
+                label = labels.getOrNull(index)?.takeIf(String::isNotBlank),
+                selectionFlags = flags.getOrElse(index) { 0 },
+            )
+        }
+    }
+
     private fun switchToFallbackUrl(): Boolean {
         if (fallbackAttempted) return false
         val fallback = intent.getStringExtra(EXTRA_FALLBACK_URL).orEmpty()
@@ -339,6 +468,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         playerView.player = null
         player = null
+        trackSelector = null
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -391,11 +521,20 @@ class PlayerActivity : AppCompatActivity() {
         private const val EXTRA_STREAM_ID = "stream_id"
         private const val EXTRA_KIND = "content_kind"
         private const val EXTRA_FALLBACK_URL = "fallback_url"
+        private const val EXTRA_SUBTITLE_URIS = "subtitle_uris"
+        private const val EXTRA_SUBTITLE_MIME_TYPES = "subtitle_mime_types"
+        private const val EXTRA_SUBTITLE_LANGUAGES = "subtitle_languages"
+        private const val EXTRA_SUBTITLE_LABELS = "subtitle_labels"
+        private const val EXTRA_SUBTITLE_SELECTION_FLAGS = "subtitle_selection_flags"
         private const val PLAYBACK_USER_AGENT = "CrownMedia/1.0"
         private const val TAG = "CrownPlayer"
         private const val STARTUP_TIMEOUT_MS = 25_000L
         private const val LIVE_REBUFFER_TIMEOUT_MS = 20_000L
         private const val STABLE_PLAYBACK_RESET_MS = 30_000L
+        private const val TV_SUBTITLE_BOTTOM_PADDING_FRACTION = 0.12f
+        private const val DEFAULT_PLAYBACK_SPEED_INDEX = 3
+        private val PLAYBACK_SPEEDS = floatArrayOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+        private val PLAYBACK_SPEED_LABELS = arrayOf("0.25×", "0.5×", "0.75×", "Normal", "1.25×", "1.5×", "2×")
         internal const val SEEK_INCREMENT_MS = 15_000L
         internal val CONTROLLER_NAVIGATION_KEYS = setOf(
             KeyEvent.KEYCODE_DPAD_CENTER,
@@ -428,6 +567,7 @@ class PlayerActivity : AppCompatActivity() {
             streamId: String = "",
             contentKind: String = if (live) "live" else "video",
             fallbackUrl: String? = null,
+            externalSubtitles: List<ExternalSubtitle> = emptyList(),
         ) =
             Intent(context, PlayerActivity::class.java)
                 .putExtra(EXTRA_URL, url).putExtra(EXTRA_TITLE, title).putExtra(EXTRA_LIVE, live)
@@ -435,6 +575,11 @@ class PlayerActivity : AppCompatActivity() {
                 .putExtra(EXTRA_PLAYLIST_ID, playlistId).putExtra(EXTRA_STREAM_ID, streamId)
                 .putExtra(EXTRA_KIND, contentKind)
                 .putExtra(EXTRA_FALLBACK_URL, fallbackUrl)
+                .putStringArrayListExtra(EXTRA_SUBTITLE_URIS, ArrayList(externalSubtitles.map(ExternalSubtitle::uri)))
+                .putStringArrayListExtra(EXTRA_SUBTITLE_MIME_TYPES, ArrayList(externalSubtitles.map(ExternalSubtitle::mimeType)))
+                .putStringArrayListExtra(EXTRA_SUBTITLE_LANGUAGES, ArrayList(externalSubtitles.map { it.language.orEmpty() }))
+                .putStringArrayListExtra(EXTRA_SUBTITLE_LABELS, ArrayList(externalSubtitles.map { it.label.orEmpty() }))
+                .putExtra(EXTRA_SUBTITLE_SELECTION_FLAGS, externalSubtitles.map(ExternalSubtitle::selectionFlags).toIntArray())
 
         fun launchExternal(context: Context, url: String, title: String, packageName: String?): Boolean {
             val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -450,6 +595,12 @@ class PlayerActivity : AppCompatActivity() {
         private fun hash(input: String): String = MessageDigest.getInstance("SHA-256")
             .digest(input.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
     }
+}
+
+private enum class PlayerSetting(val title: Int) {
+    PLAYBACK_SPEED(R.string.playback_speed),
+    AUDIO(R.string.audio_tracks),
+    SUBTITLES(R.string.subtitles),
 }
 
 @UnstableApi
