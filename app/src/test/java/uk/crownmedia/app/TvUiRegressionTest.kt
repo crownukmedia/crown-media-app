@@ -1180,6 +1180,9 @@ class TvUiRegressionTest {
         assertNull(testStore.selected())
         assertTrue(activity.findViewById<View>(R.id.login_panel).isShown)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.side_nav).visibility)
+        val service = activity.findViewById<MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        assertEquals(CrownService.displayNames.size, service.adapter.count)
+        assertEquals(CrownService.default.displayName, service.text.toString())
         assertFalse(activity.isFinishing)
     }
 

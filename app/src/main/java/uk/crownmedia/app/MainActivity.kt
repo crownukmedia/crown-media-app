@@ -3480,9 +3480,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureLogin() = with(binding.loginPanel) {
-        serviceDropdown.setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, CrownService.displayNames))
-        serviceDropdown.setText(CrownService.default.displayName, false)
-        loginService = CrownService.default
         serviceDropdown.setOnItemClickListener { _, _, _, _ ->
             val selected = CrownService.fromDisplayName(serviceDropdown.text.toString())
             if (selected != loginService) {
@@ -3527,7 +3524,24 @@ class MainActivity : AppCompatActivity() {
                 if (!checked) store.saveLoginDetails(loginService, null)
             }
         }
-        restoreSavedLoginDetails(loginService)
+        reloadLoginServices(resetSelection = true)
+    }
+
+    private fun reloadLoginServices(resetSelection: Boolean) = with(binding.loginPanel) {
+        val currentService = CrownService.entries.firstOrNull {
+            it.displayName == serviceDropdown.text?.toString()
+        }
+        val selectedService = currentService.takeUnless { resetSelection } ?: CrownService.default
+        serviceDropdown.setAdapter(
+            ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_list_item_1,
+                CrownService.displayNames,
+            ),
+        )
+        serviceDropdown.setText(selectedService.displayName, false)
+        loginService = selectedService
+        restoreSavedLoginDetails(selectedService)
         updateSelectedService()
     }
 
@@ -3543,18 +3557,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun showWelcome() {
         catalogAdapter.submit(emptyList())
-        showLogin(canGoBack = false)
+        showLogin(canGoBack = false, resetService = true)
         analytics.trackScreen("login")
     }
 
     private fun showManualPlaylist() {
-        showLogin(canGoBack = store.selected() != null)
+        showLogin(canGoBack = store.selected() != null, resetService = true)
     }
 
-    private fun showLogin(canGoBack: Boolean) = with(binding.loginPanel) {
+    private fun showLogin(canGoBack: Boolean, resetService: Boolean) = with(binding.loginPanel) {
         loginJob?.cancel()
         setLoginLoading(false)
         clearLoginErrors()
+        reloadLoginServices(resetSelection = resetService)
         binding.topBar.isVisible = false
         binding.actionMore.isVisible = false
         binding.sideNav.isVisible = false

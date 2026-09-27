@@ -1,6 +1,7 @@
 package uk.crownmedia.app
 
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.ImageView
 import com.google.android.material.materialswitch.MaterialSwitch
 import org.junit.After
@@ -92,6 +93,23 @@ class LoginScreenTest {
         service.setText(CrownService.EIGHT_K.displayName, false)
         service.onItemClickListener?.onItemClick(null, service, 2, 2L)
         assertTrue(screen.findViewById<View>(R.id.connect_button).isEnabled)
+    }
+
+    @Test
+    fun openingManualPlaylistReloadsEveryServiceAndResetsTheSelection() {
+        val screen = requireNotNull(activity)
+        val service = screen.findViewById<com.google.android.material.textfield.MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        service.setAdapter(ArrayAdapter(screen, android.R.layout.simple_list_item_1, listOf("Select Service")))
+        service.setText("Select Service", false)
+
+        MainActivity::class.java.getDeclaredMethod("showManualPlaylist").apply {
+            isAccessible = true
+            invoke(screen)
+        }
+
+        assertEquals(CrownService.displayNames.size, service.adapter.count)
+        assertEquals(CrownService.displayNames, (0 until service.adapter.count).map(service.adapter::getItem))
+        assertEquals(CrownService.default.displayName, service.text.toString())
     }
 
     @Test
