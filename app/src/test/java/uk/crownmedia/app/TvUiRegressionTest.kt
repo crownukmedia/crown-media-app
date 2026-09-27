@@ -128,6 +128,17 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun launcherForegroundCompensatesForBrandAssetsTransparentSafeMargin() {
+        val foreground = requireNotNull(ContextCompat.getDrawable(activity, R.drawable.ic_launcher_foreground))
+        val legacyBrand = requireNotNull(ContextCompat.getDrawable(activity, R.drawable.crown_media_brand))
+
+        assertEquals(820, foreground.intrinsicWidth)
+        assertEquals(820, foreground.intrinsicHeight)
+        assertEquals(820, legacyBrand.intrinsicWidth)
+        assertEquals(820, legacyBrand.intrinsicHeight)
+    }
+
+    @Test
     fun liveCategoryOpensCompactChannelRailAndBackRestoresCategoryHierarchy() = runBlocking {
         val playlist = requireNotNull(testStore.selected())
         val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
@@ -246,11 +257,30 @@ class TvUiRegressionTest {
         assertTrue(previewAudio.hasFocus())
         assertEquals(activity.getString(R.string.unmute), previewAudio.text.toString())
         assertEquals(activity.getString(R.string.unmute_live_preview), previewAudio.contentDescription)
-        previewAudio.performClick()
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER)))
         assertTrue(previewAudio.hasFocus())
         assertTrue(previewAudio.isSelected)
         assertEquals(activity.getString(R.string.mute), previewAudio.text.toString())
         assertTrue(activity.findViewById<TextView>(R.id.live_channel_status).text.toString().startsWith("Preview audio on"))
+
+        // A preview timeout/error used to disable the focused button. Android then reassigned
+        // focus to the first primary-nav item, so the matching remote key-up could open Home.
+        val controller = MainActivity::class.java.getDeclaredField("inlinePreviewController").apply {
+            isAccessible = true
+        }.get(activity)
+        val ended = controller.javaClass.getDeclaredField("onPreviewEnded").apply { isAccessible = true }
+            .get(controller) as Function0<*>
+        ended.invoke()
+        assertTrue(previewAudio.isEnabled)
+        assertTrue(previewAudio.hasFocus())
+        assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)
+        assertFalse(activity.findViewById<View>(R.id.nav_home).isSelected)
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(previewAudio.hasFocus())
+        assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)
+
         assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
         assertTrue(play.hasFocus())
         val verticalActions = activity.findViewById<LinearLayout>(R.id.live_channel_actions).orientation == LinearLayout.VERTICAL
@@ -1218,6 +1248,29 @@ class TvUiRegressionTest {
         }
         awaitUi { adapter.currentItems.size == 3 && adapter.currentItems.all { it.title.startsWith("Needle") } }
         assertEquals("needle", search.text.toString())
+    }
+
+    @Test
+    fun leavingASectionClearsScopedCategoryAndMasterSearchBeforeReentry() {
+        val search = activity.findViewById<EditText>(R.id.search_box)
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
+
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        search.setText("sports")
+        categorySearch.setText("uk")
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        assertEquals("", search.text.toString())
+        assertEquals("", categorySearch.text.toString())
+
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        assertEquals("", search.text.toString())
+        assertEquals("", categorySearch.text.toString())
+
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        search.setText("global")
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        assertEquals("", search.text.toString())
     }
 
     @Test

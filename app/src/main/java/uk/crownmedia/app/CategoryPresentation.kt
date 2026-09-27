@@ -9,7 +9,6 @@ internal fun displayedCategoryList(
     includeFavorites: Boolean = true,
 ): List<XtreamCategory> {
     val seenIds = mutableSetOf<String>()
-    val seenNames = mutableSetOf<String>()
     val provider = providerCategories.asSequence()
         .filterNot { it.id in hiddenIds }
         .map { category ->
@@ -19,29 +18,16 @@ internal fun displayedCategoryList(
         .filterNot(::isProviderAllCategory)
         .filter { category ->
             val idKey = category.id.trim().lowercase(Locale.ROOT)
-            val nameKey = normalizedCategoryName(category.name)
-            idKey.isNotBlank() && seenIds.add(idKey) && seenNames.add(nameKey)
+            // A provider may deliberately expose multiple bouquets with the same display name.
+            // Category IDs are the stable identity; collapsing by name hides valid content.
+            idKey.isNotBlank() && seenIds.add(idKey)
         }
-        .withIndex()
-        .sortedWith(compareBy<IndexedValue<XtreamCategory>> { categoryRegionPriority(it.value.name) }.thenBy { it.index })
-        .map { it.value }
         .toList()
 
     return buildList {
         add(XtreamCategory("all", "All"))
         if (includeFavorites) add(XtreamCategory("favorites", "Favorites"))
         addAll(provider)
-    }
-}
-
-internal fun categoryRegionPriority(name: String): Int {
-    val tokens = categoryTokens(name)
-    val joined = tokens.joinToString(" ")
-    return when {
-        "united kingdom" in joined || "great britain" in joined ||
-            tokens.any { it in UK_TOKENS } || tokens.windowed(2).any { it == listOf("u", "k") } -> 0
-        tokens.any { it in IRELAND_TOKENS } -> 1
-        else -> 2
     }
 }
 
@@ -67,8 +53,6 @@ internal fun orderedCatalogCards(cards: List<CatalogCard>, order: String): List<
     else -> cards
 }
 
-private fun normalizedCategoryName(value: String): String = categoryTokens(value).joinToString(" ")
-
 private fun categoryTokens(value: String): List<String> = value
     .lowercase(Locale.ROOT)
     .replace(Regex("[^a-z0-9]+"), " ")
@@ -76,8 +60,6 @@ private fun categoryTokens(value: String): List<String> = value
     .split(Regex("\\s+"))
     .filter(String::isNotBlank)
 
-private val UK_TOKENS = setOf("uk", "britain", "british")
-private val IRELAND_TOKENS = setOf("ireland", "irish", "ie", "ir")
 private val PROVIDER_ALL_NAMES = setOf(
     "all",
     "all category",

@@ -189,6 +189,18 @@ class PostLoginMobileUiTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         assertEquals("", search.text.toString())
         assertEquals("Search live channels", search.hint.toString())
+
+        search.setText("sports")
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        assertEquals("", search.text.toString())
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        assertEquals("", search.text.toString())
+
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        search.setText("global")
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        assertEquals("", search.text.toString())
     }
 
     private fun openHomeFeature(id: String) {

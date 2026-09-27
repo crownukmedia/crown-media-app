@@ -78,6 +78,7 @@ import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import uk.crownmedia.data.xtream.XtreamSubtitle
 import uk.crownmedia.data.xtream.preferredLiveExtension
 import uk.crownmedia.player.ExternalSubtitle
+import uk.crownmedia.player.PlaybackQueueItem
 import uk.crownmedia.player.PlayerActivity
 import uk.crownmedia.player.InlineLivePreviewController
 import uk.crownmedia.player.InlineLivePreviewView
@@ -159,6 +160,7 @@ class MainActivity : AppCompatActivity() {
     private var liveChannelEpgJob: Job? = null
     private var livePreviewMuted = true
     private var livePreviewAudioControlEnabled = false
+    private var livePreviewUnavailable = false
     private val categorySearchQueries = EnumMap<Section, String>(Section::class.java)
     private val categorySearchContextIds = EnumMap<Section, String>(Section::class.java)
     private var updatingCategorySearchBox = false
@@ -192,7 +194,8 @@ class MainActivity : AppCompatActivity() {
         inlinePreviewController = InlineLivePreviewController(this) {
             activeInlinePreview = null
             livePreviewMuted = true
-            livePreviewAudioControlEnabled = false
+            livePreviewUnavailable = true
+            livePreviewAudioControlEnabled = liveChannelBrowserOpen && liveChannelSelection != null
             updateLivePreviewAudioControl()
             if (liveChannelBrowserOpen && !isFinishing) {
                 findViewById<TextView>(R.id.live_channel_status).text = "Preview unavailable  •  Press OK to play"
@@ -374,6 +377,10 @@ class MainActivity : AppCompatActivity() {
             nextFocusUpId = id
             nextFocusDownId = play.id
             setOnKeyListener { view, keyCode, event ->
+                if (keyCode in TV_ACTIVATION_KEYS) {
+                    if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) view.performClick()
+                    return@setOnKeyListener true
+                }
                 if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> focusSelectedLiveChannel()
@@ -440,13 +447,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleLivePreviewAudio() {
         if (!isTelevisionLayout() || !livePreviewAudioControlEnabled) return
+        val control = findViewById<Button?>(R.id.live_preview_audio_toggle)
+        if (livePreviewUnavailable) {
+            control?.announceForAccessibility(getString(R.string.preview_unavailable))
+            control?.post { if (liveChannelBrowserOpen && !isFinishing) control.requestFocus() }
+            return
+        }
         livePreviewMuted = !livePreviewMuted
         inlinePreviewController.setMuted(livePreviewMuted)
         updateLivePreviewAudioControl()
         liveChannelSelection?.let { updateLivePreviewStatus(it, activeInlinePreview != null) }
-        findViewById<Button?>(R.id.live_preview_audio_toggle)?.announceForAccessibility(
+        control?.announceForAccessibility(
             getString(if (livePreviewMuted) R.string.muted_preview else R.string.preview_audio_on),
         )
+        control?.post { if (liveChannelBrowserOpen && !isFinishing) control.requestFocus() }
     }
 
     private fun updateLivePreviewAudioControl() {
@@ -937,6 +951,24 @@ class MainActivity : AppCompatActivity() {
         if (clearFocus) binding.searchBox.clearFocus()
     }
 
+    private fun resetSearchAfterLeavingSection(previous: Section) {
+        searchJob?.cancel()
+        scopedSearchJob?.cancel()
+        searchShouldFocusResults = false
+        lastTrackedSearch = null
+        if (previous == Section.SEARCH) masterSearchQuery = ""
+        if (previous in PAGED_SECTIONS) {
+            sectionState(previous).searchQuery = ""
+            resetCategorySearch(previous)
+        }
+        updatingSearchBox = true
+        binding.searchBox.text?.clear()
+        updatingSearchBox = false
+        binding.searchBox.clearFocus()
+        binding.categorySearchBox.clearFocus()
+        hideKeyboard()
+    }
+
     private fun open(value: Section) {
         if (store.selected() == null) {
             showWelcome()
@@ -944,7 +976,7 @@ class MainActivity : AppCompatActivity() {
         }
         ensurePlaylistState()
         val changingTopLevelSection = section != value
-        if (changingTopLevelSection && section in PAGED_SECTIONS) resetCategorySearch(section)
+        if (changingTopLevelSection) resetSearchAfterLeavingSection(section)
         if (changingTopLevelSection || value != Section.LIVE) resetLiveChannelBrowser(renderGrid = false)
         if (changingTopLevelSection || value != Section.LIVE) stopInlinePreview()
         captureSectionState()
@@ -958,9 +990,6 @@ class MainActivity : AppCompatActivity() {
         searchJob?.cancel()
         if (changingTopLevelSection) {
             contentRequestGeneration++
-            searchShouldFocusResults = false
-            masterSearchQuery = ""
-            if (section in PAGED_SECTIONS) sectionState(section).searchQuery = ""
             if (value in PAGED_SECTIONS) {
                 cancelSectionRefreshes(value)
                 sectionState(value).resetForTopLevelEntry()
@@ -2530,6 +2559,7 @@ class MainActivity : AppCompatActivity() {
         liveChannelSelection = null
         livePreviewMuted = true
         livePreviewAudioControlEnabled = false
+        livePreviewUnavailable = false
         updateLivePreviewAudioControl()
         stopInlinePreview()
         catalogAdapter.setLiveChannelNavigation(false)
@@ -2561,6 +2591,7 @@ class MainActivity : AppCompatActivity() {
         if (selectionChanged) {
             livePreviewMuted = true
             livePreviewAudioControlEnabled = true
+            livePreviewUnavailable = false
             inlinePreviewController.setMuted(true)
             updateLivePreviewAudioControl()
         }
@@ -2685,6 +2716,24 @@ class MainActivity : AppCompatActivity() {
             }
             fallbackExtension?.let { api.streamUrl(playlist.credentials, card.kind, card.id, it) }
         } else null
+        val episodeQueue = if (!live && card.kind == "episode") {
+            nestedSeries?.details?.let { details ->
+                orderedSeriesEpisodes(details).map { episode ->
+                    PlaybackQueueItem(
+                        url = api.streamUrl(
+                            playlist.credentials,
+                            "episode",
+                            episode.id,
+                            episode.extension,
+                        ),
+                        title = episode.title,
+                        streamId = episode.id,
+                        externalSubtitles = episode.subtitles.mapNotNull { it.toExternalSubtitle() },
+                    )
+                }
+            }.orEmpty()
+        } else emptyList()
+        val episodeQueueIndex = episodeQueue.indexOfFirst { it.streamId == card.id }
         analytics.trackPlaybackRequested(card.kind, store.player, live)
         when (store.player) {
             "vlc" -> external(url, card.title, "org.videolan.vlc")
@@ -2702,6 +2751,8 @@ class MainActivity : AppCompatActivity() {
                     card.kind,
                     fallbackUrl,
                     card.externalSubtitles,
+                    episodeQueue.takeIf { episodeQueueIndex >= 0 }.orEmpty(),
+                    episodeQueueIndex.coerceAtLeast(0),
                 ),
             )
         }
@@ -2865,6 +2916,7 @@ class MainActivity : AppCompatActivity() {
             activeInlinePreview = target
             if (liveChannelBrowserOpen) {
                 livePreviewAudioControlEnabled = true
+                livePreviewUnavailable = false
                 updateLivePreviewAudioControl()
                 updateLivePreviewStatus(target.card, includeFullscreenHint = true)
             }
@@ -2881,6 +2933,7 @@ class MainActivity : AppCompatActivity() {
         if (releasePlayer) {
             livePreviewMuted = true
             livePreviewAudioControlEnabled = liveChannelSelection != null && liveChannelBrowserOpen
+            livePreviewUnavailable = false
             updateLivePreviewAudioControl()
             inlinePreviewController.release()
         } else inlinePreviewController.stop()
@@ -4316,6 +4369,12 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP,
             KeyEvent.KEYCODE_DPAD_DOWN,
+        )
+        private val TV_ACTIVATION_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_BUTTON_A,
         )
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
         private val FEATURE_SECTIONS = setOf(Section.EPG, Section.FAVORITES, Section.CATCH_UP)
