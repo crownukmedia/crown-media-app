@@ -3462,30 +3462,67 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureLogin() = with(binding.loginPanel) {
-        val openServiceDropdown = {
-            if (serviceDropdown.isEnabled) {
-                serviceDropdown.requestFocus()
-                serviceDropdown.showDropDown()
-            }
-        }
-        serviceLayout.setOnClickListener { openServiceDropdown() }
-        serviceDropdown.setOnClickListener { openServiceDropdown() }
-        serviceDropdown.setOnKeyListener { _, keyCode, event ->
-            if (
-                keyCode in setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER) &&
-                event.action == KeyEvent.ACTION_UP && event.repeatCount == 0
-            ) {
-                openServiceDropdown()
-                true
-            } else keyCode in setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)
-        }
-        serviceDropdown.setOnItemClickListener { _, _, _, _ ->
-            val selected = CrownService.fromDisplayName(serviceDropdown.text.toString())
+        fun selectService(position: Int, moveToCredentials: Boolean) {
+            val selectedName = serviceDropdown.adapter?.getItem(position)?.toString() ?: return
+            serviceDropdown.setText(selectedName, false)
+            serviceDropdown.dismissDropDown()
+            val selected = CrownService.fromDisplayName(selectedName)
             if (selected != loginService) {
                 loginService = selected
                 restoreSavedLoginDetails(selected)
             }
             updateSelectedService()
+            if (moveToCredentials && isTelevisionLayout()) username.requestFocus()
+        }
+
+        val openServiceDropdown = {
+            if (serviceDropdown.isEnabled) {
+                serviceDropdown.requestFocus()
+                serviceDropdown.showDropDown()
+                val selectedPosition = CrownService.displayNames.indexOf(serviceDropdown.text.toString())
+                    .coerceAtLeast(0)
+                serviceDropdown.setListSelection(selectedPosition)
+            }
+        }
+        serviceLayout.setOnClickListener { openServiceDropdown() }
+        serviceDropdown.setOnClickListener { openServiceDropdown() }
+        serviceDropdown.setOnKeyListener { _, keyCode, event ->
+            when {
+                keyCode in TV_ACTIVATION_KEYS -> {
+                    if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) {
+                        if (serviceDropdown.isPopupShowing) {
+                            val selectedPosition = serviceDropdown.listSelection.takeIf { it >= 0 }
+                                ?: CrownService.displayNames.indexOf(serviceDropdown.text.toString()).coerceAtLeast(0)
+                            selectService(selectedPosition, moveToCredentials = true)
+                        } else {
+                            openServiceDropdown()
+                        }
+                    }
+                    true
+                }
+                serviceDropdown.isPopupShowing && keyCode in setOf(
+                    KeyEvent.KEYCODE_DPAD_UP,
+                    KeyEvent.KEYCODE_DPAD_DOWN,
+                ) -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        val currentPosition = serviceDropdown.listSelection.takeIf { it >= 0 }
+                            ?: CrownService.displayNames.indexOf(serviceDropdown.text.toString()).coerceAtLeast(0)
+                        val direction = if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1
+                        serviceDropdown.setListSelection(
+                            (currentPosition + direction).coerceIn(0, serviceDropdown.adapter.count - 1),
+                        )
+                    }
+                    true
+                }
+                serviceDropdown.isPopupShowing && keyCode == KeyEvent.KEYCODE_BACK -> {
+                    if (event.action == KeyEvent.ACTION_UP) serviceDropdown.dismissDropDown()
+                    true
+                }
+                else -> false
+            }
+        }
+        serviceDropdown.setOnItemClickListener { _, _, position, _ ->
+            selectService(position, moveToCredentials = true)
         }
         connectButton.setOnClickListener { connectPlaylist() }
         qrButton.setOnClickListener { showDeviceActivation() }

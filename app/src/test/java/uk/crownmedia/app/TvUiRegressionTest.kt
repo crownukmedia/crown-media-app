@@ -1405,6 +1405,67 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun serviceDropdownCanBeOpenedNavigatedAndSelectedUsingOnlyDpad() {
+        activity.finish()
+        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        setTelevisionMode()
+        activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+
+        val service = activity.findViewById<MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        val username = activity.findViewById<View>(R.id.username)
+        service.requestFocus()
+
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(service.isPopupShowing)
+        assertEquals(0, service.listSelection)
+
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertEquals(1, service.listSelection)
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertEquals(2, service.listSelection)
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP)))
+        assertEquals(1, service.listSelection)
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertEquals(2, service.listSelection)
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER)))
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(CrownService.EIGHT_K.displayName, service.text.toString())
+        assertFalse(service.isPopupShowing)
+        assertTrue(username.hasFocus())
+    }
+
+    @Test
+    fun serviceDropdownBackClosesOptionsWithoutChangingSelectionOrLeavingLogin() {
+        activity.finish()
+        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        setTelevisionMode()
+        activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+
+        val service = activity.findViewById<MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        service.requestFocus()
+        service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER))
+        service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER))
+        service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
+        service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN))
+
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK)))
+
+        assertFalse(service.isPopupShowing)
+        assertEquals(CrownService.default.displayName, service.text.toString())
+        assertTrue(service.hasFocus())
+        assertTrue(activity.findViewById<View>(R.id.login_panel).isShown)
+        assertFalse(activity.isFinishing)
+    }
+
+    @Test
     fun tvLoginLogoUsesContainedCenteredArtworkWithSafePadding() {
         activity.finish()
         MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
