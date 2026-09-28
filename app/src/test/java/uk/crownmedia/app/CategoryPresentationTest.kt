@@ -40,16 +40,17 @@ class CategoryPresentationTest {
     }
 
     @Test
-    fun namedSportsAndUhdFoldersRemainVisibleWhenProviderReturnsThem() {
+    fun crown8kDolbyAudioAndNowTvUhdFoldersRemainVisibleWhenProviderReturnsThem() {
         val result = displayedCategoryList(
             listOf(
-                XtreamCategory("157", "UK | TNT SPORTS"),
-                XtreamCategory("1", "UK | SPORTS"),
-                XtreamCategory("314", "UK | ALL 4K GAMES"),
+                XtreamCategory("1964", "UK| NOW TV SPORT ᴴᴰ/ᴿᴬᵂ"),
+                XtreamCategory("1965", "UK| NOW TV SPORT ᵁᴴᴰ ³⁸⁴⁰ᴾ"),
+                XtreamCategory("1726", "UK| TNT SPORT ᴿᴬᵂ ⱽᴵᴾ ᴰᴼᴸᴮʸ ᴬᵁᴰᴵᴼ"),
+                XtreamCategory("1731", "UK| SPORT ᴿᴬᵂ ⱽᴵᴾ ᴰᴼᴸᴮʸ ᴬᵁᴰᴵᴼ"),
             ),
         )
 
-        assertEquals(listOf("157", "1", "314"), result.drop(2).map { it.id })
+        assertEquals(listOf("1964", "1965", "1726", "1731"), result.drop(2).map { it.id })
         assertFalse(isProviderAllCategory(XtreamCategory("44", "Alligator TV")))
     }
 
