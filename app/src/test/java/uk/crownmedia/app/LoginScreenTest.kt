@@ -1,6 +1,7 @@
 package uk.crownmedia.app
 
 import android.view.View
+import android.view.KeyEvent
 import android.widget.ArrayAdapter
 import android.widget.ImageView
 import com.google.android.material.materialswitch.MaterialSwitch
@@ -8,6 +9,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -110,6 +112,29 @@ class LoginScreenTest {
         assertEquals(CrownService.displayNames.size, service.adapter.count)
         assertEquals(CrownService.displayNames, (0 until service.adapter.count).map(service.adapter::getItem))
         assertEquals(CrownService.default.displayName, service.text.toString())
+    }
+
+    @Test
+    fun tappingAnywhereInServiceFieldOpensTheDropdown() {
+        val screen = requireNotNull(activity)
+        val service = screen.findViewById<com.google.android.material.textfield.MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        val layout = screen.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.service_layout)
+
+        assertFalse(service.isPopupShowing)
+        layout.performClick()
+        assertTrue(service.hasFocus())
+        assertTrue(service.isPopupShowing)
+    }
+
+    @Test
+    fun enterOnFocusedServiceFieldOpensTheDropdown() {
+        val service = requireNotNull(activity)
+            .findViewById<com.google.android.material.textfield.MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        service.requestFocus()
+
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(service.isPopupShowing)
     }
 
     @Test

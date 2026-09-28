@@ -17,6 +17,7 @@ import android.widget.ImageView
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.text.TextUtils
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.constraintlayout.widget.ConstraintSet
 import androidx.core.content.ContextCompat
@@ -99,6 +100,56 @@ class TvUiRegressionTest {
         assertFalse(activity.findViewById<View>(R.id.nav_home).hasFocus())
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_reload).visibility)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.action_playlist).visibility)
+    }
+
+    @Test
+    fun compactLongTitlesMarqueeOnlyWhileTheirTvItemIsFocused() {
+        val title = TextView(activity).apply {
+            text = "VIP UK SPORTS DOLBY AUDIO 4K ULTRA HIGH DEFINITION"
+            maxLines = 1
+        }
+
+        title.showFocusedMarquee(false)
+        assertFalse(title.isSelected)
+        assertEquals(TextUtils.TruncateAt.END, title.ellipsize)
+
+        title.showFocusedMarquee(true)
+        assertTrue(title.isSelected)
+        assertEquals(TextUtils.TruncateAt.MARQUEE, title.ellipsize)
+        assertEquals(-1, title.marqueeRepeatLimit)
+
+        title.showFocusedMarquee(false)
+        assertFalse(title.isSelected)
+        assertEquals(TextUtils.TruncateAt.END, title.ellipsize)
+    }
+
+    @Test
+    fun fullScreenLaunchReleasesLivePreviewBeforeThePlayerActivityStarts() {
+        val controller = MainActivity::class.java.getDeclaredField("inlinePreviewController").apply {
+            isAccessible = true
+        }.get(activity)
+        val host = activity.findViewById<uk.crownmedia.player.InlineLivePreviewView>(R.id.live_channel_preview)
+        controller.javaClass.getDeclaredMethod(
+            "start",
+            uk.crownmedia.player.InlineLivePreviewView::class.java,
+            String::class.java,
+            Boolean::class.javaPrimitiveType,
+        ).apply { isAccessible = true }.invoke(controller, host, "http://127.0.0.1/live.ts", true)
+        val playerField = controller.javaClass.getDeclaredField("player").apply { isAccessible = true }
+        assertNotNull(playerField.get(controller))
+
+        MainActivity::class.java.getDeclaredMethod(
+            "play",
+            CatalogCard::class.java,
+            Boolean::class.javaPrimitiveType,
+        ).apply { isAccessible = true }.invoke(
+            activity,
+            CatalogCard("42", "live", "Stress channel", null, ""),
+            true,
+        )
+
+        assertNull(playerField.get(controller))
+        assertNotNull(shadowOf(activity).nextStartedActivityForResult)
     }
 
     @Test

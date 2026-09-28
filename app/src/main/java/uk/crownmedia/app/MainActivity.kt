@@ -2735,6 +2735,10 @@ class MainActivity : AppCompatActivity() {
         } else emptyList()
         val episodeQueueIndex = episodeQueue.indexOfFirst { it.streamId == card.id }
         analytics.trackPlaybackRequested(card.kind, store.player, live)
+        // Release the preview decoder and its Surface before another player is launched. Waiting
+        // for MainActivity.onStop() briefly overlaps two decoder/buffer pipelines on low-memory TV
+        // devices and can make the OS kill/restart the process during Preview -> Full screen.
+        stopInlinePreview(releasePlayer = true)
         when (store.player) {
             "vlc" -> external(url, card.title, "org.videolan.vlc")
             "mx" -> if (!PlayerActivity.launchExternal(this, url, card.title, "com.mxtech.videoplayer.ad")) external(url, card.title, "com.mxtech.videoplayer.pro")
@@ -3172,6 +3176,7 @@ class MainActivity : AppCompatActivity() {
         val duration = ((stopTimestamp - startTimestamp) / 60).toInt().coerceAtLeast(1)
         val start = formatCatchUpStart(startTimestamp, playlist.serverTimezone)
         val url = api.catchUpUrl(playlist.credentials, card.id, start, duration)
+        stopInlinePreview(releasePlayer = true)
         internalPlayer.launch(
             PlayerActivity.internalIntent(
                 this,
@@ -3480,6 +3485,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureLogin() = with(binding.loginPanel) {
+        val openServiceDropdown = {
+            if (serviceDropdown.isEnabled) {
+                serviceDropdown.requestFocus()
+                serviceDropdown.showDropDown()
+            }
+        }
+        serviceLayout.setOnClickListener { openServiceDropdown() }
+        serviceDropdown.setOnClickListener { openServiceDropdown() }
+        serviceDropdown.setOnKeyListener { _, keyCode, event ->
+            if (
+                keyCode in setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER) &&
+                event.action == KeyEvent.ACTION_UP && event.repeatCount == 0
+            ) {
+                openServiceDropdown()
+                true
+            } else keyCode in setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)
+        }
         serviceDropdown.setOnItemClickListener { _, _, _, _ ->
             val selected = CrownService.fromDisplayName(serviceDropdown.text.toString())
             if (selected != loginService) {

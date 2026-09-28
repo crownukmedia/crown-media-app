@@ -67,6 +67,7 @@ class PlayerActivity : AppCompatActivity() {
     private var hasReachedReady = false
     private var userPaused = false
     private var trackSelector: DefaultTrackSelector? = null
+    private var playerGeneration = 0L
     private lateinit var recoveryPolicy: PlaybackRecoveryPolicy
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val startupTimeout = Runnable {
@@ -136,6 +137,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun initialize() {
         if (player != null) return
+        val generation = ++playerGeneration
         val url = currentUrl.takeIf(String::isNotBlank) ?: run { finish(); return }
         hasReachedReady = false
         failureStage = "initializing"
@@ -200,6 +202,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         instance.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                if (player !== instance || generation != playerGeneration) return
                 if (playbackQueue.isEmpty()) return
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                     getSharedPreferences("player_progress", MODE_PRIVATE).edit().remove(contentKey).apply()
@@ -210,12 +213,14 @@ class PlayerActivity : AppCompatActivity() {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (player !== instance || generation != playerGeneration || isFinishing) return
                 logFailure("player_error", error)
                 if (!attemptRecovery(error.errorCode in 2000..3999, allowFallback = true)) {
                     showUnavailable(getString(R.string.playback_error_detail))
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (player !== instance || generation != playerGeneration) return
                 timeoutHandler.removeCallbacks(stablePlayback)
                 if (isPlaying) {
                     playerTitle.animate().alpha(0f).setStartDelay(1800).setDuration(300).start()
@@ -223,6 +228,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (player !== instance || generation != playerGeneration) return
                 failureStage = when (playbackState) {
                     Player.STATE_BUFFERING -> "buffering"
                     Player.STATE_READY -> "ready"
@@ -505,7 +511,12 @@ class PlayerActivity : AppCompatActivity() {
         timeoutHandler.removeCallbacks(rebufferTimeout)
         timeoutHandler.removeCallbacks(stablePlayback)
         timeoutHandler.removeCallbacks(automaticRetry)
-        player?.let { current ->
+        playerGeneration++
+        val current = player
+        player = null
+        playerView.player = null
+        trackSelector = null
+        current?.let {
             if (playbackQueue.isNotEmpty()) {
                 applyQueueItem(current.currentMediaItemIndex.coerceIn(playbackQueue.indices))
             }
@@ -516,11 +527,10 @@ class PlayerActivity : AppCompatActivity() {
                     getSharedPreferences("player_progress", MODE_PRIVATE).edit().remove(contentKey).apply()
                 }
             }
-            current.release()
+            runCatching { current.release() }.onFailure { error ->
+                Log.e(TAG, "Player release failed kind=${contentKind()} streamId=${streamId()}", error)
+            }
         }
-        playerView.player = null
-        player = null
-        trackSelector = null
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

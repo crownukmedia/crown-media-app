@@ -150,4 +150,25 @@ class PlayerLaunchRegressionTest {
         assertEquals(View.GONE, playerView.findViewById<View>(androidx.media3.ui.R.id.exo_buffering).visibility)
         assertEquals(View.VISIBLE, activity!!.findViewById<View>(R.id.playback_loading).visibility)
     }
+
+    @Test
+    fun repeatedStartStopReleasesEveryPlayerBeforeTheNextInitialization() {
+        val intent = PlayerActivity.internalIntent(
+            context = RuntimeEnvironment.getApplication(),
+            url = "http://127.0.0.1/live.ts",
+            title = "stress",
+            live = true,
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val playerField = PlayerActivity::class.java.getDeclaredField("player").apply { isAccessible = true }
+
+        repeat(20) {
+            val controller = Robolectric.buildActivity(PlayerActivity::class.java, intent).create().start().resume()
+            activity = controller.get()
+            assertNotNull(playerField.get(activity))
+            controller.pause().stop()
+            assertEquals(null, playerField.get(activity))
+            controller.destroy()
+            activity = null
+        }
+    }
 }
