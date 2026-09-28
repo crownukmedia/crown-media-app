@@ -1731,9 +1731,7 @@ class MainActivity : AppCompatActivity() {
         if (actualCategory == null || store.catalogComplete(playlist.id, target.cardKind, null)) {
             val includeAdult = includeAdultContent()
             val count = cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
-            if (isTelevisionLayout()) {
-                store.saveCatalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult, count)
-            }
+            store.saveCatalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult, count)
             updateContentCount(target, ContentCountState.Ready(count))
         }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "${target.name.lowercase()}_refresh_total_ms=${SystemClock.elapsedRealtime() - refreshStarted};items=$received")
@@ -2307,92 +2305,60 @@ class MainActivity : AppCompatActivity() {
         countJob?.cancel()
         val television = isTelevisionLayout()
         val initialIncludeAdult = includeAdultContent()
-        if (television) {
-            val immediateSnapshot = PAGED_SECTIONS.mapNotNull { target ->
-                store.catalogContentCountSnapshot(playlist.id, target.cardKind, initialIncludeAdult)
-                    ?.let { target to ContentCountState.Ready(it) }
-            }.toMap()
-            if (immediateSnapshot.isNotEmpty()) updateContentCounts(immediateSnapshot)
-        }
+        val immediateSnapshot = PAGED_SECTIONS.mapNotNull { target ->
+            store.catalogContentCountSnapshot(playlist.id, target.cardKind, initialIncludeAdult)
+                ?.let { target to ContentCountState.Ready(it) }
+        }.toMap()
+        if (immediateSnapshot.isNotEmpty()) updateContentCounts(immediateSnapshot)
         countJob = lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                val includeAdult = includeAdultContent()
-                val cachedSnapshot = coroutineScope {
-                    PAGED_SECTIONS.map { target ->
-                        async {
-                            val complete = store.catalogComplete(playlist.id, target.cardKind, null)
-                            val verifiedSnapshot = if (television) {
-                                store.catalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult)
-                            } else null
-                            val count = when {
-                                complete -> runCatching {
-                                    cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
-                                }.getOrDefault(0)
-                                else -> verifiedSnapshot
-                            }
-                            if (television && complete) {
-                                store.saveCatalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult, requireNotNull(count))
-                            }
-                            target to (count?.let(ContentCountState::Ready) ?: ContentCountState.Loading)
-                        }
-                    }.awaitAll().toMap()
-                }
-                if (activePlaylistId != playlist.id) return@repeatOnLifecycle
-                // Complete Room catalogs render all three totals immediately in one frame.
-                updateContentCounts(cachedSnapshot)
-                if (television) {
-                    PAGED_SECTIONS.filter {
-                        store.catalogComplete(playlist.id, it.cardKind, null) &&
-                            store.catalogCategoryCountSnapshot(playlist.id, it.cardKind, includeAdult) == null
-                    }.forEach { target ->
-                        launch {
-                            val counts = runCatching {
-                                cache.accessibleCategoryCounts(playlist.id, target.cardKind, includeAdult)
-                            }.getOrDefault(emptyMap())
-                            store.saveCatalogCategoryCountSnapshot(
-                                playlist.id,
-                                target.cardKind,
-                                includeAdult,
-                                counts,
-                            )
-                        }
-                    }
-                }
-
-                val missing = PAGED_SECTIONS.filterNot {
-                    store.catalogComplete(playlist.id, it.cardKind, null)
-                }
-                if (missing.isEmpty()) return@repeatOnLifecycle
-                val warmResults = coroutineScope {
-                    missing.map { target ->
-                        async { target to awaitCatalogWarmResult(playlist, target.cardKind) }
-                    }.awaitAll().toMap()
-                }
-                if (activePlaylistId != playlist.id) return@repeatOnLifecycle
-
-                val finalSnapshot = cachedSnapshot.toMutableMap()
-                missing.forEach { target ->
-                    val completed = warmResults[target]?.isSuccess == true ||
-                        store.catalogComplete(playlist.id, target.cardKind, null)
-                    finalSnapshot[target] = if (completed) {
-                        val count = runCatching {
-                            cache.accessibleCount(playlist.id, target.cardKind, includeAdultContent())
-                        }.getOrDefault(0)
-                        if (television) {
+            val includeAdult = includeAdultContent()
+            val cachedSnapshot = coroutineScope {
+                PAGED_SECTIONS.map { target ->
+                    async {
+                        val complete = store.catalogComplete(playlist.id, target.cardKind, null)
+                        val verifiedSnapshot = store.catalogContentCountSnapshot(
+                            playlist.id,
+                            target.cardKind,
+                            includeAdult,
+                        )
+                        val cachedCount = if (complete) {
+                            runCatching {
+                                cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
+                            }.getOrDefault(verifiedSnapshot ?: 0)
+                        } else 0
+                        if (complete) {
                             store.saveCatalogContentCountSnapshot(
                                 playlist.id,
                                 target.cardKind,
-                                includeAdultContent(),
-                                count,
+                                includeAdult,
+                                cachedCount,
                             )
                         }
-                        ContentCountState.Ready(count)
-                    } else cachedSnapshot[target]?.takeIf { it is ContentCountState.Ready }
-                        ?: ContentCountState.Unavailable
+                        target to cachedContentCountState(complete, cachedCount, verifiedSnapshot)
+                    }
+                }.awaitAll().toMap()
+            }
+            if (activePlaylistId != playlist.id) return@launch
+            // This path is intentionally local-only. Catalog downloads are owned by explicit
+            // content/search refreshes and must never compete with a TV decoder just for badges.
+            updateContentCounts(cachedSnapshot)
+            if (television) {
+                PAGED_SECTIONS.filter {
+                    store.catalogComplete(playlist.id, it.cardKind, null) &&
+                        store.catalogCategoryCountSnapshot(playlist.id, it.cardKind, includeAdult) == null
+                }.forEach { target ->
+                    launch {
+                        val counts = runCatching {
+                            cache.accessibleCategoryCounts(playlist.id, target.cardKind, includeAdult)
+                        }.getOrDefault(emptyMap())
+                        store.saveCatalogCategoryCountSnapshot(
+                            playlist.id,
+                            target.cardKind,
+                            includeAdult,
+                            counts,
+                        )
+                    }
                 }
-                // Do not make Home visibly count Live, then Movies, then Series. Publish the
-                // completed provider snapshot atomically once all parallel requests settle.
-                updateContentCounts(finalSnapshot)
             }
         }
     }
@@ -2702,9 +2668,20 @@ class MainActivity : AppCompatActivity() {
         }
         healthJob?.cancel()
         liveRankingJob?.cancel()
+        // A catalog response can contain tens of thousands of rows. Do not let a content refresh
+        // or count warm-up keep parsing/indexing behind PlayerActivity on low-memory TV devices.
+        // The visible cached page remains intact and an explicit/next section load can resume it.
+        loadJob?.cancel()
+        countJob?.cancel()
+        categoryCountJob?.cancel()
+        categoryCountJobKey = null
         refreshJobs.values.forEach { it.cancel() }
+        refreshJobs.clear()
         playlistRefreshJob?.cancel()
         searchWarmJob?.cancel()
+        searchWarmJob = null
+        catalogWarmJobs.values.forEach { it.cancel() }
+        catalogWarmJobs.clear()
         val extension = if (live) preferredLiveExtension(playlist.allowedFormats) else card.extension
         val url = api.streamUrl(playlist.credentials, card.kind, card.id, extension)
         val fallbackUrl = if (live) {
@@ -3463,14 +3440,14 @@ class MainActivity : AppCompatActivity() {
                     }
                     cache.finishItemRefresh(playlist.id, kind, null, refreshMarker, received)
                     if (received > 0) store.markCatalogRefreshed(playlist.id, kind, null)
+                    val includeAdult = includeAdultContent()
+                    val count = cache.accessibleCount(playlist.id, kind, includeAdult)
+                    store.saveCatalogContentCountSnapshot(playlist.id, kind, includeAdult, count)
                     if (isTelevisionLayout()) {
-                        val includeAdult = includeAdultContent()
-                        val count = cache.accessibleCount(playlist.id, kind, includeAdult)
                         val categories = cache.accessibleCategoryCounts(playlist.id, kind, includeAdult)
-                        store.saveCatalogContentCountSnapshot(playlist.id, kind, includeAdult, count)
                         store.saveCatalogCategoryCountSnapshot(playlist.id, kind, includeAdult, categories)
-                        count
-                    } else cache.count(playlist.id, kind)
+                    }
+                    count
                 }
             }
             result

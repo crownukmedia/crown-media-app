@@ -725,6 +725,10 @@ class TvUiRegressionTest {
         assertEquals("Live (550)", activity.findViewById<View>(R.id.nav_live).contentDescription.toString())
         assertEquals("Movies (320)", activity.findViewById<View>(R.id.nav_movies).contentDescription.toString())
         assertEquals("Series (140)", activity.findViewById<View>(R.id.nav_series).contentDescription.toString())
+        val warmJobs = MainActivity::class.java.getDeclaredField("catalogWarmJobs").apply {
+            isAccessible = true
+        }.get(activity) as Map<*, *>
+        assertTrue("Home count badges must not start provider catalog downloads", warmJobs.isEmpty())
     }
 
     @Test
