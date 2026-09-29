@@ -6,6 +6,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.TextView
 import android.text.TextUtils
 import android.content.res.ColorStateList
 import android.content.res.Resources
@@ -85,6 +86,18 @@ internal fun categoryAccessibilityLabel(
     )
 } else category.name
 
+/**
+ * Keeps compact TV labels static until their owning row has focus. Android's native marquee
+ * preserves the layout bounds, starts at the beginning, and includes a pause between repeats.
+ */
+internal fun TextView.showFocusedMarquee(focused: Boolean) {
+    animate().cancel()
+    isSelected = focused
+    ellipsize = if (focused) TextUtils.TruncateAt.MARQUEE else TextUtils.TruncateAt.END
+    marqueeRepeatLimit = if (focused) -1 else 0
+    setHorizontallyScrolling(focused)
+}
+
 class CategoryAdapter(
     private val onClick: (XtreamCategory) -> Unit,
     private val onLongClick: (XtreamCategory) -> Unit,
@@ -124,7 +137,7 @@ class CategoryAdapter(
             val customGroup = value.id.startsWith(CUSTOM_GROUP_CATEGORY_PREFIX)
             val deviceClass = binding.root.context.deviceClass()
             binding.categoryName.text = value.name
-            binding.categoryName.ellipsize = TextUtils.TruncateAt.END
+            binding.categoryName.showFocusedMarquee(false)
             binding.categoryName.maxLines = 1
             binding.categoryName.maxWidth = (240 * binding.root.resources.displayMetrics.density).toInt()
             binding.categoryName.setCompoundDrawablesWithIntrinsicBounds(
@@ -179,7 +192,11 @@ class CategoryAdapter(
                     true
                 } else false
             }
-            binding.root.setOnFocusChangeListener { view, focused -> view.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f).setDuration(120).start() }
+            binding.root.setOnFocusChangeListener { view, focused ->
+                binding.categoryName.showFocusedMarquee(focused && deviceClass == DeviceClass.TELEVISION)
+                view.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f).setDuration(120).start()
+            }
+            binding.categoryName.showFocusedMarquee(binding.root.hasFocus() && deviceClass == DeviceClass.TELEVISION)
         }
     }
 }
@@ -373,6 +390,7 @@ class CatalogAdapter(
             }
             binding.root.setOnFocusChangeListener { _, focused ->
                 if (!focused) optionsOpenedFromKey = false
+                binding.title.showFocusedMarquee(focused && television)
                 applyEmphasis(focused)
                 if ((television || liveChannelNavigation) && value.kind == "live") {
                     onPreviewFocusChanged(value, binding.root, binding.inlinePreview, focused)
@@ -389,6 +407,7 @@ class CatalogAdapter(
             // listener. Synchronize the visual state immediately so the first focused tile never
             // appears with its resting border until the user moves the remote.
             applyEmphasis(binding.root.hasFocus())
+            binding.title.showFocusedMarquee(binding.root.hasFocus() && television)
             if ((television || liveChannelNavigation) && binding.root.hasFocus() && value.kind == "live") {
                 onPreviewFocusChanged(value, binding.root, binding.inlinePreview, true)
             }

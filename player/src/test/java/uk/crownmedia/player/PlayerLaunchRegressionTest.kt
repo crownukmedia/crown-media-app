@@ -3,6 +3,7 @@ package uk.crownmedia.player
 import android.content.Intent
 import android.view.KeyEvent
 import android.view.View
+import android.widget.TextView
 import androidx.media3.common.Player
 import androidx.media3.common.C
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -98,6 +99,43 @@ class PlayerLaunchRegressionTest {
     }
 
     @Test
+    fun episodeQueueStartsAtRequestedEpisodeAndKeepsFollowingEpisodesInOnePlayer() {
+        val queue = listOf(
+            PlaybackQueueItem("http://127.0.0.1/s1e1.mp4", "Episode 1", "1"),
+            PlaybackQueueItem("http://127.0.0.1/s1e2.mp4", "Episode 2", "2"),
+            PlaybackQueueItem("http://127.0.0.1/s2e1.mp4", "Episode 3", "3"),
+        )
+        val intent = PlayerActivity.internalIntent(
+            context = RuntimeEnvironment.getApplication(),
+            url = queue[1].url,
+            title = queue[1].title,
+            live = false,
+            streamId = queue[1].streamId,
+            contentKind = "episode",
+            playbackQueue = queue,
+            playbackQueueIndex = 1,
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        val controller = Robolectric.buildActivity(PlayerActivity::class.java, intent).create().start().resume()
+        activity = controller.get()
+        val player = PlayerActivity::class.java.getDeclaredField("player").apply { isAccessible = true }
+            .get(activity) as Player
+
+        assertEquals(3, player.mediaItemCount)
+        assertEquals(1, player.currentMediaItemIndex)
+        assertEquals("2", player.currentMediaItem?.mediaId)
+        assertEquals("Episode 2", activity!!.findViewById<TextView>(R.id.player_title).text.toString())
+
+        player.seekToNextMediaItem()
+        assertEquals(2, player.currentMediaItemIndex)
+        assertEquals("3", player.currentMediaItem?.mediaId)
+        assertEquals("Episode 3", activity!!.findViewById<TextView>(R.id.player_title).text.toString())
+
+        controller.pause().stop().destroy()
+        activity = null
+    }
+
+    @Test
     @Config(sdk = [34], qualifiers = "w411dp-h891dp-port-mdpi")
     fun mobilePlayerAlsoUsesOnlyTheCrownLoadingIndicator() {
         val intent = PlayerActivity.internalIntent(
@@ -111,5 +149,26 @@ class PlayerLaunchRegressionTest {
         val playerView = activity!!.findViewById<PlayerView>(R.id.player_view)
         assertEquals(View.GONE, playerView.findViewById<View>(androidx.media3.ui.R.id.exo_buffering).visibility)
         assertEquals(View.VISIBLE, activity!!.findViewById<View>(R.id.playback_loading).visibility)
+    }
+
+    @Test
+    fun repeatedStartStopReleasesEveryPlayerBeforeTheNextInitialization() {
+        val intent = PlayerActivity.internalIntent(
+            context = RuntimeEnvironment.getApplication(),
+            url = "http://127.0.0.1/live.ts",
+            title = "stress",
+            live = true,
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val playerField = PlayerActivity::class.java.getDeclaredField("player").apply { isAccessible = true }
+
+        repeat(20) {
+            val controller = Robolectric.buildActivity(PlayerActivity::class.java, intent).create().start().resume()
+            activity = controller.get()
+            assertNotNull(playerField.get(activity))
+            controller.pause().stop()
+            assertEquals(null, playerField.get(activity))
+            controller.destroy()
+            activity = null
+        }
     }
 }

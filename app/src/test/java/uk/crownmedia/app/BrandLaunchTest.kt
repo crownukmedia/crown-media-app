@@ -36,12 +36,12 @@ class BrandLaunchTest {
 
     @Test
     @Config(sdk = [28])
-    fun launcherForegroundUsesUncroppedSquareSafetyCanvas() {
+    fun launcherForegroundUsesSquareLauncherCrop() {
         val context = RuntimeEnvironment.getApplication()
         val foreground = context.getDrawable(R.drawable.ic_launcher_foreground) as LayerDrawable
         val bitmap = foreground.getDrawable(0) as BitmapDrawable
 
         assertEquals(bitmap.intrinsicWidth, bitmap.intrinsicHeight)
-        assertEquals(1024, bitmap.intrinsicWidth)
+        assertEquals(820, bitmap.intrinsicWidth)
     }
 }

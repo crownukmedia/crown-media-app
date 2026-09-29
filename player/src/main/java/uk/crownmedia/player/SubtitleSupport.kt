@@ -41,9 +41,19 @@ internal fun buildMediaItem(
     url: String,
     mimeType: String?,
     externalSubtitles: List<ExternalSubtitle>,
+    mediaId: String = "",
+    title: String? = null,
 ): MediaItem = MediaItem.Builder()
     .setUri(url)
     .apply {
+        if (mediaId.isNotBlank()) setMediaId(mediaId)
+        if (!title.isNullOrBlank()) {
+            setMediaMetadata(
+                androidx.media3.common.MediaMetadata.Builder()
+                    .setTitle(title)
+                    .build(),
+            )
+        }
         if (mimeType != null) setMimeType(mimeType)
         if (externalSubtitles.isNotEmpty()) {
             setSubtitleConfigurations(externalSubtitles.distinctBy { subtitle ->

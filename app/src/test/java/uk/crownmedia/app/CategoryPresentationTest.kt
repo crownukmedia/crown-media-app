@@ -7,7 +7,7 @@ import uk.crownmedia.data.xtream.XtreamCategory
 
 class CategoryPresentationTest {
     @Test
-    fun removesProviderAllAndExactDuplicatesWhileKeepingApplicationAll() {
+    fun removesProviderAllAndDuplicateIdsWhileKeepingDistinctProviderBouquets() {
         val result = displayedCategoryList(
             listOf(
                 XtreamCategory("0", "All Channels"),
@@ -19,12 +19,12 @@ class CategoryPresentationTest {
             ),
         )
 
-        assertEquals(listOf("all", "favorites", "10", "12"), result.map { it.id })
+        assertEquals(listOf("all", "favorites", "10", "11", "12"), result.map { it.id })
         assertEquals("Uncategorized", result.last().name)
     }
 
     @Test
-    fun prioritizesUkThenIrelandAndPreservesProviderOrderInsideEachGroup() {
+    fun preservesExactProviderCategoryOrderWithoutRegionalReordering() {
         val result = displayedCategoryList(
             listOf(
                 XtreamCategory("1", "World News"),
@@ -36,16 +36,21 @@ class CategoryPresentationTest {
             ),
         )
 
-        assertEquals(listOf("3", "4", "2", "5", "1", "6"), result.drop(2).map { it.id })
+        assertEquals(listOf("1", "2", "3", "4", "5", "6"), result.drop(2).map { it.id })
     }
 
     @Test
-    fun shortFormsRequireWholeTokensAndDoNotMatchUnrelatedWords() {
-        assertEquals(2, categoryRegionPriority("Ukraine News"))
-        assertEquals(2, categoryRegionPriority("Pirate Movies"))
-        assertEquals(2, categoryRegionPriority("Science"))
-        assertEquals(0, categoryRegionPriority("British Entertainment"))
-        assertEquals(1, categoryRegionPriority("IR Entertainment"))
+    fun crown8kDolbyAudioAndNowTvUhdFoldersRemainVisibleWhenProviderReturnsThem() {
+        val result = displayedCategoryList(
+            listOf(
+                XtreamCategory("1964", "UK| NOW TV SPORT ᴴᴰ/ᴿᴬᵂ"),
+                XtreamCategory("1965", "UK| NOW TV SPORT ᵁᴴᴰ ³⁸⁴⁰ᴾ"),
+                XtreamCategory("1726", "UK| TNT SPORT ᴿᴬᵂ ⱽᴵᴾ ᴰᴼᴸᴮʸ ᴬᵁᴰᴵᴼ"),
+                XtreamCategory("1731", "UK| SPORT ᴿᴬᵂ ⱽᴵᴾ ᴰᴼᴸᴮʸ ᴬᵁᴰᴵᴼ"),
+            ),
+        )
+
+        assertEquals(listOf("1964", "1965", "1726", "1731"), result.drop(2).map { it.id })
         assertFalse(isProviderAllCategory(XtreamCategory("44", "Alligator TV")))
     }
 

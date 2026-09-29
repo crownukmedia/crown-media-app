@@ -17,6 +17,7 @@ import android.widget.ImageView
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.text.TextUtils
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.constraintlayout.widget.ConstraintSet
 import androidx.core.content.ContextCompat
@@ -102,6 +103,56 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun compactLongTitlesMarqueeOnlyWhileTheirTvItemIsFocused() {
+        val title = TextView(activity).apply {
+            text = "VIP UK SPORTS DOLBY AUDIO 4K ULTRA HIGH DEFINITION"
+            maxLines = 1
+        }
+
+        title.showFocusedMarquee(false)
+        assertFalse(title.isSelected)
+        assertEquals(TextUtils.TruncateAt.END, title.ellipsize)
+
+        title.showFocusedMarquee(true)
+        assertTrue(title.isSelected)
+        assertEquals(TextUtils.TruncateAt.MARQUEE, title.ellipsize)
+        assertEquals(-1, title.marqueeRepeatLimit)
+
+        title.showFocusedMarquee(false)
+        assertFalse(title.isSelected)
+        assertEquals(TextUtils.TruncateAt.END, title.ellipsize)
+    }
+
+    @Test
+    fun fullScreenLaunchReleasesLivePreviewBeforeThePlayerActivityStarts() {
+        val controller = MainActivity::class.java.getDeclaredField("inlinePreviewController").apply {
+            isAccessible = true
+        }.get(activity)
+        val host = activity.findViewById<uk.crownmedia.player.InlineLivePreviewView>(R.id.live_channel_preview)
+        controller.javaClass.getDeclaredMethod(
+            "start",
+            uk.crownmedia.player.InlineLivePreviewView::class.java,
+            String::class.java,
+            Boolean::class.javaPrimitiveType,
+        ).apply { isAccessible = true }.invoke(controller, host, "http://127.0.0.1/live.ts", true)
+        val playerField = controller.javaClass.getDeclaredField("player").apply { isAccessible = true }
+        assertNotNull(playerField.get(controller))
+
+        MainActivity::class.java.getDeclaredMethod(
+            "play",
+            CatalogCard::class.java,
+            Boolean::class.javaPrimitiveType,
+        ).apply { isAccessible = true }.invoke(
+            activity,
+            CatalogCard("42", "live", "Stress channel", null, ""),
+            true,
+        )
+
+        assertNull(playerField.get(controller))
+        assertNotNull(shadowOf(activity).nextStartedActivityForResult)
+    }
+
+    @Test
     fun homeUsesDedicatedCategoryIconsInExistingTileOrder() {
         val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
         val adapter = activity.findViewById<RecyclerView>(R.id.content_grid).adapter as CatalogAdapter
@@ -125,6 +176,17 @@ class TvUiRegressionTest {
             .findViewById<ImageView>(R.id.artwork)
         assertEquals(ImageView.ScaleType.FIT_CENTER, artwork.scaleType)
         assertTrue(artwork.paddingStart > 0)
+    }
+
+    @Test
+    fun launcherForegroundCompensatesForBrandAssetsTransparentSafeMargin() {
+        val foreground = requireNotNull(ContextCompat.getDrawable(activity, R.drawable.ic_launcher_foreground))
+        val legacyBrand = requireNotNull(ContextCompat.getDrawable(activity, R.drawable.crown_media_brand))
+
+        assertEquals(820, foreground.intrinsicWidth)
+        assertEquals(820, foreground.intrinsicHeight)
+        assertEquals(820, legacyBrand.intrinsicWidth)
+        assertEquals(820, legacyBrand.intrinsicHeight)
     }
 
     @Test
@@ -246,11 +308,30 @@ class TvUiRegressionTest {
         assertTrue(previewAudio.hasFocus())
         assertEquals(activity.getString(R.string.unmute), previewAudio.text.toString())
         assertEquals(activity.getString(R.string.unmute_live_preview), previewAudio.contentDescription)
-        previewAudio.performClick()
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER)))
         assertTrue(previewAudio.hasFocus())
         assertTrue(previewAudio.isSelected)
         assertEquals(activity.getString(R.string.mute), previewAudio.text.toString())
         assertTrue(activity.findViewById<TextView>(R.id.live_channel_status).text.toString().startsWith("Preview audio on"))
+
+        // A preview timeout/error used to disable the focused button. Android then reassigned
+        // focus to the first primary-nav item, so the matching remote key-up could open Home.
+        val controller = MainActivity::class.java.getDeclaredField("inlinePreviewController").apply {
+            isAccessible = true
+        }.get(activity)
+        val ended = controller.javaClass.getDeclaredField("onPreviewEnded").apply { isAccessible = true }
+            .get(controller) as Function0<*>
+        ended.invoke()
+        assertTrue(previewAudio.isEnabled)
+        assertTrue(previewAudio.hasFocus())
+        assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)
+        assertFalse(activity.findViewById<View>(R.id.nav_home).isSelected)
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(previewAudio.hasFocus())
+        assertTrue(activity.findViewById<View>(R.id.nav_live).isSelected)
+
         assertTrue(previewAudio.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)))
         assertTrue(play.hasFocus())
         val verticalActions = activity.findViewById<LinearLayout>(R.id.live_channel_actions).orientation == LinearLayout.VERTICAL
@@ -644,6 +725,10 @@ class TvUiRegressionTest {
         assertEquals("Live (550)", activity.findViewById<View>(R.id.nav_live).contentDescription.toString())
         assertEquals("Movies (320)", activity.findViewById<View>(R.id.nav_movies).contentDescription.toString())
         assertEquals("Series (140)", activity.findViewById<View>(R.id.nav_series).contentDescription.toString())
+        val warmJobs = MainActivity::class.java.getDeclaredField("catalogWarmJobs").apply {
+            isAccessible = true
+        }.get(activity) as Map<*, *>
+        assertTrue("Home count badges must not start provider catalog downloads", warmJobs.isEmpty())
     }
 
     @Test
@@ -1150,6 +1235,9 @@ class TvUiRegressionTest {
         assertNull(testStore.selected())
         assertTrue(activity.findViewById<View>(R.id.login_panel).isShown)
         assertEquals(View.GONE, activity.findViewById<View>(R.id.side_nav).visibility)
+        val service = activity.findViewById<MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        assertEquals(CrownService.displayNames.size, service.adapter.count)
+        assertEquals(CrownService.default.displayName, service.text.toString())
         assertFalse(activity.isFinishing)
     }
 
@@ -1218,6 +1306,29 @@ class TvUiRegressionTest {
         }
         awaitUi { adapter.currentItems.size == 3 && adapter.currentItems.all { it.title.startsWith("Needle") } }
         assertEquals("needle", search.text.toString())
+    }
+
+    @Test
+    fun leavingASectionClearsScopedCategoryAndMasterSearchBeforeReentry() {
+        val search = activity.findViewById<EditText>(R.id.search_box)
+        val categorySearch = activity.findViewById<EditText>(R.id.category_search_box)
+
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        search.setText("sports")
+        categorySearch.setText("uk")
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        assertEquals("", search.text.toString())
+        assertEquals("", categorySearch.text.toString())
+
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        assertEquals("", search.text.toString())
+        assertEquals("", categorySearch.text.toString())
+
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        search.setText("global")
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        assertEquals("", search.text.toString())
     }
 
     @Test
@@ -1291,6 +1402,67 @@ class TvUiRegressionTest {
         assertFalse(qr.isEnabled)
         assertEquals(View.GONE, qr.visibility)
         assertEquals(View.NO_ID, connect.nextFocusDownId)
+    }
+
+    @Test
+    fun serviceDropdownCanBeOpenedNavigatedAndSelectedUsingOnlyDpad() {
+        activity.finish()
+        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        setTelevisionMode()
+        activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+
+        val service = activity.findViewById<MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        val username = activity.findViewById<View>(R.id.username)
+        service.requestFocus()
+
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+        assertTrue(service.isPopupShowing)
+        assertEquals(0, service.listSelection)
+
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertEquals(1, service.listSelection)
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertEquals(2, service.listSelection)
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP)))
+        assertEquals(1, service.listSelection)
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN)))
+        assertEquals(2, service.listSelection)
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER)))
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(CrownService.EIGHT_K.displayName, service.text.toString())
+        assertFalse(service.isPopupShowing)
+        assertTrue(username.hasFocus())
+    }
+
+    @Test
+    fun serviceDropdownBackClosesOptionsWithoutChangingSelectionOrLeavingLogin() {
+        activity.finish()
+        MainActivity.storeFactory = { AppStore(FakeSecureStore()) }
+        setTelevisionMode()
+        activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+
+        val service = activity.findViewById<MaterialAutoCompleteTextView>(R.id.service_dropdown)
+        service.requestFocus()
+        service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER))
+        service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER))
+        service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
+        service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN))
+
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK)))
+        assertTrue(service.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK)))
+
+        assertFalse(service.isPopupShowing)
+        assertEquals(CrownService.default.displayName, service.text.toString())
+        assertTrue(service.hasFocus())
+        assertTrue(activity.findViewById<View>(R.id.login_panel).isShown)
+        assertFalse(activity.isFinishing)
     }
 
     @Test
