@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@drawable/crown_media_logo" />
+    <!-- Launcher-only asset removes outer transparency while preserving the original artwork. -->
+    <item android:drawable="@drawable/crown_media_launcher_logo" />
 </layer-list>

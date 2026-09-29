@@ -86,6 +86,27 @@ class PostLoginMobileUiTest {
     }
 
     @Test
+    fun mobileHomePublishesVerifiedCountsWithoutWaitingForProviderRefresh() {
+        val playlistId = requireNotNull(testStore.selected()).id
+        testStore.saveCatalogContentCountSnapshot(playlistId, "live", includeAdult = true, count = 701)
+        testStore.saveCatalogContentCountSnapshot(playlistId, "movie", includeAdult = true, count = 302)
+        testStore.saveCatalogContentCountSnapshot(playlistId, "series", includeAdult = true, count = 103)
+
+        MainActivity::class.java.getDeclaredMethod("showHome").apply {
+            isAccessible = true
+            invoke(activity)
+        }
+
+        assertEquals("Live\n(701)", activity.findViewById<TextView>(R.id.nav_live).text.toString())
+        assertEquals("Movies\n(302)", activity.findViewById<TextView>(R.id.nav_movies).text.toString())
+        assertEquals("Series\n(103)", activity.findViewById<TextView>(R.id.nav_series).text.toString())
+        val warmJobs = MainActivity::class.java.getDeclaredField("catalogWarmJobs").apply {
+            isAccessible = true
+        }.get(activity) as Map<*, *>
+        assertTrue("Mobile count badges must stay local-only", warmJobs.isEmpty())
+    }
+
+    @Test
     fun loadingStateContainsOnlyLoadingLabelAndIndicator() {
         activity.findViewById<View>(R.id.nav_live).performClick()
 
@@ -189,6 +210,18 @@ class PostLoginMobileUiTest {
         activity.findViewById<View>(R.id.nav_live).performClick()
         assertEquals("", search.text.toString())
         assertEquals("Search live channels", search.hint.toString())
+
+        search.setText("sports")
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        assertEquals("", search.text.toString())
+        activity.findViewById<View>(R.id.nav_live).performClick()
+        assertEquals("", search.text.toString())
+
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        search.setText("global")
+        activity.findViewById<View>(R.id.nav_home).performClick()
+        activity.findViewById<View>(R.id.nav_search).performClick()
+        assertEquals("", search.text.toString())
     }
 
     private fun openHomeFeature(id: String) {

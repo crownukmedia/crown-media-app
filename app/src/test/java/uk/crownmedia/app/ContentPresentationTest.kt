@@ -22,4 +22,20 @@ class ContentPresentationTest {
         assertEquals("series count unavailable", ContentCountState.Unavailable.homeDescription("series", Locale.US))
         assertEquals("Series\n(—)", ContentCountState.Unavailable.navigationLabel("Series", Locale.US))
     }
+
+    @Test
+    fun incompleteCatalogKeepsVerifiedTotalInsteadOfPublishingPartialRows() {
+        assertEquals(
+            ContentCountState.Ready(480),
+            cachedContentCountState(catalogComplete = true, cachedCount = 480, verifiedSnapshot = 450),
+        )
+        assertEquals(
+            ContentCountState.Ready(450),
+            cachedContentCountState(catalogComplete = false, cachedCount = 120, verifiedSnapshot = 450),
+        )
+        assertEquals(
+            ContentCountState.Loading,
+            cachedContentCountState(catalogComplete = false, cachedCount = 120, verifiedSnapshot = null),
+        )
+    }
 }

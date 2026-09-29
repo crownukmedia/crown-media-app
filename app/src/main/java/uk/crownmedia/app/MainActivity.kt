@@ -78,6 +78,7 @@ import uk.crownmedia.data.xtream.XtreamSeriesDetails
 import uk.crownmedia.data.xtream.XtreamSubtitle
 import uk.crownmedia.data.xtream.preferredLiveExtension
 import uk.crownmedia.player.ExternalSubtitle
+import uk.crownmedia.player.PlaybackQueueItem
 import uk.crownmedia.player.PlayerActivity
 import uk.crownmedia.player.InlineLivePreviewController
 import uk.crownmedia.player.InlineLivePreviewView
@@ -159,6 +160,7 @@ class MainActivity : AppCompatActivity() {
     private var liveChannelEpgJob: Job? = null
     private var livePreviewMuted = true
     private var livePreviewAudioControlEnabled = false
+    private var livePreviewUnavailable = false
     private val categorySearchQueries = EnumMap<Section, String>(Section::class.java)
     private val categorySearchContextIds = EnumMap<Section, String>(Section::class.java)
     private var updatingCategorySearchBox = false
@@ -192,7 +194,8 @@ class MainActivity : AppCompatActivity() {
         inlinePreviewController = InlineLivePreviewController(this) {
             activeInlinePreview = null
             livePreviewMuted = true
-            livePreviewAudioControlEnabled = false
+            livePreviewUnavailable = true
+            livePreviewAudioControlEnabled = liveChannelBrowserOpen && liveChannelSelection != null
             updateLivePreviewAudioControl()
             if (liveChannelBrowserOpen && !isFinishing) {
                 findViewById<TextView>(R.id.live_channel_status).text = "Preview unavailable  •  Press OK to play"
@@ -374,6 +377,10 @@ class MainActivity : AppCompatActivity() {
             nextFocusUpId = id
             nextFocusDownId = play.id
             setOnKeyListener { view, keyCode, event ->
+                if (keyCode in TV_ACTIVATION_KEYS) {
+                    if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) view.performClick()
+                    return@setOnKeyListener true
+                }
                 if (event.action != KeyEvent.ACTION_DOWN || keyCode !in TV_DPAD_KEYS) return@setOnKeyListener false
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> focusSelectedLiveChannel()
@@ -440,13 +447,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleLivePreviewAudio() {
         if (!isTelevisionLayout() || !livePreviewAudioControlEnabled) return
+        val control = findViewById<Button?>(R.id.live_preview_audio_toggle)
+        if (livePreviewUnavailable) {
+            control?.announceForAccessibility(getString(R.string.preview_unavailable))
+            control?.post { if (liveChannelBrowserOpen && !isFinishing) control.requestFocus() }
+            return
+        }
         livePreviewMuted = !livePreviewMuted
         inlinePreviewController.setMuted(livePreviewMuted)
         updateLivePreviewAudioControl()
         liveChannelSelection?.let { updateLivePreviewStatus(it, activeInlinePreview != null) }
-        findViewById<Button?>(R.id.live_preview_audio_toggle)?.announceForAccessibility(
+        control?.announceForAccessibility(
             getString(if (livePreviewMuted) R.string.muted_preview else R.string.preview_audio_on),
         )
+        control?.post { if (liveChannelBrowserOpen && !isFinishing) control.requestFocus() }
     }
 
     private fun updateLivePreviewAudioControl() {
@@ -937,6 +951,24 @@ class MainActivity : AppCompatActivity() {
         if (clearFocus) binding.searchBox.clearFocus()
     }
 
+    private fun resetSearchAfterLeavingSection(previous: Section) {
+        searchJob?.cancel()
+        scopedSearchJob?.cancel()
+        searchShouldFocusResults = false
+        lastTrackedSearch = null
+        if (previous == Section.SEARCH) masterSearchQuery = ""
+        if (previous in PAGED_SECTIONS) {
+            sectionState(previous).searchQuery = ""
+            resetCategorySearch(previous)
+        }
+        updatingSearchBox = true
+        binding.searchBox.text?.clear()
+        updatingSearchBox = false
+        binding.searchBox.clearFocus()
+        binding.categorySearchBox.clearFocus()
+        hideKeyboard()
+    }
+
     private fun open(value: Section) {
         if (store.selected() == null) {
             showWelcome()
@@ -944,7 +976,7 @@ class MainActivity : AppCompatActivity() {
         }
         ensurePlaylistState()
         val changingTopLevelSection = section != value
-        if (changingTopLevelSection && section in PAGED_SECTIONS) resetCategorySearch(section)
+        if (changingTopLevelSection) resetSearchAfterLeavingSection(section)
         if (changingTopLevelSection || value != Section.LIVE) resetLiveChannelBrowser(renderGrid = false)
         if (changingTopLevelSection || value != Section.LIVE) stopInlinePreview()
         captureSectionState()
@@ -958,9 +990,6 @@ class MainActivity : AppCompatActivity() {
         searchJob?.cancel()
         if (changingTopLevelSection) {
             contentRequestGeneration++
-            searchShouldFocusResults = false
-            masterSearchQuery = ""
-            if (section in PAGED_SECTIONS) sectionState(section).searchQuery = ""
             if (value in PAGED_SECTIONS) {
                 cancelSectionRefreshes(value)
                 sectionState(value).resetForTopLevelEntry()
@@ -1702,9 +1731,7 @@ class MainActivity : AppCompatActivity() {
         if (actualCategory == null || store.catalogComplete(playlist.id, target.cardKind, null)) {
             val includeAdult = includeAdultContent()
             val count = cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
-            if (isTelevisionLayout()) {
-                store.saveCatalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult, count)
-            }
+            store.saveCatalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult, count)
             updateContentCount(target, ContentCountState.Ready(count))
         }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "${target.name.lowercase()}_refresh_total_ms=${SystemClock.elapsedRealtime() - refreshStarted};items=$received")
@@ -2278,92 +2305,60 @@ class MainActivity : AppCompatActivity() {
         countJob?.cancel()
         val television = isTelevisionLayout()
         val initialIncludeAdult = includeAdultContent()
-        if (television) {
-            val immediateSnapshot = PAGED_SECTIONS.mapNotNull { target ->
-                store.catalogContentCountSnapshot(playlist.id, target.cardKind, initialIncludeAdult)
-                    ?.let { target to ContentCountState.Ready(it) }
-            }.toMap()
-            if (immediateSnapshot.isNotEmpty()) updateContentCounts(immediateSnapshot)
-        }
+        val immediateSnapshot = PAGED_SECTIONS.mapNotNull { target ->
+            store.catalogContentCountSnapshot(playlist.id, target.cardKind, initialIncludeAdult)
+                ?.let { target to ContentCountState.Ready(it) }
+        }.toMap()
+        if (immediateSnapshot.isNotEmpty()) updateContentCounts(immediateSnapshot)
         countJob = lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                val includeAdult = includeAdultContent()
-                val cachedSnapshot = coroutineScope {
-                    PAGED_SECTIONS.map { target ->
-                        async {
-                            val complete = store.catalogComplete(playlist.id, target.cardKind, null)
-                            val verifiedSnapshot = if (television) {
-                                store.catalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult)
-                            } else null
-                            val count = when {
-                                complete -> runCatching {
-                                    cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
-                                }.getOrDefault(0)
-                                else -> verifiedSnapshot
-                            }
-                            if (television && complete) {
-                                store.saveCatalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult, requireNotNull(count))
-                            }
-                            target to (count?.let(ContentCountState::Ready) ?: ContentCountState.Loading)
-                        }
-                    }.awaitAll().toMap()
-                }
-                if (activePlaylistId != playlist.id) return@repeatOnLifecycle
-                // Complete Room catalogs render all three totals immediately in one frame.
-                updateContentCounts(cachedSnapshot)
-                if (television) {
-                    PAGED_SECTIONS.filter {
-                        store.catalogComplete(playlist.id, it.cardKind, null) &&
-                            store.catalogCategoryCountSnapshot(playlist.id, it.cardKind, includeAdult) == null
-                    }.forEach { target ->
-                        launch {
-                            val counts = runCatching {
-                                cache.accessibleCategoryCounts(playlist.id, target.cardKind, includeAdult)
-                            }.getOrDefault(emptyMap())
-                            store.saveCatalogCategoryCountSnapshot(
-                                playlist.id,
-                                target.cardKind,
-                                includeAdult,
-                                counts,
-                            )
-                        }
-                    }
-                }
-
-                val missing = PAGED_SECTIONS.filterNot {
-                    store.catalogComplete(playlist.id, it.cardKind, null)
-                }
-                if (missing.isEmpty()) return@repeatOnLifecycle
-                val warmResults = coroutineScope {
-                    missing.map { target ->
-                        async { target to awaitCatalogWarmResult(playlist, target.cardKind) }
-                    }.awaitAll().toMap()
-                }
-                if (activePlaylistId != playlist.id) return@repeatOnLifecycle
-
-                val finalSnapshot = cachedSnapshot.toMutableMap()
-                missing.forEach { target ->
-                    val completed = warmResults[target]?.isSuccess == true ||
-                        store.catalogComplete(playlist.id, target.cardKind, null)
-                    finalSnapshot[target] = if (completed) {
-                        val count = runCatching {
-                            cache.accessibleCount(playlist.id, target.cardKind, includeAdultContent())
-                        }.getOrDefault(0)
-                        if (television) {
+            val includeAdult = includeAdultContent()
+            val cachedSnapshot = coroutineScope {
+                PAGED_SECTIONS.map { target ->
+                    async {
+                        val complete = store.catalogComplete(playlist.id, target.cardKind, null)
+                        val verifiedSnapshot = store.catalogContentCountSnapshot(
+                            playlist.id,
+                            target.cardKind,
+                            includeAdult,
+                        )
+                        val cachedCount = if (complete) {
+                            runCatching {
+                                cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
+                            }.getOrDefault(verifiedSnapshot ?: 0)
+                        } else 0
+                        if (complete) {
                             store.saveCatalogContentCountSnapshot(
                                 playlist.id,
                                 target.cardKind,
-                                includeAdultContent(),
-                                count,
+                                includeAdult,
+                                cachedCount,
                             )
                         }
-                        ContentCountState.Ready(count)
-                    } else cachedSnapshot[target]?.takeIf { it is ContentCountState.Ready }
-                        ?: ContentCountState.Unavailable
+                        target to cachedContentCountState(complete, cachedCount, verifiedSnapshot)
+                    }
+                }.awaitAll().toMap()
+            }
+            if (activePlaylistId != playlist.id) return@launch
+            // This path is intentionally local-only. Catalog downloads are owned by explicit
+            // content/search refreshes and must never compete with a TV decoder just for badges.
+            updateContentCounts(cachedSnapshot)
+            if (television) {
+                PAGED_SECTIONS.filter {
+                    store.catalogComplete(playlist.id, it.cardKind, null) &&
+                        store.catalogCategoryCountSnapshot(playlist.id, it.cardKind, includeAdult) == null
+                }.forEach { target ->
+                    launch {
+                        val counts = runCatching {
+                            cache.accessibleCategoryCounts(playlist.id, target.cardKind, includeAdult)
+                        }.getOrDefault(emptyMap())
+                        store.saveCatalogCategoryCountSnapshot(
+                            playlist.id,
+                            target.cardKind,
+                            includeAdult,
+                            counts,
+                        )
+                    }
                 }
-                // Do not make Home visibly count Live, then Movies, then Series. Publish the
-                // completed provider snapshot atomically once all parallel requests settle.
-                updateContentCounts(finalSnapshot)
             }
         }
     }
@@ -2530,6 +2525,7 @@ class MainActivity : AppCompatActivity() {
         liveChannelSelection = null
         livePreviewMuted = true
         livePreviewAudioControlEnabled = false
+        livePreviewUnavailable = false
         updateLivePreviewAudioControl()
         stopInlinePreview()
         catalogAdapter.setLiveChannelNavigation(false)
@@ -2561,6 +2557,7 @@ class MainActivity : AppCompatActivity() {
         if (selectionChanged) {
             livePreviewMuted = true
             livePreviewAudioControlEnabled = true
+            livePreviewUnavailable = false
             inlinePreviewController.setMuted(true)
             updateLivePreviewAudioControl()
         }
@@ -2671,9 +2668,20 @@ class MainActivity : AppCompatActivity() {
         }
         healthJob?.cancel()
         liveRankingJob?.cancel()
+        // A catalog response can contain tens of thousands of rows. Do not let a content refresh
+        // or count warm-up keep parsing/indexing behind PlayerActivity on low-memory TV devices.
+        // The visible cached page remains intact and an explicit/next section load can resume it.
+        loadJob?.cancel()
+        countJob?.cancel()
+        categoryCountJob?.cancel()
+        categoryCountJobKey = null
         refreshJobs.values.forEach { it.cancel() }
+        refreshJobs.clear()
         playlistRefreshJob?.cancel()
         searchWarmJob?.cancel()
+        searchWarmJob = null
+        catalogWarmJobs.values.forEach { it.cancel() }
+        catalogWarmJobs.clear()
         val extension = if (live) preferredLiveExtension(playlist.allowedFormats) else card.extension
         val url = api.streamUrl(playlist.credentials, card.kind, card.id, extension)
         val fallbackUrl = if (live) {
@@ -2685,7 +2693,29 @@ class MainActivity : AppCompatActivity() {
             }
             fallbackExtension?.let { api.streamUrl(playlist.credentials, card.kind, card.id, it) }
         } else null
+        val episodeQueue = if (!live && card.kind == "episode") {
+            nestedSeries?.details?.let { details ->
+                orderedSeriesEpisodes(details).map { episode ->
+                    PlaybackQueueItem(
+                        url = api.streamUrl(
+                            playlist.credentials,
+                            "episode",
+                            episode.id,
+                            episode.extension,
+                        ),
+                        title = episode.title,
+                        streamId = episode.id,
+                        externalSubtitles = episode.subtitles.mapNotNull { it.toExternalSubtitle() },
+                    )
+                }
+            }.orEmpty()
+        } else emptyList()
+        val episodeQueueIndex = episodeQueue.indexOfFirst { it.streamId == card.id }
         analytics.trackPlaybackRequested(card.kind, store.player, live)
+        // Release the preview decoder and its Surface before another player is launched. Waiting
+        // for MainActivity.onStop() briefly overlaps two decoder/buffer pipelines on low-memory TV
+        // devices and can make the OS kill/restart the process during Preview -> Full screen.
+        stopInlinePreview(releasePlayer = true)
         when (store.player) {
             "vlc" -> external(url, card.title, "org.videolan.vlc")
             "mx" -> if (!PlayerActivity.launchExternal(this, url, card.title, "com.mxtech.videoplayer.ad")) external(url, card.title, "com.mxtech.videoplayer.pro")
@@ -2702,6 +2732,8 @@ class MainActivity : AppCompatActivity() {
                     card.kind,
                     fallbackUrl,
                     card.externalSubtitles,
+                    episodeQueue.takeIf { episodeQueueIndex >= 0 }.orEmpty(),
+                    episodeQueueIndex.coerceAtLeast(0),
                 ),
             )
         }
@@ -2865,6 +2897,7 @@ class MainActivity : AppCompatActivity() {
             activeInlinePreview = target
             if (liveChannelBrowserOpen) {
                 livePreviewAudioControlEnabled = true
+                livePreviewUnavailable = false
                 updateLivePreviewAudioControl()
                 updateLivePreviewStatus(target.card, includeFullscreenHint = true)
             }
@@ -2881,6 +2914,7 @@ class MainActivity : AppCompatActivity() {
         if (releasePlayer) {
             livePreviewMuted = true
             livePreviewAudioControlEnabled = liveChannelSelection != null && liveChannelBrowserOpen
+            livePreviewUnavailable = false
             updateLivePreviewAudioControl()
             inlinePreviewController.release()
         } else inlinePreviewController.stop()
@@ -3119,6 +3153,7 @@ class MainActivity : AppCompatActivity() {
         val duration = ((stopTimestamp - startTimestamp) / 60).toInt().coerceAtLeast(1)
         val start = formatCatchUpStart(startTimestamp, playlist.serverTimezone)
         val url = api.catchUpUrl(playlist.credentials, card.id, start, duration)
+        stopInlinePreview(releasePlayer = true)
         internalPlayer.launch(
             PlayerActivity.internalIntent(
                 this,
@@ -3405,14 +3440,14 @@ class MainActivity : AppCompatActivity() {
                     }
                     cache.finishItemRefresh(playlist.id, kind, null, refreshMarker, received)
                     if (received > 0) store.markCatalogRefreshed(playlist.id, kind, null)
+                    val includeAdult = includeAdultContent()
+                    val count = cache.accessibleCount(playlist.id, kind, includeAdult)
+                    store.saveCatalogContentCountSnapshot(playlist.id, kind, includeAdult, count)
                     if (isTelevisionLayout()) {
-                        val includeAdult = includeAdultContent()
-                        val count = cache.accessibleCount(playlist.id, kind, includeAdult)
                         val categories = cache.accessibleCategoryCounts(playlist.id, kind, includeAdult)
-                        store.saveCatalogContentCountSnapshot(playlist.id, kind, includeAdult, count)
                         store.saveCatalogCategoryCountSnapshot(playlist.id, kind, includeAdult, categories)
-                        count
-                    } else cache.count(playlist.id, kind)
+                    }
+                    count
                 }
             }
             result
@@ -3427,16 +3462,67 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureLogin() = with(binding.loginPanel) {
-        serviceDropdown.setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, CrownService.displayNames))
-        serviceDropdown.setText(CrownService.default.displayName, false)
-        loginService = CrownService.default
-        serviceDropdown.setOnItemClickListener { _, _, _, _ ->
-            val selected = CrownService.fromDisplayName(serviceDropdown.text.toString())
+        fun selectService(position: Int, moveToCredentials: Boolean) {
+            val selectedName = serviceDropdown.adapter?.getItem(position)?.toString() ?: return
+            serviceDropdown.setText(selectedName, false)
+            serviceDropdown.dismissDropDown()
+            val selected = CrownService.fromDisplayName(selectedName)
             if (selected != loginService) {
                 loginService = selected
                 restoreSavedLoginDetails(selected)
             }
             updateSelectedService()
+            if (moveToCredentials && isTelevisionLayout()) username.requestFocus()
+        }
+
+        val openServiceDropdown = {
+            if (serviceDropdown.isEnabled) {
+                serviceDropdown.requestFocus()
+                serviceDropdown.showDropDown()
+                val selectedPosition = CrownService.displayNames.indexOf(serviceDropdown.text.toString())
+                    .coerceAtLeast(0)
+                serviceDropdown.setListSelection(selectedPosition)
+            }
+        }
+        serviceLayout.setOnClickListener { openServiceDropdown() }
+        serviceDropdown.setOnClickListener { openServiceDropdown() }
+        serviceDropdown.setOnKeyListener { _, keyCode, event ->
+            when {
+                keyCode in TV_ACTIVATION_KEYS -> {
+                    if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) {
+                        if (serviceDropdown.isPopupShowing) {
+                            val selectedPosition = serviceDropdown.listSelection.takeIf { it >= 0 }
+                                ?: CrownService.displayNames.indexOf(serviceDropdown.text.toString()).coerceAtLeast(0)
+                            selectService(selectedPosition, moveToCredentials = true)
+                        } else {
+                            openServiceDropdown()
+                        }
+                    }
+                    true
+                }
+                serviceDropdown.isPopupShowing && keyCode in setOf(
+                    KeyEvent.KEYCODE_DPAD_UP,
+                    KeyEvent.KEYCODE_DPAD_DOWN,
+                ) -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        val currentPosition = serviceDropdown.listSelection.takeIf { it >= 0 }
+                            ?: CrownService.displayNames.indexOf(serviceDropdown.text.toString()).coerceAtLeast(0)
+                        val direction = if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1
+                        serviceDropdown.setListSelection(
+                            (currentPosition + direction).coerceIn(0, serviceDropdown.adapter.count - 1),
+                        )
+                    }
+                    true
+                }
+                serviceDropdown.isPopupShowing && keyCode == KeyEvent.KEYCODE_BACK -> {
+                    if (event.action == KeyEvent.ACTION_UP) serviceDropdown.dismissDropDown()
+                    true
+                }
+                else -> false
+            }
+        }
+        serviceDropdown.setOnItemClickListener { _, _, position, _ ->
+            selectService(position, moveToCredentials = true)
         }
         connectButton.setOnClickListener { connectPlaylist() }
         qrButton.setOnClickListener { showDeviceActivation() }
@@ -3474,7 +3560,24 @@ class MainActivity : AppCompatActivity() {
                 if (!checked) store.saveLoginDetails(loginService, null)
             }
         }
-        restoreSavedLoginDetails(loginService)
+        reloadLoginServices(resetSelection = true)
+    }
+
+    private fun reloadLoginServices(resetSelection: Boolean) = with(binding.loginPanel) {
+        val currentService = CrownService.entries.firstOrNull {
+            it.displayName == serviceDropdown.text?.toString()
+        }
+        val selectedService = currentService.takeUnless { resetSelection } ?: CrownService.default
+        serviceDropdown.setAdapter(
+            ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_list_item_1,
+                CrownService.displayNames,
+            ),
+        )
+        serviceDropdown.setText(selectedService.displayName, false)
+        loginService = selectedService
+        restoreSavedLoginDetails(selectedService)
         updateSelectedService()
     }
 
@@ -3490,18 +3593,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun showWelcome() {
         catalogAdapter.submit(emptyList())
-        showLogin(canGoBack = false)
+        showLogin(canGoBack = false, resetService = true)
         analytics.trackScreen("login")
     }
 
     private fun showManualPlaylist() {
-        showLogin(canGoBack = store.selected() != null)
+        showLogin(canGoBack = store.selected() != null, resetService = true)
     }
 
-    private fun showLogin(canGoBack: Boolean) = with(binding.loginPanel) {
+    private fun showLogin(canGoBack: Boolean, resetService: Boolean) = with(binding.loginPanel) {
         loginJob?.cancel()
         setLoginLoading(false)
         clearLoginErrors()
+        reloadLoginServices(resetSelection = resetService)
         binding.topBar.isVisible = false
         binding.actionMore.isVisible = false
         binding.sideNav.isVisible = false
@@ -4316,6 +4420,12 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP,
             KeyEvent.KEYCODE_DPAD_DOWN,
+        )
+        private val TV_ACTIVATION_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_BUTTON_A,
         )
         private val PAGED_SECTIONS = setOf(Section.LIVE, Section.MOVIES, Section.SERIES)
         private val FEATURE_SECTIONS = setOf(Section.EPG, Section.FAVORITES, Section.CATCH_UP)

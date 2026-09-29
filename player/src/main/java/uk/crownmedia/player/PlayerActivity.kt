@@ -61,10 +61,13 @@ class PlayerActivity : AppCompatActivity() {
     private var failureStage = "created"
     private var fallbackAttempted = false
     private var currentUrl = ""
+    private var playbackQueue: List<PlaybackQueueItem> = emptyList()
+    private var currentQueueIndex = 0
     private var isLive = false
     private var hasReachedReady = false
     private var userPaused = false
     private var trackSelector: DefaultTrackSelector? = null
+    private var playerGeneration = 0L
     private lateinit var recoveryPolicy: PlaybackRecoveryPolicy
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val startupTimeout = Runnable {
@@ -117,6 +120,12 @@ class PlayerActivity : AppCompatActivity() {
         resumeEnabled = intent.getBooleanExtra(EXTRA_RESUME, false)
         currentUrl = intent.getStringExtra(EXTRA_URL).orEmpty()
         isLive = intent.getBooleanExtra(EXTRA_LIVE, false)
+        playbackQueue = if (isLive) emptyList() else decodePlaybackQueue(intent.getStringExtra(EXTRA_PLAYBACK_QUEUE))
+        if (playbackQueue.isNotEmpty()) {
+            currentQueueIndex = intent.getIntExtra(EXTRA_PLAYBACK_QUEUE_INDEX, 0)
+                .coerceIn(playbackQueue.indices)
+            applyQueueItem(currentQueueIndex)
+        }
         recoveryPolicy = PlaybackRecoveryPolicy(isLive)
         playbackLoadingMessage.setText(if (isLive) R.string.opening_channel else R.string.opening_video)
         playbackBack.setText(if (isLive) R.string.back_to_channels else R.string.back_to_content)
@@ -128,6 +137,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun initialize() {
         if (player != null) return
+        val generation = ++playerGeneration
         val url = currentUrl.takeIf(String::isNotBlank) ?: run { finish(); return }
         hasReachedReady = false
         failureStage = "initializing"
@@ -176,21 +186,41 @@ class PlayerActivity : AppCompatActivity() {
             url.contains(".mpd", true) -> MimeTypes.APPLICATION_MPD
             else -> null
         }
-        val item = buildMediaItem(url, mime, externalSubtitles())
         logPrepare(url, mime)
-        instance.setMediaItem(item)
-        if (resumeEnabled) {
-            val saved = getSharedPreferences("player_progress", MODE_PRIVATE).getLong(contentKey, C.TIME_UNSET)
+        val saved = if (resumeEnabled) {
+            getSharedPreferences("player_progress", MODE_PRIVATE).getLong(contentKey, C.TIME_UNSET)
+        } else C.TIME_UNSET
+        if (playbackQueue.isNotEmpty()) {
+            instance.setMediaItems(
+                playbackQueue.map(::queueMediaItem),
+                currentQueueIndex,
+                if (saved == C.TIME_UNSET) 0L else saved,
+            )
+        } else {
+            instance.setMediaItem(buildMediaItem(url, mime, externalSubtitles()))
             if (saved != C.TIME_UNSET) instance.seekTo(saved)
         }
         instance.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                if (player !== instance || generation != playerGeneration) return
+                if (playbackQueue.isEmpty()) return
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                    getSharedPreferences("player_progress", MODE_PRIVATE).edit().remove(contentKey).apply()
+                }
+                applyQueueItem(instance.currentMediaItemIndex.coerceIn(playbackQueue.indices))
+                playerTitle.animate().cancel()
+                playerTitle.alpha = 1f
+            }
+
             override fun onPlayerError(error: PlaybackException) {
+                if (player !== instance || generation != playerGeneration || isFinishing) return
                 logFailure("player_error", error)
                 if (!attemptRecovery(error.errorCode in 2000..3999, allowFallback = true)) {
                     showUnavailable(getString(R.string.playback_error_detail))
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (player !== instance || generation != playerGeneration) return
                 timeoutHandler.removeCallbacks(stablePlayback)
                 if (isPlaying) {
                     playerTitle.animate().alpha(0f).setStartDelay(1800).setDuration(300).start()
@@ -198,6 +228,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (player !== instance || generation != playerGeneration) return
                 failureStage = when (playbackState) {
                     Player.STATE_BUFFERING -> "buffering"
                     Player.STATE_READY -> "ready"
@@ -247,7 +278,8 @@ class PlayerActivity : AppCompatActivity() {
             hasReachedReady = false
             userPaused = false
             recoveryPolicy.onStablePlayback()
-            currentUrl = intent.getStringExtra(EXTRA_URL).orEmpty()
+            if (playbackQueue.isNotEmpty()) applyQueueItem(currentQueueIndex)
+            else currentUrl = intent.getStringExtra(EXTRA_URL).orEmpty()
             initialize()
         }
         playbackBack.setOnClickListener { finish() }
@@ -374,6 +406,29 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    private fun queueMediaItem(item: PlaybackQueueItem): androidx.media3.common.MediaItem {
+        val mimeType = when {
+            item.url.contains(".m3u8", true) -> MimeTypes.APPLICATION_M3U8
+            item.url.contains(".mpd", true) -> MimeTypes.APPLICATION_MPD
+            else -> null
+        }
+        return buildMediaItem(
+            url = item.url,
+            mimeType = mimeType,
+            externalSubtitles = item.externalSubtitles,
+            mediaId = item.streamId,
+            title = item.title,
+        )
+    }
+
+    private fun applyQueueItem(index: Int) {
+        val item = playbackQueue.getOrNull(index) ?: return
+        currentQueueIndex = index
+        currentUrl = item.url
+        contentKey = hash(item.url)
+        playerTitle.text = item.title
+    }
+
     private fun switchToFallbackUrl(): Boolean {
         if (fallbackAttempted) return false
         val fallback = intent.getStringExtra(EXTRA_FALLBACK_URL).orEmpty()
@@ -456,7 +511,15 @@ class PlayerActivity : AppCompatActivity() {
         timeoutHandler.removeCallbacks(rebufferTimeout)
         timeoutHandler.removeCallbacks(stablePlayback)
         timeoutHandler.removeCallbacks(automaticRetry)
-        player?.let { current ->
+        playerGeneration++
+        val current = player
+        player = null
+        playerView.player = null
+        trackSelector = null
+        current?.let {
+            if (playbackQueue.isNotEmpty()) {
+                applyQueueItem(current.currentMediaItemIndex.coerceIn(playbackQueue.indices))
+            }
             if (resumeEnabled && current.duration > 0) {
                 if (current.currentPosition < current.duration * .93) {
                     getSharedPreferences("player_progress", MODE_PRIVATE).edit().putLong(contentKey, current.currentPosition).apply()
@@ -464,11 +527,10 @@ class PlayerActivity : AppCompatActivity() {
                     getSharedPreferences("player_progress", MODE_PRIVATE).edit().remove(contentKey).apply()
                 }
             }
-            current.release()
+            runCatching { current.release() }.onFailure { error ->
+                Log.e(TAG, "Player release failed kind=${contentKind()} streamId=${streamId()}", error)
+            }
         }
-        playerView.player = null
-        player = null
-        trackSelector = null
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -526,6 +588,8 @@ class PlayerActivity : AppCompatActivity() {
         private const val EXTRA_SUBTITLE_LANGUAGES = "subtitle_languages"
         private const val EXTRA_SUBTITLE_LABELS = "subtitle_labels"
         private const val EXTRA_SUBTITLE_SELECTION_FLAGS = "subtitle_selection_flags"
+        private const val EXTRA_PLAYBACK_QUEUE = "playback_queue"
+        private const val EXTRA_PLAYBACK_QUEUE_INDEX = "playback_queue_index"
         private const val PLAYBACK_USER_AGENT = "CrownMedia/1.0"
         private const val TAG = "CrownPlayer"
         private const val STARTUP_TIMEOUT_MS = 25_000L
@@ -568,6 +632,8 @@ class PlayerActivity : AppCompatActivity() {
             contentKind: String = if (live) "live" else "video",
             fallbackUrl: String? = null,
             externalSubtitles: List<ExternalSubtitle> = emptyList(),
+            playbackQueue: List<PlaybackQueueItem> = emptyList(),
+            playbackQueueIndex: Int = 0,
         ) =
             Intent(context, PlayerActivity::class.java)
                 .putExtra(EXTRA_URL, url).putExtra(EXTRA_TITLE, title).putExtra(EXTRA_LIVE, live)
@@ -580,6 +646,8 @@ class PlayerActivity : AppCompatActivity() {
                 .putStringArrayListExtra(EXTRA_SUBTITLE_LANGUAGES, ArrayList(externalSubtitles.map { it.language.orEmpty() }))
                 .putStringArrayListExtra(EXTRA_SUBTITLE_LABELS, ArrayList(externalSubtitles.map { it.label.orEmpty() }))
                 .putExtra(EXTRA_SUBTITLE_SELECTION_FLAGS, externalSubtitles.map(ExternalSubtitle::selectionFlags).toIntArray())
+                .putExtra(EXTRA_PLAYBACK_QUEUE, encodePlaybackQueue(playbackQueue))
+                .putExtra(EXTRA_PLAYBACK_QUEUE_INDEX, playbackQueueIndex)
 
         fun launchExternal(context: Context, url: String, title: String, packageName: String?): Boolean {
             val intent = Intent(Intent.ACTION_VIEW).apply {

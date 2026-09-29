@@ -26,3 +26,18 @@ internal fun ContentCountState.homeDescription(noun: String, locale: Locale = Lo
     is ContentCountState.Ready -> "${displayValue(locale)} $noun"
     ContentCountState.Unavailable -> "$noun count unavailable"
 }
+
+/**
+ * Counts shown in navigation must never trigger a provider catalog download. A complete Room
+ * catalog is authoritative; while a refresh is incomplete, the last verified snapshot remains
+ * preferable to a partial row count.
+ */
+internal fun cachedContentCountState(
+    catalogComplete: Boolean,
+    cachedCount: Int,
+    verifiedSnapshot: Int?,
+): ContentCountState = when {
+    catalogComplete -> ContentCountState.Ready(cachedCount.coerceAtLeast(0))
+    verifiedSnapshot != null -> ContentCountState.Ready(verifiedSnapshot.coerceAtLeast(0))
+    else -> ContentCountState.Loading
+}
