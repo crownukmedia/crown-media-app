@@ -1657,6 +1657,11 @@ class MainActivity : AppCompatActivity() {
             } catch (_: CancellationException) {
                 return@launch
             } catch (error: Throwable) {
+                if ((refreshCategory == "all" || refreshCategory == "favorites") &&
+                    !store.catalogComplete(playlist.id, target.cardKind, null)
+                ) {
+                    updateContentCount(target, ContentCountState.Unavailable)
+                }
                 // Only surface errors for a refresh that still owns the current category/generation.
                 if (section == target && state.categoryId == refreshCategory && state.generation == refreshKey.generation) {
                     if (state.cards.isEmpty()) showFailure(error)
@@ -1681,15 +1686,19 @@ class MainActivity : AppCompatActivity() {
         hadContent: Boolean,
     ) {
         val refreshStarted = SystemClock.elapsedRealtime()
+        val actualCategory = refreshCategory.takeUnless { it == "all" || it == "favorites" }
         val providerCategories = api.categories(playlist.credentials, target.apiKind)
         cache.saveCategories(playlist.id, target.cardKind, providerCategories)
+        if (actualCategory == null) {
+            store.markCatalogRefreshing(playlist.id, target.cardKind, null)
+            updateContentCount(target, ContentCountState.Loading)
+        }
         val state = sectionState(target)
         state.categories = baseCategories(providerCategories, playlist.id)
         if (section == target && state.categoryId == refreshCategory) {
             categoriesAdapter.submit(state.categories, state.categoryId)
             store.selected()?.let { loadCategoryCounts(it, target) }
         }
-        val actualCategory = refreshCategory.takeUnless { it == "all" || it == "favorites" }
         val refreshMarker = System.currentTimeMillis()
         val favorites = store.favorites(playlist.id)
         var received = 0
@@ -1728,11 +1737,13 @@ class MainActivity : AppCompatActivity() {
         state.lastRefreshAt = System.currentTimeMillis()
         if (received > 0) store.markCatalogRefreshed(playlist.id, target.cardKind, actualCategory, state.lastRefreshAt)
         if (section == target) loadCategoryCounts(playlist, target, force = true)
-        if (actualCategory == null || store.catalogComplete(playlist.id, target.cardKind, null)) {
+        if (store.catalogComplete(playlist.id, target.cardKind, null)) {
             val includeAdult = includeAdultContent()
             val count = cache.accessibleCount(playlist.id, target.cardKind, includeAdult)
             store.saveCatalogContentCountSnapshot(playlist.id, target.cardKind, includeAdult, count)
             updateContentCount(target, ContentCountState.Ready(count))
+        } else if (actualCategory == null) {
+            updateContentCount(target, ContentCountState.Unavailable)
         }
         if (BuildConfig.DEBUG) Log.d("CrownPerformance", "${target.name.lowercase()}_refresh_total_ms=${SystemClock.elapsedRealtime() - refreshStarted};items=$received")
         if (state.categoryId == refreshCategory) {
@@ -1783,6 +1794,9 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 } catch (_: Throwable) {
                     failures++
+                    if (!store.catalogComplete(playlist.id, target.cardKind, null)) {
+                        updateContentCount(target, ContentCountState.Unavailable)
+                    }
                 }
             }
             if (section == Section.HOME) {
@@ -1824,9 +1838,9 @@ class MainActivity : AppCompatActivity() {
     private fun renderHome(p: SavedPlaylist, focusContent: Boolean = false) {
         val expiry = p.expiresAt?.let { DateFormat.getDateInstance().format(Date(it * 1000)) } ?: "No expiry reported"
         val cards = listOf(
-            CatalogCard("live", "home", "Live TV", null, "${countState(Section.LIVE).homeDescription("channels")} • EPG & catch-up", "WATCH", localArtwork = R.drawable.home_live_icon),
-            CatalogCard("movies", "home", "Movies", null, "${countState(Section.MOVIES).homeDescription("movies")} • Details & resume", "EXPLORE", localArtwork = R.drawable.home_movies_icon),
-            CatalogCard("series", "home", "Series", null, "${countState(Section.SERIES).homeDescription("series")} • Seasons & episodes", "BINGE", localArtwork = R.drawable.home_series_icon),
+            CatalogCard("live", "home", "Live TV", null, countState(Section.LIVE).homeTileDescription("channels", "EPG & catch-up"), "WATCH", localArtwork = R.drawable.home_live_icon),
+            CatalogCard("movies", "home", "Movies", null, countState(Section.MOVIES).homeTileDescription("movies", "Details & resume"), "EXPLORE", localArtwork = R.drawable.home_movies_icon),
+            CatalogCard("series", "home", "Series", null, countState(Section.SERIES).homeTileDescription("series", "Seasons & episodes"), "BINGE", localArtwork = R.drawable.home_series_icon),
             CatalogCard("epg", "home", "EPG / TV Guide", null, "Current and upcoming Live TV programmes", "GUIDE", localArtwork = R.drawable.home_epg_icon),
             CatalogCard("favorites", "home", "Favourites", null, "Live TV, movies and series in one place", "SAVED", localArtwork = R.drawable.home_favorites_icon),
             CatalogCard("catch_up", "home", "Catch Up", null, "Provider TV archive and replay", "REPLAY", localArtwork = R.drawable.home_catch_up_icon),
@@ -2334,7 +2348,7 @@ class MainActivity : AppCompatActivity() {
                                 cachedCount,
                             )
                         }
-                        target to cachedContentCountState(complete, cachedCount, verifiedSnapshot)
+                        target to cachedContentCountState(complete, cachedCount)
                     }
                 }.awaitAll().toMap()
             }

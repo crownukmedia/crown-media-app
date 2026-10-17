@@ -14,7 +14,7 @@ import uk.crownmedia.core.model.ProviderCredentials
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class AppStoreTest {
-    private val credentials = ProviderCredentials("http://novixa.uk:8880", "user", "secret")
+    private val credentials = ProviderCredentials("http://tellyhub.xyz:8880", "user", "secret")
 
     @Test
     fun uncheckedLoginExistsOnlyForTheCurrentSession() {
@@ -68,6 +68,7 @@ class AppStoreTest {
     fun verifiedCatalogCountSnapshotsAreImmediatePersistentAndAccessScoped() {
         val secureStore = FakeSecureStore()
         AppStore(secureStore).apply {
+            markCatalogRefreshed("p", "live", null, at = 100L)
             saveCatalogContentCountSnapshot("p", "live", includeAdult = false, count = 55)
             saveCatalogContentCountSnapshot("p", "live", includeAdult = true, count = 85)
             saveCatalogCategoryCountSnapshot(
@@ -93,6 +94,7 @@ class AppStoreTest {
         val secureStore = FakeSecureStore()
         val store = AppStore(secureStore)
         val playlist = store.save("Saved", credentials, null, "ACTIVE", null, null, persist = true)
+        store.markCatalogRefreshed(playlist.id, "series", null, at = 100L)
         store.saveCatalogContentCountSnapshot(playlist.id, "series", includeAdult = true, count = 120)
         store.saveCatalogCategoryCountSnapshot(
             playlist.id,
@@ -106,6 +108,25 @@ class AppStoreTest {
 
         assertNull(restored.catalogContentCountSnapshot(playlist.id, "series", includeAdult = true))
         assertNull(restored.catalogCategoryCountSnapshot(playlist.id, "series", includeAdult = true))
+    }
+
+    @Test
+    fun countSnapshotsAreHiddenWhileRefreshingAndAfterCatalogGenerationChanges() {
+        val secureStore = FakeSecureStore()
+        val store = AppStore(secureStore)
+        store.markCatalogRefreshed("p", "movie", null, at = 100L)
+        store.saveCatalogContentCountSnapshot("p", "movie", includeAdult = false, count = 40)
+
+        assertEquals(40, store.catalogContentCountSnapshot("p", "movie", includeAdult = false))
+
+        store.markCatalogRefreshing("p", "movie", null)
+        assertNull(store.catalogContentCountSnapshot("p", "movie", includeAdult = false))
+
+        store.markCatalogRefreshed("p", "movie", null, at = 200L)
+        assertNull(store.catalogContentCountSnapshot("p", "movie", includeAdult = false))
+
+        store.saveCatalogContentCountSnapshot("p", "movie", includeAdult = false, count = 42)
+        assertEquals(42, store.catalogContentCountSnapshot("p", "movie", includeAdult = false))
     }
 
     @Test

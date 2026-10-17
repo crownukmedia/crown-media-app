@@ -713,6 +713,9 @@ class TvUiRegressionTest {
     @Test
     fun tvHomePublishesVerifiedSectionCountsBeforeRoomReconciliation() {
         val playlistId = requireNotNull(testStore.selected()).id
+        listOf("live", "movie", "series").forEach {
+            testStore.markCatalogRefreshed(playlistId, it, null, at = 100L)
+        }
         testStore.saveCatalogContentCountSnapshot(playlistId, "live", includeAdult = true, count = 550)
         testStore.saveCatalogContentCountSnapshot(playlistId, "movie", includeAdult = true, count = 320)
         testStore.saveCatalogContentCountSnapshot(playlistId, "series", includeAdult = true, count = 140)
