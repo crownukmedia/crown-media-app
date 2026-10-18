@@ -8,8 +8,8 @@ if (file("google-services.json").exists()) {
 }
 
 val crownActivationBaseUrl = providers.gradleProperty("crownActivationBaseUrl").orElse("").get()
-val crownPremiumUrl = providers.gradleProperty("crownPremiumUrl").orElse("http://novixa.uk:8880").get()
-val crownProUrl = providers.gradleProperty("crownProUrl").orElse("http://slytv.uk").get()
+val crownPremiumUrl = providers.gradleProperty("crownPremiumUrl").orElse("http://tellyhub.xyz:8880").get()
+val crownProUrl = providers.gradleProperty("crownProUrl").orElse("http://oposmart.watch:80").get()
 val crown8kUrl = providers.gradleProperty("crown8kUrl").orElse("http://pro.ultrastreamtvpro.uk").get()
 fun quotedBuildConfig(value: String) = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
@@ -21,8 +21,8 @@ android {
         applicationId = "uk.crownmedia.app"
         minSdk = 21
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 8
+        versionName = "0.8.0"
         vectorDrawables.useSupportLibrary = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "ACTIVATION_BASE_URL", quotedBuildConfig(crownActivationBaseUrl))

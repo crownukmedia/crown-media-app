@@ -88,6 +88,9 @@ class PostLoginMobileUiTest {
     @Test
     fun mobileHomePublishesVerifiedCountsWithoutWaitingForProviderRefresh() {
         val playlistId = requireNotNull(testStore.selected()).id
+        listOf("live", "movie", "series").forEach {
+            testStore.markCatalogRefreshed(playlistId, it, null, at = 100L)
+        }
         testStore.saveCatalogContentCountSnapshot(playlistId, "live", includeAdult = true, count = 701)
         testStore.saveCatalogContentCountSnapshot(playlistId, "movie", includeAdult = true, count = 302)
         testStore.saveCatalogContentCountSnapshot(playlistId, "series", includeAdult = true, count = 103)
@@ -438,10 +441,10 @@ class PostLoginMobileUiTest {
     }
 
     @Test
-    fun mobileNavigationReservesCountLineForEachContentType() {
-        assertTrue(activity.findViewById<TextView>(R.id.nav_live).text.startsWith("Live\n("))
-        assertTrue(activity.findViewById<TextView>(R.id.nav_movies).text.startsWith("Movies\n("))
-        assertTrue(activity.findViewById<TextView>(R.id.nav_series).text.startsWith("Series\n("))
+    fun mobileNavigationShowsNoPlaceholderBeforeCountsAreReady() {
+        assertEquals("Live", activity.findViewById<TextView>(R.id.nav_live).text.toString())
+        assertEquals("Movies", activity.findViewById<TextView>(R.id.nav_movies).text.toString())
+        assertEquals("Series", activity.findViewById<TextView>(R.id.nav_series).text.toString())
     }
 
     @Test

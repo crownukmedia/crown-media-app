@@ -10,34 +10,43 @@ internal sealed interface ContentCountState {
 }
 
 internal fun ContentCountState.displayValue(locale: Locale = Locale.getDefault()): String = when (this) {
-    ContentCountState.Loading -> "…"
+    ContentCountState.Loading -> ""
     is ContentCountState.Ready -> NumberFormat.getIntegerInstance(locale).format(count)
-    ContentCountState.Unavailable -> "—"
+    ContentCountState.Unavailable -> ""
 }
 
 internal fun ContentCountState.navigationLabel(
     title: String,
     locale: Locale = Locale.getDefault(),
     television: Boolean = false,
-): String = if (television) "$title (${displayValue(locale)})" else "$title\n(${displayValue(locale)})"
+): String = displayValue(locale).let { value ->
+    when {
+        value.isEmpty() -> title
+        television -> "$title ($value)"
+        else -> "$title\n($value)"
+    }
+}
 
 internal fun ContentCountState.homeDescription(noun: String, locale: Locale = Locale.getDefault()): String = when (this) {
-    ContentCountState.Loading -> "Loading $noun count…"
+    ContentCountState.Loading -> ""
     is ContentCountState.Ready -> "${displayValue(locale)} $noun"
-    ContentCountState.Unavailable -> "$noun count unavailable"
+    ContentCountState.Unavailable -> ""
 }
+
+internal fun ContentCountState.homeTileDescription(
+    noun: String,
+    detail: String,
+    locale: Locale = Locale.getDefault(),
+): String = listOf(homeDescription(noun, locale), detail).filter(String::isNotBlank).joinToString(" • ")
 
 /**
  * Counts shown in navigation must never trigger a provider catalog download. A complete Room
- * catalog is authoritative; while a refresh is incomplete, the last verified snapshot remains
- * preferable to a partial row count.
+ * catalog is authoritative; while a refresh is incomplete, no cached or partial value is shown.
  */
 internal fun cachedContentCountState(
     catalogComplete: Boolean,
     cachedCount: Int,
-    verifiedSnapshot: Int?,
 ): ContentCountState = when {
     catalogComplete -> ContentCountState.Ready(cachedCount.coerceAtLeast(0))
-    verifiedSnapshot != null -> ContentCountState.Ready(verifiedSnapshot.coerceAtLeast(0))
     else -> ContentCountState.Loading
 }
