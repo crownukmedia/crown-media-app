@@ -171,11 +171,16 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
         prefs.putString(refreshKey("complete", playlistId, kind, categoryId), "true")
     }
 
+    fun markCatalogRefreshing(playlistId: String, kind: String, categoryId: String?) {
+        prefs.putString(refreshKey("complete", playlistId, kind, categoryId), "false")
+    }
+
     private fun refreshKey(prefix: String, playlistId: String, kind: String, categoryId: String?) =
         "catalog_${prefix}_${playlistId}_${kind}_${categoryId ?: "all"}"
 
     fun catalogContentCountSnapshot(playlistId: String, kind: String, includeAdult: Boolean): Int? {
         val key = countSnapshotKey("total", playlistId, kind, includeAdult)
+        if (!countSnapshotIsCurrent(key, playlistId, kind)) return null
         if (contentCountCache.containsKey(key)) return contentCountCache[key]
         return prefs.getString(key, null)?.toIntOrNull()?.takeIf { it >= 0 }
             .also { contentCountCache[key] = it }
@@ -184,13 +189,16 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
     fun saveCatalogContentCountSnapshot(playlistId: String, kind: String, includeAdult: Boolean, count: Int) {
         require(count >= 0)
         val key = countSnapshotKey("total", playlistId, kind, includeAdult)
-        if (contentCountCache[key] == count) return
+        val refreshAt = catalogRefreshAt(playlistId, kind, null)
+        if (contentCountCache[key] == count && prefs.getString(countSnapshotVersionKey(key), null) == refreshAt.toString()) return
         contentCountCache[key] = count
         prefs.putString(key, count.toString())
+        prefs.putString(countSnapshotVersionKey(key), refreshAt.toString())
     }
 
     fun catalogCategoryCountSnapshot(playlistId: String, kind: String, includeAdult: Boolean): Map<String, Int>? {
         val key = countSnapshotKey("categories", playlistId, kind, includeAdult)
+        if (!countSnapshotIsCurrent(key, playlistId, kind)) return null
         if (categoryCountCache.containsKey(key)) return categoryCountCache[key]
         val parsed = prefs.getString(key, null)?.let { encoded ->
             runCatching {
@@ -215,10 +223,20 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
     ) {
         val sanitized = counts.filter { (categoryId, count) -> categoryId.isNotBlank() && count >= 0 }
         val key = countSnapshotKey("categories", playlistId, kind, includeAdult)
-        if (categoryCountCache[key] == sanitized) return
+        val refreshAt = catalogRefreshAt(playlistId, kind, null)
+        if (categoryCountCache[key] == sanitized && prefs.getString(countSnapshotVersionKey(key), null) == refreshAt.toString()) return
         categoryCountCache[key] = sanitized
         prefs.putString(key, JSONObject(sanitized).toString())
+        prefs.putString(countSnapshotVersionKey(key), refreshAt.toString())
     }
+
+    private fun countSnapshotIsCurrent(key: String, playlistId: String, kind: String): Boolean {
+        if (!catalogComplete(playlistId, kind, null)) return false
+        val refreshAt = catalogRefreshAt(playlistId, kind, null)
+        return prefs.getString(countSnapshotVersionKey(key), null)?.toLongOrNull() == refreshAt
+    }
+
+    private fun countSnapshotVersionKey(key: String) = "${key}_refresh_at"
 
     private fun clearCatalogCountSnapshots(playlistId: String) {
         listOf("live", "movie", "series").forEach { kind ->
@@ -229,6 +247,8 @@ class AppStore internal constructor(private val prefs: CrownSecureStore) {
                 categoryCountCache.remove(categoriesKey)
                 prefs.putString(totalKey, null)
                 prefs.putString(categoriesKey, null)
+                prefs.putString(countSnapshotVersionKey(totalKey), null)
+                prefs.putString(countSnapshotVersionKey(categoriesKey), null)
             }
         }
     }

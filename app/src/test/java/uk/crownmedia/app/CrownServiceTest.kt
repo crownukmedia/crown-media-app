@@ -7,14 +7,14 @@ import org.junit.Test
 class CrownServiceTest {
     @Test
     fun premiumMapsToTheConfiguredEndpoint() {
-        assertEquals("http://novixa.uk:8880", CrownService.PREMIUM.serverUrl)
+        assertEquals("http://tellyhub.xyz:8880", CrownService.PREMIUM.serverUrl)
         assertTrue(CrownService.PREMIUM.isAvailable)
     }
 
     @Test
     fun allCrownServicesMapToTheirProviderEndpoints() {
         assertEquals(listOf("Crown Premium", "Crown Pro", "Crown 8K"), CrownService.displayNames)
-        assertEquals("http://slytv.uk", CrownService.PRO.serverUrl)
+        assertEquals("http://oposmart.watch:80", CrownService.PRO.serverUrl)
         assertEquals("http://pro.ultrastreamtvpro.uk", CrownService.EIGHT_K.serverUrl)
         assertTrue(CrownService.PRO.isAvailable)
         assertTrue(CrownService.EIGHT_K.isAvailable)
