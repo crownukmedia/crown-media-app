@@ -303,6 +303,75 @@ class PostLoginMobileUiTest {
     }
 
     @Test
+    fun consecutiveMovieAndLiveFavouritesDoNotReplaceTheBrowsingList() = runBlocking {
+        val playlist = requireNotNull(testStore.selected())
+        val cache = CatalogCache(CrownDatabase.get(RuntimeEnvironment.getApplication()).catalogDao())
+        cache.deletePlaylist(playlist.id)
+        val kinds = listOf(
+            Triple("movie", R.id.nav_movies, 1),
+            Triple("live", R.id.nav_live, 2),
+        )
+        kinds.forEach { (kind, _, _) ->
+            cache.saveCategories(playlist.id, kind, listOf(XtreamCategory("test", "Test")))
+            cache.saveItems(
+                playlist.id,
+                kind,
+                null,
+                (0 until 60).map { index ->
+                    searchItem("$kind-$index", "$kind $index").copy(
+                        extension = if (kind == "live") "ts" else "mp4",
+                        providerOrder = index,
+                        rating = "8.0".takeIf { index == 32 },
+                    )
+                },
+            )
+            testStore.markCatalogRefreshed(playlist.id, kind, null)
+        }
+        testStore.markCatalogRefreshed(playlist.id, "series", null)
+
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val adapter = grid.adapter as CatalogAdapter
+        val options = MainActivity::class.java.getDeclaredMethod("cardOptions", CatalogCard::class.java).apply {
+            isAccessible = true
+        }
+
+        kinds.forEach { (kind, destination, favouriteAction) ->
+            activity.findViewById<View>(destination).performClick()
+            awaitCategoryAdapter("$kind list did not load") {
+                adapter.currentItems.size == 60 && adapter.currentItems.all { it.kind == kind }
+            }
+            val originalIds = adapter.currentItems.map(CatalogCard::id)
+            val targets = adapter.currentItems.subList(32, 36).toList()
+
+            targets.forEach { card ->
+                options.invoke(activity, card)
+                val dialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+                requireNotNull(dialog.listView.onItemClickListener)
+                    .onItemClick(dialog.listView, null, favouriteAction, favouriteAction.toLong())
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+
+            awaitCategoryAdapter("$kind favourite diffs did not commit") {
+                adapter.currentItems.filter { it.id in targets.map(CatalogCard::id) }.all { it.badge == "★" }
+            }
+            assertEquals(originalIds, adapter.currentItems.map(CatalogCard::id))
+            assertTrue(targets.all { "$kind:${it.id}" in testStore.favorites(playlist.id) })
+
+            options.invoke(activity, targets.first())
+            val removeDialog = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
+            requireNotNull(removeDialog.listView.onItemClickListener)
+                .onItemClick(removeDialog.listView, null, favouriteAction, favouriteAction.toLong())
+            shadowOf(Looper.getMainLooper()).idle()
+            awaitCategoryAdapter("$kind unfavourite did not commit") {
+                adapter.currentItems.first { it.id == targets.first().id }.badge != "★"
+            }
+            assertEquals(originalIds, adapter.currentItems.map(CatalogCard::id))
+            assertEquals("★ 8.0", adapter.currentItems.first { it.id == targets.first().id }.badge)
+            assertFalse("$kind:${targets.first().id}" in testStore.favorites(playlist.id))
+        }
+    }
+
+    @Test
     fun mobileBackReturnsFromSectionThenConfirmsExitAtHome() {
         activity.findViewById<View>(R.id.nav_live).performClick()
 

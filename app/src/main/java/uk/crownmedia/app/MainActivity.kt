@@ -2467,13 +2467,64 @@ class MainActivity : AppCompatActivity() {
             when {
                 which == 0 -> openCard(card)
                 card.kind == "live" && which == 1 -> showEpg(card)
-                else -> {
-                    store.toggleFavorite(playlist.id, "${card.kind}:${card.id}")
-                    sectionStates[Section.FAVORITES]?.featureRootCards = emptyList()
-                    load()
-                }
+                else -> toggleCardFavourite(playlist, card)
             }
         }.showCrown(preferredButton = null)
+    }
+
+    /**
+     * Persists and renders a favourite toggle as a one-row diff. The previous implementation
+     * called [load], which re-read page one after the dialog had taken focus and therefore lost
+     * both the current scroll anchor and TV focus (and could truncate already loaded pages).
+     */
+    private fun toggleCardFavourite(playlist: SavedPlaylist, card: CatalogCard): Boolean {
+        val added = store.toggleFavorite(playlist.id, "${card.kind}:${card.id}")
+        val updatedCard: (CatalogCard) -> CatalogCard = { current ->
+            current.copy(
+                badge = if (added) "★" else current.badgeWhenNotFavourite,
+                badgeWhenNotFavourite = if (added && current.badge != "★") {
+                    current.badge
+                } else current.badgeWhenNotFavourite,
+            )
+        }
+        val browsingFilteredFavourites = !added && (
+            section == Section.FAVORITES ||
+                (section in PAGED_SECTIONS && sectionState(section).categoryId == "favorites")
+            )
+
+        sectionStates.forEach { (target, state) ->
+            state.cards = if (!added && (
+                    target == Section.FAVORITES ||
+                        (target in PAGED_SECTIONS && state.categoryId == "favorites")
+                    )) {
+                state.cards.filterNot { it.kind == card.kind && it.id == card.id }
+            } else {
+                state.cards.map { current ->
+                    if (current.kind == card.kind && current.id == card.id) updatedCard(current) else current
+                }
+            }
+        }
+        sectionStates[Section.FAVORITES]?.featureRootCards = emptyList()
+
+        if (browsingFilteredFavourites) catalogAdapter.removeItem(card.kind, card.id)
+        else catalogAdapter.updateItem(card.kind, card.id, updatedCard)
+
+        if (!added && section == Section.FAVORITES) {
+            categoriesAdapter.adjustCounts(
+                setOf(
+                    "favorite:${card.kind}",
+                    "favorite:${card.kind}:${card.categoryId}",
+                ),
+                delta = -1,
+            )
+        }
+
+        if (card.kind == "live" && liveChannelSelection?.id == card.id) {
+            findViewById<Button?>(R.id.live_channel_favourite)?.text = getString(
+                if (added) R.string.remove_favourite else R.string.favourite,
+            )
+        }
+        return added
     }
 
     private fun openLiveChannelBrowser(cards: List<CatalogCard>, restoreFocus: Boolean) {
@@ -2623,11 +2674,10 @@ class MainActivity : AppCompatActivity() {
     private fun toggleLiveChannelFavourite() {
         val playlist = store.selected() ?: return
         val card = liveChannelSelection ?: return
-        val added = store.toggleFavorite(playlist.id, "live:${card.id}")
+        val added = toggleCardFavourite(playlist, card)
         findViewById<Button>(R.id.live_channel_favourite).text = getString(
             if (added) R.string.remove_favourite else R.string.favourite,
         )
-        sectionStates[Section.FAVORITES]?.featureRootCards = emptyList()
     }
 
     private fun showChannelGroups(card: CatalogCard) {
@@ -2963,8 +3013,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     .setNeutralButton(if (movie.trailer.isNullOrBlank()) "Favorite" else "Trailer") { _, _ ->
                         movie.trailer?.takeIf { it.isNotBlank() }?.let(::openTrailer) ?: run {
-                            store.toggleFavorite(playlist.id, "movie:${card.id}")
-                            if (section == Section.FAVORITES) loadFeatureSection()
+                            toggleCardFavourite(playlist, card)
                         }
                     }.setNegativeButton("Close", null).showCrown()
             }.onFailure { error ->
@@ -4184,13 +4233,15 @@ class MainActivity : AppCompatActivity() {
     private fun XtreamItem.toCard(kind: String, favorites: Set<String>): CatalogCard {
         val itemKind = kind
         val favorite = "$itemKind:$id" in favorites
-        val badge = when { favorite -> "★"; catchUp -> "CATCH-UP"; !rating.isNullOrBlank() -> "★ $rating"; else -> "" }
+        val badgeWhenNotFavourite = when { catchUp -> "CATCH-UP"; !rating.isNullOrBlank() -> "★ $rating"; else -> "" }
+        val badge = if (favorite) "★" else badgeWhenNotFavourite
         val healthHint = (if (catchUp) 4 else 0) + (if (!epgChannelId.isNullOrBlank()) 2 else 0) + (if (!imageUrl.isNullOrBlank()) 1 else 0)
         return CatalogCard(
             id, itemKind, name, imageUrl,
             listOfNotNull(year, genre, rating?.let { "Rating $it" }).joinToString(" • ").ifBlank { itemKind.uppercase() },
             badge, extension, categoryId, healthHint = healthHint,
             isAdult = isAdult, catchUpDays = catchUpDays, channelNumber = providerOrder,
+            badgeWhenNotFavourite = badgeWhenNotFavourite,
         )
     }
 
