@@ -43,6 +43,7 @@ data class CatalogCard(
     val catchUpDays: Int = 0,
     val channelNumber: Int? = null,
     val externalSubtitles: List<ExternalSubtitle> = emptyList(),
+    val badgeWhenNotFavourite: String = badge,
 )
 
 internal fun CatalogCard.preferredArtworkSource(): Any {
@@ -123,6 +124,13 @@ class CategoryAdapter(
         differ.currentList.indices
             .filter { index -> previous[differ.currentList[index].category.id] != values[differ.currentList[index].category.id] }
             .forEach(::notifyItemChanged)
+    }
+
+    fun adjustCounts(ids: Set<String>, delta: Int) {
+        if (delta == 0 || ids.isEmpty()) return
+        val updated = counts.toMutableMap()
+        ids.forEach { id -> updated[id]?.let { updated[id] = (it + delta).coerceAtLeast(0) } }
+        updateCounts(updated)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(ItemCategoryBinding.inflate(LayoutInflater.from(parent.context), parent, false))
@@ -217,6 +225,7 @@ class CatalogAdapter(
         override fun areItemsTheSame(oldItem: CatalogCard, newItem: CatalogCard) = oldItem.id == newItem.id && oldItem.kind == newItem.kind
         override fun areContentsTheSame(oldItem: CatalogCard, newItem: CatalogCard) = oldItem == newItem
     })
+    private var latestSubmittedItems: List<CatalogCard> = emptyList()
     val currentItems: List<CatalogCard> get() = differ.currentList
     fun itemAt(position: Int): CatalogCard? = differ.currentList.getOrNull(position)
     fun setUniformLandscapeCards(enabled: Boolean) {
@@ -229,7 +238,26 @@ class CatalogAdapter(
         liveChannelNavigation = enabled
         notifyItemRangeChanged(0, itemCount)
     }
-    fun submit(values: List<CatalogCard>, committed: (() -> Unit)? = null) = differ.submitList(values, committed)
+    fun submit(values: List<CatalogCard>, committed: (() -> Unit)? = null) {
+        latestSubmittedItems = values
+        differ.submitList(values, committed)
+    }
+
+    /** Updates one logical row without replacing the grid or losing a newer pending diff. */
+    fun updateItem(kind: String, id: String, transform: (CatalogCard) -> CatalogCard) {
+        val index = latestSubmittedItems.indexOfFirst { it.kind == kind && it.id == id }
+        if (index < 0) return
+        val updated = latestSubmittedItems.toMutableList().apply {
+            this[index] = transform(this[index])
+        }
+        submit(updated)
+    }
+
+    /** Removes one logical row while preserving every surviving item's stable identity. */
+    fun removeItem(kind: String, id: String) {
+        val updated = latestSubmittedItems.filterNot { it.kind == kind && it.id == id }
+        if (updated.size != latestSubmittedItems.size) submit(updated)
+    }
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(ItemContentBinding.inflate(LayoutInflater.from(parent.context), parent, false))
     override fun getItemCount() = differ.currentList.size
     override fun onBindViewHolder(holder: Holder, position: Int) = holder.bind(differ.currentList[position])

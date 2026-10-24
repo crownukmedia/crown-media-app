@@ -179,6 +179,44 @@ class TvUiRegressionTest {
     }
 
     @Test
+    fun rapidFavouriteRowDiffsPreserveTvFocusAndListIdentity() {
+        val grid = activity.findViewById<RecyclerView>(R.id.content_grid)
+        val adapter = grid.adapter as CatalogAdapter
+        val cards = (0 until 40).map { index ->
+            CatalogCard("movie-$index", "movie", "Movie $index", null, "MOVIE")
+        }
+        adapter.submit(cards)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (adapter.currentItems.size != cards.size && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(25, TimeUnit.MILLISECONDS)
+        }
+        grid.measure(
+            View.MeasureSpec.makeMeasureSpec(dp(720), View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(dp(420), View.MeasureSpec.EXACTLY),
+        )
+        grid.layout(0, 0, dp(720), dp(420))
+        (grid.layoutManager as GridLayoutManager).scrollToPositionWithOffset(24, dp(12))
+        shadowOf(Looper.getMainLooper()).idle()
+        val focused = requireNotNull(grid.findViewHolderForAdapterPosition(24)?.itemView)
+        assertTrue(focused.requestFocus())
+        val focusedId = adapter.currentItems[24].id
+        val firstVisible = (grid.layoutManager as GridLayoutManager).findFirstVisibleItemPosition()
+
+        (24..27).forEach { position ->
+            adapter.updateItem("movie", "movie-$position") { it.copy(badge = "★") }
+        }
+        val updateDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (adapter.currentItems.slice(24..27).any { it.badge != "★" } && System.nanoTime() < updateDeadline) {
+            shadowOf(Looper.getMainLooper()).idleFor(25, TimeUnit.MILLISECONDS)
+        }
+
+        assertEquals(cards.map(CatalogCard::id), adapter.currentItems.map(CatalogCard::id))
+        assertEquals(focusedId, adapter.itemAt(grid.getChildAdapterPosition(grid.focusedChild))?.id)
+        assertEquals(firstVisible, (grid.layoutManager as GridLayoutManager).findFirstVisibleItemPosition())
+        assertTrue(grid.focusedChild?.hasFocus() == true)
+    }
+
+    @Test
     fun launcherForegroundCompensatesForBrandAssetsTransparentSafeMargin() {
         val foreground = requireNotNull(ContextCompat.getDrawable(activity, R.drawable.ic_launcher_foreground))
         val legacyBrand = requireNotNull(ContextCompat.getDrawable(activity, R.drawable.crown_media_brand))
